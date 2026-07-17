@@ -32,6 +32,8 @@ Before starting: check memory for per-trade voice patterns and phrases that work
 ## Images (Trybloom MCP)
 For brand/hero imagery when real client photos are pending: check `bloom_list_brands` / onboard the client brand, use reference images, generate in the site's palette. **Never generate fake humans presented as the team, fake before/after "jobs", or fake certifikat/badges.** Generated imagery = environments, tools, abstract brand surfaces — clearly not fake evidence. Real photos per the brief's shot-list always take precedence; mark every generated image `TODO-REPLACE-PHOTO:` if it stands in for a real one.
 
+**Credits can be zero.** Before generating, check the account's image balance if a credits/account tool is available. If credits are exhausted OR any generation returns a failure, SKIP image generation entirely and keep the existing SVG placeholders (leave them marked `TODO-REPLACE-PHOTO:`), note the skip in your report, and move on. Never block, retry-loop, or fail the content pass over imagery — placeholders shipping is an acceptable state; a stalled pipeline is not.
+
 ## On-demand escalation
 `copywriting` (conversion copy frameworks) · `content-humanizer` / `behuman` (de-AI-ify a draft) · `impeccable` (polish pass) · `image` (image handling) · 21st MCP (layout inspiration — content structure only, never SaaS voice)
 
