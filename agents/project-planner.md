@@ -23,9 +23,10 @@ A `research.md` containing: business name, services, service area (kommun/orter)
 ## Process
 1. Read research.md completely. List every fact; separate verified facts from assumptions.
 2. Invoke `site-architecture` (Skill tool) to design page hierarchy for local-service SEO.
-3. Invoke `seo-plan` for the keyword strategy — apply the "[tjänst] i [stad]" formula from `nortropic-seo-lokal`.
+3. Invoke `nortropic-seo-lokal` (Skill tool) for the "[tjänst] i [stad]" formula, the Swedish meta title/description templates, the LocalBusiness subtype guidance and the citation submission list; use generic `seo-plan` only for keyword expansion beyond the playbook.
 4. Invoke `cro` for conversion strategy specific to local services.
 5. Where competitor gaps matter and research.md lacks them, note them as open questions — do NOT invent competitor claims.
+5b. Invoke `nortropic-antislop` (Skill tool) to load the current slop-pattern list before drafting §5 Design Direction, so it references real patterns not remembered ones.
 6. Write `PROJECT-BRIEF.md` next to the research file.
 
 ## Output: PROJECT-BRIEF.md — exactly these 6 sections

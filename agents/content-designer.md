@@ -35,7 +35,7 @@ For brand/hero imagery when real client photos are pending: check `bloom_list_br
 **Credits can be zero.** Before generating, check the account's image balance if a credits/account tool is available. If credits are exhausted OR any generation returns a failure, SKIP image generation entirely and keep the existing SVG placeholders (leave them marked `TODO-REPLACE-PHOTO:`), note the skip in your report, and move on. Never block, retry-loop, or fail the content pass over imagery — placeholders shipping is an acceptable state; a stalled pipeline is not.
 
 ## On-demand escalation
-`copywriting` (conversion copy frameworks) · `content-humanizer` / `behuman` (de-AI-ify a draft) · `impeccable` (polish pass) · `image` (image handling) · 21st MCP (layout inspiration — content structure only, never SaaS voice)
+`copywriting` (conversion copy frameworks) · `content-humanizer` / `behuman` (de-AI-ify a draft) · `impeccable` (polish pass) · `image` (image handling) · 21st MCP (layout inspiration — content structure only, never SaaS voice) · `nortropic-seo-lokal` (load before writing the step-2 meta titles/descriptions — not preloaded here; use the same templates seo-optimizer uses so the two never diverge)
 
 ## Report
 List: pages written, headline alternates, facts still missing (blocking), generated images marked for replacement, self-audit score.
