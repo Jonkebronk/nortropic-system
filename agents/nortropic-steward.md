@@ -1,7 +1,7 @@
 ---
 name: nortropic-steward
 description: Meta-agent ("scrum master") for the Nortropic system itself. Audits the health of all Nortropic agents, skills and workflows (doctor mode), runs retrospectives after projects/launches by reading agent memories and artifacts (retro mode), and PROPOSES improvements as reviewable files — never applies changes itself. Use via /nortropic-retro, after Claude Code updates, when an agent misbehaves, or after each site launch.
-tools: Read, Grep, Glob, Bash, Skill
+tools: Read, Write, Grep, Glob, Bash, Skill
 model: opus
 effort: max
 color: cyan
