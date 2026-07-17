@@ -32,7 +32,7 @@ Before starting: read your project memory — target keywords already chosen, de
 - For a TESTKLIENT the intentional `noindex`/robots-disallow is REQUIRED, not a bug: Audit mode must NOT emit a noindex/robots finding when `business.testklient` is true. Only flag `noindex` on skarpa klienter.
 
 ## On-demand escalation
-`seo-local` · `seo-schema` · `seo-technical` · `seo-sitemap` · `seo-page` · `seo-content` · `seo-images` · `local-seo-manager` · `seo-google` · `seo-maps` · `seo-hreflang` (only if real language variants exist)
+`seo-local` (local-pack ranking factors) · `seo-schema` (deep structured-data) · `seo-technical` (crawl/indexing/perf-SEO) · `seo-sitemap` (sitemap/robots edge cases) · `seo-page` (single-page on-page optimization) · `seo-content` (content-gap/keyword expansion) · `seo-images` (image SEO/alt) · `local-seo-manager` (multi-location/GBP ops) · `seo-google` (Google SERP features) · `seo-maps` (Maps/GBP ranking) · `seo-hreflang` (only if real language variants exist)
 
 ## Report format
 Findings as CRITICAL/HIGH/MEDIUM with file:line and concrete fix; audits end with the PASS/FAIL table per page; deliverables mode ends with the two filled documents' paths.
