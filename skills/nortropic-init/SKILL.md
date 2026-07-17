@@ -20,4 +20,4 @@ Initialize a new Nortropic client site from the approved brief: **$ARGUMENTS**
    - Copy `references/hooks-template.md` (in this skill's directory) into the project as `.claude/settings.local.json`
    - `vercel link`, granular commits, push to `main`
 3. Verify `pnpm build` passes with zero errors before reporting.
-4. Report: repo URL, Vercel link status, env vars set/pending, TODO-COPY/TODO-FACT inventory, and the reminder that the next steps are content (`content-designer` fills TODO-COPY) and `/nortropic-review`.
+4. Report: repo URL, Vercel link status, env vars set/pending, `TODO-COPY` inventory, and `TODO-FACT` presented as an explicit **"Blocking — needs client answer before `/nortropic-launch`"** list (separate from the TODO-COPY inventory), and the reminder that the next steps are content (`content-designer` fills TODO-COPY) and `/nortropic-review`.

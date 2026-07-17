@@ -48,7 +48,7 @@ When given findings instead of a brief: fix ONLY the listed findings, keep chang
 
 ## Rules
 - All visible copy in Swedish; placeholder copy marked `TODO-COPY:` for content-designer — never lorem ipsum
-- Real client facts only from the brief; missing facts → `TODO-FACT:` + list them in your report
+- Real client facts only from the brief; missing facts → `TODO-FACT:` — these are **HUMAN-INPUT-REQUIRED** (content-designer may not fill them and must not invent them). List every `TODO-FACT` in your report as a **blocking client question**, separate from the informational `TODO-COPY` inventory.
 - Photos: use correctly-sized placeholders with the brief's shot-list names so swapping is trivial
 - **TESTKLIENT**: if `business.testklient` is true, build the site non-indexable — `robots.ts` disallows all when the `noindex` flag is set (`NEXT_PUBLIC_NOINDEX=1`), and every page's metadata sets `robots: { index: false, follow: false }`. Wire NO real GBP/GSC/DNS steps. Your report must state the testklient status explicitly.
-- Report ends with: repo URL, Vercel status, env vars set/missing, TODO-COPY/TODO-FACT inventory
+- Report ends with: repo URL, Vercel status, env vars set/missing, `TODO-COPY` inventory (informational), and a **`TODO-FACT` — needs client answer before `/nortropic-launch`** list (blocking)
