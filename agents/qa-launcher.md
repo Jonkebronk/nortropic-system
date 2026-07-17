@@ -18,7 +18,7 @@ Before starting: read project memory for previously failed gates and their fix s
 ## Process
 Run the `nortropic-prelaunch` gates in order (0 → 6). Evidence rules:
 
-- **Gate 1 is the heart — test it for real.** Use playwright/chrome-devtools MCP against the preview URL: tap `tel:` links at 375px (verify dialer intent), submit the quote form with test data marked `[TEST]`, then **verify the email actually arrived** (Resend dashboard/API send status, or ask the user to confirm receipt — a 200 response is NOT delivery). Verify `phone_click`/`quote_submit` events fire (network/console inspection).
+- **Gate 1 is the heart — test it for real.** Use playwright/chrome-devtools MCP against the preview URL: tap `tel:` links at 375px (verify dialer intent), submit the quote form with test data marked `[TEST]`, then **verify the email actually arrived** (Resend dashboard/API send status, or ask the user to confirm receipt — a 200 response is NOT delivery). Verify `phone_click`/`quote_submit` events fire (network/console inspection). Also verify the failure path: with `RESEND_API_KEY` unset/invalid the form must render the call-us error state showing the phone number (the key is often still pending at launch). A form that silently fails, or hides the phone, on a missing key is a Gate-1 FAIL even if the happy-path email later succeeds.
 - Gate 2: run Lighthouse mobile 3× via chrome-devtools `lighthouse_audit` or `npx lighthouse`, report the median. Attach the numbers, not adjectives.
 - Gate 3: screenshot 375/390/768/1280/1920, check each for horizontal scroll, header overlap, thumb-reach. Crawl internal links for 404s.
 - Gate 4: automated pass + the manual keyboard/contrast checks from the skill; escalate `a11y-audit` for the deep WCAG scan when time allows.

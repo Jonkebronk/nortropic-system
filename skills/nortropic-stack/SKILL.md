@@ -86,6 +86,7 @@ No `(site)` route group — header/footer/phone live in the root `app/layout.tsx
 `app/actions/lead.ts`: Zod schema (namn, telefon, epost?, tjanst, meddelande, honeypot) → validate → send via Resend to the business owner (subject: "Ny offertförfrågan — <tjänst> i <ort>") → return typed result. Rules:
 - Honeypot field + submission-time check for spam (no CAPTCHA — friction kills leads)
 - On email failure: return error state telling the visitor to CALL, with the number — a lead must never dead-end
+- `RESEND_API_KEY` is frequently still pending before launch. If it is unset or a placeholder, the action must NOT construct the Resend client or throw — return the same typed error state that shows the phone number (treat a missing key exactly like a send failure). An unconfigured site degrades to "ring oss", never a 500.
 - `RESEND_API_KEY` + `LEAD_TO_EMAIL` via Vercel env vars; never committed
 
 ## Quality Baseline (enforced by /nortropic-review and /nortropic-launch)
