@@ -26,6 +26,7 @@ Before starting: check memory for per-trade voice patterns and phrases that work
    - Area pages: genuinely local (landmarks, restider, jobb utförda där per brief) — if nothing local is true, say so instead of spinning
    - Form microcopy: promise only what the brief confirms ("Vi ringer inom 30 min" needs brief backing)
    - Tone per trade: VVS urgent-reassuring · el safety/behörighet-first · städ reliability + RUT · bygg process + referens
+   - **FAQ exception to the "write around it" rule:** `schema-markup.tsx` (`FaqSchema`) drops any FAQ answer still containing `TODO-FACT`/`TODO-COPY` from FAQPage structured data. If you cannot answer a FAQ from confirmed facts, KEEP the `TODO-FACT:` marker inside that answer — do not paraphrase it away. A marker-free filler answer ships a placeholder into Google structured data; the marker is what keeps the unanswered Q&A out.
 4. Self-audit against the blocklist before finishing; score your own copy with the antislop rubric.
 
 ## Images (Trybloom MCP)

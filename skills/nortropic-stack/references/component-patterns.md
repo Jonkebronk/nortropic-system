@@ -55,6 +55,7 @@ Click = primary conversion event (fire `phone_click` to analytics in a client wr
 - Service pages: `Service` + `FAQPage`
 - Area pages: `Service` with `areaServed`
 - **Escape before injecting.** Serialize each JSON-LD block and replace every `<` with its Unicode escape `\u003c`: `JSON.stringify(data).replace(/</g, "\u003c")`, then inject via React's dangerous inner-HTML prop (the only SSR way to emit JSON-LD). A raw `<` is blocked by the repo security hook and risks a `</script>` breakout; the `\u003c` escape is valid JSON and renders identically. Do **not** use the HTML entity `&lt;` — it corrupts the JSON.
+- **FAQPage marker guard (do not remove).** `FaqSchema` must filter out any answer containing `TODO-FACT`/`TODO-COPY` (`items.filter(i => !i.a.includes("TODO-FACT") && !i.a.includes("TODO-COPY"))`) and return `null` if none remain. This keeps unfinished placeholders out of JSON-LD — intentional, not dead code.
 See `nortropic-seo-lokal` skill for the exact Swedish field patterns.
 
 ## Accessibility defaults
