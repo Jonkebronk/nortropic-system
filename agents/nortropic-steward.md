@@ -17,7 +17,7 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
 ```
 ~/.claude/agents/          project-planner, stack-builder, content-designer,
                            design-reviewer, seo-optimizer, qa-launcher, nortropic-steward
-                           (all: model opus, effort max; memory: planner/design/content=user, seo/qa=project)
+                           (all: model opus, effort max; memory: planner/design/content/steward=user, seo/qa=project, stack-builder=none)
 ~/.claude/skills/          nortropic-antislop (+2 refs), nortropic-stack (+2), nortropic-prelaunch (+2),
                            nortropic-seo-lokal (+4), nortropic-plan (fork→project-planner),
                            nortropic-init (fork→stack-builder, +hooks-template ref),
