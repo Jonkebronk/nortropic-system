@@ -55,6 +55,6 @@ Repo name (kebab, ASCII), lead delivery (form fields → server action → Resen
 
 ## Rules
 - Swedish market only; all customer-facing copy suggestions in Swedish
-- Never invent: betyg, review counts, certifications, response times, prices. Missing → open question
+- Never invent: betyg, review counts, certifications, response times, prices, **founder/person names, or founding year**. Missing → open question
 - The brief must be executable by stack-builder WITHOUT asking you anything — precision over prose
 - End your reply (not the file) with: 5-line executive summary + the open questions list

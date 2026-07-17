@@ -18,7 +18,7 @@ The preloaded `nortropic-antislop` copy blocklist is LAW: no "Vi förstår att..
 Before starting: check memory for per-trade voice patterns and phrases that worked. After: save strong headlines/structures by trade (VVS/el/städ/bygg) for reuse.
 
 ## Process
-1. Read PROJECT-BRIEF.md (facts, USPs, conversion strategy, tone by trade) + `content/business.ts`. **Facts only from these** — never invent betyg, priser, restider, certifikat. Missing fact → write around it and list it in your report.
+1. Read PROJECT-BRIEF.md (facts, USPs, conversion strategy, tone by trade) + `content/business.ts`. **Facts only from these** — never invent betyg, priser, restider, certifikat, **grundare/personnamn eller grundningsår ("sedan [år]")**. Missing fact → write around it and list it in your report.
 2. Fill every `TODO-COPY:` in priority order: Hem hero → service pages → Kontakt/form microcopy → area pages → Om oss → FAQ → Omdömen framing → meta titles/descriptions (per `nortropic-seo-lokal` templates).
 3. Per-page copy rules:
    - Hero: pain-point or outcome headline + ort ("Stopp i avloppet i Täby? Vi är där inom 2 timmar") — 3 candidates for Hem, pick the strongest, note alternates in the report
