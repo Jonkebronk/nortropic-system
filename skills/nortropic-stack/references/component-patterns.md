@@ -29,7 +29,7 @@ Click = primary conversion event (fire `phone_click` to analytics in a client wr
 ```tsx
 <section className="bg-primary text-primary-foreground">
   <h2>Behöver du {service ?? "hjälp"} i {area ?? business.address.city}?</h2>
-  <PhoneLink /> <Button asChild><Link href="/kontakt#offert">Få kostnadsfri offert</Link></Button>
+  <PhoneLink /> <Link href="/kontakt#offert" className={buttonVariants()}>Få kostnadsfri offert</Link>
 </section>
 ```
 
@@ -47,6 +47,7 @@ Click = primary conversion event (fire `phone_click` to analytics in a client wr
 - Install per component: `button`, `card`, `input`, `label`, `select`, `textarea`, `accordion`, `sheet` (mobile nav) — nothing speculative
 - Theme via Tailwind 4 `@theme` tokens: `--color-primary` = trade anchor color, `--color-accent` = CTA only
 - Never restyle shadcn internals per-usage; extend via `cn()` + variants (cva)
+- shadcn now scaffolds **Base UI** primitives (`@base-ui/react`), **not Radix**. The Base UI `Button` has **no `asChild` prop** — to render a link that looks like a button, put `buttonVariants({ variant, size })` on the `<Link>`/`<a>` (import `buttonVariants` from `@/components/ui/button`), never `<Button asChild>`.
 
 ## Schema components
 `<SchemaMarkup>` renders JSON-LD `<script>` from content:

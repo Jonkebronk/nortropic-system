@@ -15,7 +15,7 @@ How every Nortropic site is built. Deviations require an explicit reason written
 | Framework | **Next.js 15, App Router** | Static-first: every page statically rendered |
 | Language | **TypeScript, strict** | `"strict": true`, no `any` without comment |
 | Styling | **Tailwind CSS 4** | Design tokens in `@theme`; no CSS modules, no styled-components |
-| Components | **shadcn/ui** | Install via MCP/CLI per component, never fork the whole registry |
+| Components | **shadcn/ui** | Install via MCP/CLI per component, never fork the whole registry. shadcn now emits **Base UI** primitives (`@base-ui/react`), not Radix — style link-buttons with `buttonVariants()` (no `asChild`); see `references/component-patterns.md` |
 | Email (leads) | **Resend** | The ONLY server code on the site |
 | Analytics | **Vercel Analytics** (default) | Cookieless → no consent banner needed for it. GA4 + Consent Mode v2 only if the brief demands |
 | Hosting | **Vercel** | Linked at scaffold time, deploys from `main` |
