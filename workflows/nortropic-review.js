@@ -49,17 +49,17 @@ const REVIEWERS = [
   {
     key: 'design',
     agentType: 'design-reviewer',
-    prompt: `Review ${scope}. Run your full anti-slop design review process (score, conversion-critical checks, viewport pass if a dev/preview URL is reachable). Return your findings as structured data only — severity CRITICAL for anything that blocks conversion (phone/CTA/form problems), HIGH for trust erosion, MEDIUM for polish.`,
+    prompt: `Review ${scope}. Run your full anti-slop design review process (score, conversion-critical checks, viewport pass if a dev/preview URL is reachable). Return your findings as structured data only — severity CRITICAL for anything that blocks conversion (phone/CTA/form problems), HIGH for trust erosion, MEDIUM for polish.\n\nINGÅR (ditt ansvar): slop/AI-mönster, konverteringselement (telefon/CTA/formulär/flytande ringknapp), visuell layout/hierarki/responsivitet/typografi, copy-slop-fraser.\nINGÅR INTE (rapportera INTE — annan lens äger): meta/titles/schema/sitemap → seo-lensen; NAP-datakonsistens → seo-lensen; kod-buggar → code-lensen.`,
   },
   {
     key: 'seo',
     agentType: 'seo-optimizer',
-    prompt: `Audit ${scope} in audit mode. Check meta templates, H1s, schema validity, NAP consistency against content/business.ts, internal linking, thin area pages, sitemap/robots. Return findings as structured data only — severity CRITICAL for NAP divergence, missing/broken schema on money pages, or noindex accidents; HIGH for template violations; MEDIUM for improvements.`,
+    prompt: `Audit ${scope} in audit mode. Check meta templates, H1s, schema validity, NAP consistency against content/business.ts, internal linking, thin area pages, sitemap/robots. Return findings as structured data only — severity CRITICAL for NAP divergence, missing/broken schema on money pages, or noindex accidents; HIGH for template violations; MEDIUM for improvements.\n\nINGÅR (ditt ansvar): meta/titles/H1, schema-validitet, NAP-konsistens mot business.ts, intern länkning, tunna ortssidor, sitemap/robots/canonicals.\nINGÅR INTE (rapportera INTE — annan lens äger): copy-röst och slop-fraser → design-lensen; visuell layout/typografi → design-lensen; kod-buggar → code-lensen.`,
   },
   {
     key: 'code',
     agentType: null,
-    prompt: `You are a strict code-correctness reviewer. Review ${scope} (a Next.js 15 App Router + TypeScript strict + Tailwind 4 site) for real bugs only: broken imports, server/client component violations, unvalidated form input reaching the lead server action, missing error handling in app/actions/lead.ts, hydration hazards, misconfigured generateStaticParams/metadata, accessibility violations in interactive components. No style opinions — bugs and correctness only. Return findings as structured data.`,
+    prompt: `You are a strict code-correctness reviewer. Review ${scope} (a Next.js 15 App Router + TypeScript strict + Tailwind 4 site) for real bugs only: broken imports, server/client component violations, unvalidated form input reaching the lead server action, missing error handling in app/actions/lead.ts, hydration hazards, misconfigured generateStaticParams/metadata, accessibility violations in interactive components. No style opinions — bugs and correctness only. Return findings as structured data.\n\nINGÅR (ditt ansvar): kod-buggar och korrekthet (imports, server/client-gränser, formulärvalidering till lead-action, felhantering, hydrering, generateStaticParams/metadata, a11y i interaktiva komponenter).\nINGÅR INTE (rapportera INTE — annan lens äger): SEO-strategi → seo-lensen; copy och design-slop → design-lensen; visuellt utseende → design-lensen.`,
   },
 ]
 
@@ -102,14 +102,30 @@ log(noVerify
 
 phase('Report')
 const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2 }
-kept.sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3))
+// v5 dedup: identical findings surfaced by more than one lens are merged and counted ONCE, keeping the
+// highest severity and recording which lenses flagged it (multi-lens agreement = higher confidence).
+const dedupMap = new Map()
+for (const f of kept) {
+  const k = `${(f.location || '').trim().toLowerCase()}|${(f.title || '').trim().toLowerCase()}`
+  const existing = dedupMap.get(k)
+  if (existing) {
+    existing.sources = Array.from(new Set([...(existing.sources || [existing.source]), f.source]))
+    if ((order[f.severity] ?? 3) < (order[existing.severity] ?? 3)) existing.severity = f.severity
+  } else {
+    dedupMap.set(k, { ...f, sources: [f.source] })
+  }
+}
+const deduped = Array.from(dedupMap.values())
+deduped.sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3))
+const mergedCount = kept.length - deduped.length
+if (mergedCount > 0) log(`Dedup: ${mergedCount} duplicate finding(s) merged across lenses`)
 
 const reviewHeader = noVerify
   ? 'START THE REPORT WITH A BOLD BANNER LINE: "⚠️ OVERIFIERAD KÖRNING — endast för kalibrering". The findings below were NOT adversarially verified (the skeptic step was skipped); treat every finding as UNVERIFIED, say so explicitly, and do not present any as CONFIRMED.'
   : 'Findings below are already adversarially verified (CONFIRMED = both skeptics failed to refute; PLAUSIBLE = one skeptic doubted it, note that).'
 const report = await agent(
-  `Write a consolidated Nortropic review report in markdown for ${scope}. ${reviewHeader} Group by severity CRITICAL/HIGH/MEDIUM, keep each finding to location + one-line problem + one-line fix + which agent fixes it (technical/code → stack-builder, copy → content-designer, SEO → seo-optimizer, design → stack-builder with design guidance). End with a 3-line summary and the recommended fix order. Do not invent findings beyond this list:\n\n${JSON.stringify(kept, null, 2)}\n\nDropped by verification (mention only the count): ${dropped.length}`,
+  `Write a consolidated Nortropic review report in markdown for ${scope}. ${reviewHeader} A finding's \`sources\` array lists the lenses that independently flagged it — when it has more than one, note the multi-lens agreement (higher confidence) and still list it once. Group by severity CRITICAL/HIGH/MEDIUM, keep each finding to location + one-line problem + one-line fix + which agent fixes it (technical/code → stack-builder, copy → content-designer, SEO → seo-optimizer, design → stack-builder with design guidance). End with a 3-line summary and the recommended fix order. Do not invent findings beyond this list:\n\n${JSON.stringify(deduped, null, 2)}\n\nDropped by verification (mention only the count): ${dropped.length}`,
   { label: 'report', phase: 'Report' }
 )
 
-return { report, mode: noVerify ? 'calibration-unverified' : 'verified', counts: { kept: kept.length, confirmed: kept.filter(f => f.verdict === 'CONFIRMED').length, dropped: dropped.length } }
+return { report, mode: noVerify ? 'calibration-unverified' : 'verified', counts: { kept: deduped.length, merged: mergedCount, confirmed: deduped.filter(f => f.verdict === 'CONFIRMED').length, dropped: dropped.length } }

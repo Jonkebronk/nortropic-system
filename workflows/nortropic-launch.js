@@ -51,12 +51,12 @@ const site = (args && args.url) ? `the Nortropic site in the current working dir
 const structured = 'Return PASS only if every check passes. Every finding needs severity, exact location, why it matters, concrete fix, and category.'
 
 const GATES = [
-  { key: 'technical', agentType: 'qa-launcher', prompt: `Run Gates 0, 2 and 3 of your prelaunch process (build integrity, Lighthouse/Core Web Vitals with real median-of-3 numbers, responsive 375/390/768/1280/1920 + link crawl + SSL) against ${site}. Category for findings: technical. ${structured}` },
-  { key: 'leadgen', agentType: 'qa-launcher', prompt: `Run Gate 1 (lead generation) of your prelaunch process against ${site}: tel: links at mobile viewport, phone in sticky header everywhere, floating call button, quote form submitted end-to-end with [TEST] data and EMAIL DELIVERY verified (Resend status — a 200 is not delivery), form error fallback shows phone, CTA above fold per page, phone_click/quote_submit events fire, 404/error pages show phone. Category: leadgen. ${structured}` },
-  { key: 'seo', agentType: 'seo-optimizer', prompt: `Final pre-launch SEO audit of ${site}: audit mode across all pages + launch readiness (sitemap/robots served, canonicals, schema validates, NAP consistency, GSC DNS verification status — ask nothing, report what you can verify). Category: seo. ${structured}` },
-  { key: 'visual', agentType: 'design-reviewer', prompt: `Final visual QA of ${site}: run your anti-slop review as a launch gate. FAIL on any CRITICAL conversion blocker or instant-fail slop pattern. Categories: visual (design issues) or leadgen (conversion blockers). ${structured}` },
-  { key: 'trust', agentType: 'design-reviewer', prompt: `Trust audit of ${site} — a distinct lens from visual QA: verify every trust element is real and consistent. Omdömen have namn+ort and match content/testimonials.ts, betyg matches content/business.ts rating, certifikat badges correspond to business.ts certifications, NAP in footer = business.ts exactly, garanti/jour/response-time claims appear only where the content files back them, org.nr + F-skatt present. Category: trust. ${structured}` },
-  { key: 'legal', agentType: 'qa-launcher', prompt: `Run ONLY Gate 6 (Swedish/EU legal) of your prelaunch process against ${site}: Integritetspolicy completeness per your legal-requirements-se reference, cookie/consent situation (verify what actually loads — cookieless Vercel Analytics vs anything requiring consent), Företagsuppgifter in footer, Google Fonts CDN absence, claims verifiability, ångerrätt applicability. OBSERVE AND REPORT ONLY. Category: legal for every finding. ${structured}` },
+  { key: 'technical', agentType: 'qa-launcher', prompt: `Run Gates 0, 2 and 3 of your prelaunch process (build integrity, Lighthouse/Core Web Vitals with real median-of-3 numbers, responsive 375/390/768/1280/1920 + link crawl + SSL) against ${site}.\n\nINGÅR (din gate): build-integritet, Lighthouse/Core Web Vitals, responsivitet, länkcrawl, SSL, döda länkar.\nINGÅR INTE (annan gate äger): lead-kedjan formulär→mejl, tel-länkar, CTA → leadgen-gaten; visuellt utseende → visual-gaten.\nCategory for findings: technical. ${structured}` },
+  { key: 'leadgen', agentType: 'qa-launcher', prompt: `Run Gate 1 (lead generation) of your prelaunch process against ${site}: tel: links at mobile viewport, phone in sticky header everywhere, floating call button, quote form submitted end-to-end with [TEST] data and EMAIL DELIVERY verified (Resend status — a 200 is not delivery), form error fallback shows phone, CTA above fold per page, phone_click/quote_submit events fire, 404/error pages show phone.\n\nINGÅR (din gate): HELA lead-kedjan — tel-länkar, sticky nummer, flytande ringknapp, offertformulär end-to-end + verifierad e-postleverans, CTA above fold, konverteringsevent, telefon på 404/error.\nINGÅR INTE (annan gate äger): prestanda/CWV → technical-gaten; visuellt utseende → visual-gaten; schema/meta → seo-gaten.\nCategory: leadgen. ${structured}` },
+  { key: 'seo', agentType: 'seo-optimizer', prompt: `Final pre-launch SEO audit of ${site}: audit mode across all pages + launch readiness (sitemap/robots served, canonicals, schema validates, NAP consistency, GSC DNS verification status — ask nothing, report what you can verify).\n\nINGÅR (din gate): meta/titles/canonicals, schema-validitet, NAP-konsistens, sitemap/robots, GSC DNS-status.\nINGÅR INTE (annan gate äger): copykvalitet och slop → visual-gaten; prestanda → technical-gaten.\nCategory: seo. ${structured}` },
+  { key: 'visual', agentType: 'design-reviewer', prompt: `Final visual QA of ${site}: run your anti-slop review as a launch gate. FAIL on any CRITICAL conversion blocker or instant-fail slop pattern.\n\nINGÅR (din gate): visuell layout/hierarki, responsivitet, typografi, bildrendering, slop/AI-mönster.\nINGÅR INTE (annan gate äger): INNEHÅLLET/sanningen i förtroendesignaler (stämmer omdömen/betyg/certifikat/NAP) → trust-gaten; meta/schema → seo-gaten.\nCategories: visual (design issues) or leadgen (conversion blockers). ${structured}` },
+  { key: 'trust', agentType: 'design-reviewer', prompt: `Trust audit of ${site} — a distinct lens from visual QA: verify every trust element is real and consistent. Omdömen have namn+ort and match content/testimonials.ts, betyg matches content/business.ts rating, certifikat badges correspond to business.ts certifications, NAP in footer = business.ts exactly, garanti/jour/response-time claims appear only where the content files back them, org.nr + F-skatt present.\n\nINGÅR (din gate): INNEHÅLLET/sanningen i förtroendesignaler — omdömen (namn+ort, matchar testimonials.ts), betyg matchar business.ts, certifikat äkta, NAP=business.ts exakt, garanti/jour/restid-claims backade i content, org.nr+F-skatt.\nINGÅR INTE (annan gate äger): HUR de ser ut → visual-gaten; juridisk fullständighet (integritetspolicy/cookies) → legal-gaten.\nCategory: trust. ${structured}` },
+  { key: 'legal', agentType: 'qa-launcher', prompt: `Run ONLY Gate 6 (Swedish/EU legal) of your prelaunch process against ${site}: Integritetspolicy completeness per your legal-requirements-se reference, cookie/consent situation (verify what actually loads — cookieless Vercel Analytics vs anything requiring consent), Företagsuppgifter in footer, Google Fonts CDN absence, claims verifiability, ångerrätt applicability. OBSERVE AND REPORT ONLY.\n\nINGÅR (din gate): integritetspolicy-fullständighet, cookie/samtycke (vad som faktiskt laddas), Företagsuppgifter, Google Fonts CDN-frånvaro, claims-verifierbarhet, ångerrätt.\nINGÅR INTE (annan gate äger): fixar (legal är ALLTID human-only — föreslå aldrig auto-fix); förtroende-utseende → visual/trust.\nCategory: legal for every finding. ${structured}` },
 ]
 
 phase('Gates')
@@ -128,12 +128,23 @@ const verdict = (nonLegalPass
   ? (legalFindings.length ? 'BLOCKED — technical gates pass, LEGAL FINDINGS REQUIRE HUMAN JUDGMENT before launch' : 'READY — pending human legal sign-off, then run /vercel:deploy')
   : `BLOCKED — gates still failing after ${round} fix round(s); remaining findings need human attention`) + evalNote
 
+// v5: merge identical findings flagged by more than one gate — count once, record which gates flagged
+const remainingRaw = GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL').flatMap(g => (gates[g.key].findings || []).map(f => ({ ...f, gate: g.key })))
+const remMap = new Map()
+for (const f of remainingRaw) {
+  const k = `${(f.location || '').trim().toLowerCase()}|${(f.title || '').trim().toLowerCase()}`
+  const e = remMap.get(k)
+  if (e) e.gates = Array.from(new Set([...(e.gates || [e.gate]), f.gate]))
+  else remMap.set(k, { ...f, gates: [f.gate] })
+}
+const remainingFindings = Array.from(remMap.values())
+
 return {
   verdict,
   gates: rows,
   eval: evalResult,
   legalFindings,
-  remainingFindings: GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL').flatMap(g => gates[g.key].findings || []),
+  remainingFindings,
   fixRounds: fixLog,
   handoverWritten: Boolean(handover),
 }
