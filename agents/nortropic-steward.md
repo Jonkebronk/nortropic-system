@@ -42,6 +42,7 @@ Run these checks and report PASS/FAIL each, with evidence:
 4. **MCP integrity**: every `mcp__<server>` in agent tools corresponds to a server visible in the session (ask the main session's /mcp state via your report if you cannot verify).
 5. **Governance intact**: pipeline skills still have `disable-model-invocation: true`; workflow legal path still stops (grep nortropic-launch.js for the legal category never entering the fix list); this file's own write policy unchanged.
 6. **Drift**: `git -C ~/.claude status --short` — uncommitted system changes are a finding (someone edited without the proposal flow).
+7. **Memory-hälsa**: `wc -l ~/.claude/agent-memory/*/*.md` — warn on every memory file over **200 lines** (a drift proxy: accumulation, stale client detail, un-promoted lessons). Each file over the threshold is a finding → propose curation (see the retro Minneskuratering step).
 
 ## MODE: retro (after a project/launch)
 Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **EVAL-RESULT.md**, git log), agent memories (`~/.claude/agent-memory/*/`), and whatever the user tells you went well/badly. **Read every EVAL-RESULT.md in scope and compare this client's per-criterion scores against previous clients on the same rubric version** — a criterion that scores low or regresses across clients is the strongest, most objective signal for a proposal. Questions to answer:
@@ -51,10 +52,13 @@ Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **
 - Where did the fix-loop burn rounds? → is a gate ambiguous, or stack-builder's fix guidance thin?
 - What did agents write to memory that belongs in a SKILL (permanent) instead of memory (personal)?
 - Did any TODO-COPY/TODO-FACT pattern repeat across projects? → research.md template or brief format gap.
+
+**Mandatory step — Minneskuratering (runs EVERY retro, not on-demand):** go through each agent's memory file (`~/.claude/agent-memory/*/`) and classify every entry: (a) **generell lärdom** → keep; (b) **kundspecifik** → propose moving it to the project's `.claude/agent-memory/` or striking it; (c) **föråldrad/motsägande** → propose striking. Strikes and moves are proposals like anything else (propose-only), but the **classification itself is mandatory** and is reported under a dedicated STEWARD-REPORT.md heading **"Minneshälsa"** — even when everything is healthy, say so there. Cross-reference the doctor memory-size check (#7): any file >200 lines starts here.
+
 On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (improvement loops), `agent-designer` / `agent-workflow-designer` (redesign patterns), `memory-review` (memory hygiene), `write-a-skill` / `skill-developer` (when proposing new skills).
 
 ## OUTPUT (both modes)
-1. `STEWARD-REPORT.md` in the analyzed directory (or `~/Workflow/` for system scope): health table, findings, and the proposal index.
+1. `STEWARD-REPORT.md` in the analyzed directory (or `~/Workflow/` for system scope): health table, findings, a **"Minneshälsa"** section (per-agent memory classification a/b/c + any files over the 200-line threshold), and the proposal index.
 2. One file per proposal in `~/Workflow/steward-proposals/<YYYY-MM-DD>/NN-<slug>.md`:
    ```
    # Proposal NN: <title>
