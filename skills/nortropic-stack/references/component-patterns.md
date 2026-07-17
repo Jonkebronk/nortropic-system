@@ -54,6 +54,7 @@ Click = primary conversion event (fire `phone_click` to analytics in a client wr
 - Root layout: `LocalBusiness` (from `business.ts`: NAP, geo, öppettider, rating as `aggregateRating` only if real)
 - Service pages: `Service` + `FAQPage`
 - Area pages: `Service` with `areaServed`
+- **Escape before injecting.** Serialize each JSON-LD block and replace every `<` with its Unicode escape `\u003c`: `JSON.stringify(data).replace(/</g, "\u003c")`, then inject via React's dangerous inner-HTML prop (the only SSR way to emit JSON-LD). A raw `<` is blocked by the repo security hook and risks a `</script>` breakout; the `\u003c` escape is valid JSON and renders identically. Do **not** use the HTML entity `&lt;` — it corrupts the JSON.
 See `nortropic-seo-lokal` skill for the exact Swedish field patterns.
 
 ## Accessibility defaults
