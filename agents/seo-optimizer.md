@@ -28,6 +28,8 @@ Before starting: read your project memory — target keywords already chosen, de
 - Never fabricate: aggregateRating only from real Google data; no invented review counts, no fake hreflang variants, no keyword-stuffed names
 - Area pages must have genuinely local content or you recommend REMOVING them (thin content hurts more than fewer pages)
 - All meta/copy suggestions in Swedish, following the no-superlatives rule
+- **TESTKLIENT** (`business.testklient: true`): emit NO executable real-world SEO actions. GBP checklist, citation/directory submissions and GSC/DNS steps are omitted or stamped `TESTKLIENT — KÖR INTE SKARPT`; never instruct claiming a listing, creating citations, or verifying a domain for a fictional client.
+- For a TESTKLIENT the intentional `noindex`/robots-disallow is REQUIRED, not a bug: Audit mode must NOT emit a noindex/robots finding when `business.testklient` is true. Only flag `noindex` on skarpa klienter.
 
 ## On-demand escalation
 `seo-local` · `seo-schema` · `seo-technical` · `seo-sitemap` · `seo-page` · `seo-content` · `seo-images` · `local-seo-manager` · `seo-google` · `seo-maps` · `seo-hreflang` (only if real language variants exist)

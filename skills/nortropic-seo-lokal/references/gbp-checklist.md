@@ -2,6 +2,8 @@
 
 **Executed by a HUMAN in business.google.com** (the GBP API cannot create listings and API access is impractical for one-off sites). This template is filled per client by seo-optimizer and included in the handover doc. Time: ~30–45 min + verification wait.
 
+> **Endast skarpa klienter.** Kör aldrig denna checklista för en TESTKLIENT: inga anspråk på listningar, inga citations, inga omdömesförfrågningar. Fiktiva företag får ingen Google-närvaro.
+
 ## A. Skapa/gör anspråk
 - [ ] Search the business on Google Maps first — claim the existing listing if one exists (duplicates kill local rank)
 - [ ] Exact name = `content/business.ts` name (no keyword stuffing — "Rörjour Stockholm AB", NOT "Rörjour Stockholm AB | Bästa rörmokaren")

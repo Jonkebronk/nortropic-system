@@ -1,5 +1,7 @@
 # Google Search Console — Launch Steps Reference
 
+> **Endast skarpa klienter.** För en TESTKLIENT körs INGET av dessa steg — ingen DNS-verifiering, ingen sitemap-submit, ingen indexeringsbegäran; testsajten förblir noindex.
+
 ## Before launch (during build — do NOT wait for launch day)
 1. **Verify the domain early**: GSC → Add property → **Domain property** (covers www/non-www, http/https) → DNS **TXT record** at the registrar (Loopia/one.com/Cloudflare — client's registrar). Propagation can take hours; doing this pre-launch means indexing starts day one
 2. Confirm `sitemap.ts` outputs all pages (services + areas included) at `/sitemap.xml`
@@ -16,7 +18,7 @@
 - **Pages report** (Indexering → Sidor) every 2–3 days:
   - "Upptäckt – för närvarande inte indexerad" → normal first days; if stuck >2 veckor on money pages → request indexing again, strengthen internal links
   - "Genomsökt – för närvarande inte indexerad" on area pages → thin content signal: deepen the local content on those pages
-  - Excluded by `noindex` → BUG, fix immediately (leftover from staging)
+  - Excluded by `noindex` → on a **skarp klient** this is a BUG (staging leftover), fix immediately. On a **TESTKLIENT** noindex is REQUIRED — leave it.
 - Performance report: first impressions typically day 2–7 for brand queries, weeks 2–6 for "[tjänst] [stad]"
 
 ## Monthly (retainer/handover routine)

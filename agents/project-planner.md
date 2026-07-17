@@ -52,9 +52,11 @@ Trade-anchored palette (with hex candidates), typography direction (2 typefaces 
 
 ### 6. Technical Spec
 Repo name (kebab, ASCII), lead delivery (form fields → server action → Resend to which email), analytics choice (Vercel Analytics default; GA4+Consent Mode v2 only if the client demands ads/remarketing), env vars, integrations (Maps embed y/n, review widget y/n), domain situation and DNS access note for GSC pre-verification.
+- **Klienttyp** (obligatoriskt): `SKARP` (verklig klient som ska lanseras) eller `TESTKLIENT` (fiktiv/demo/portfolio). Vid TESTKLIENT planeras INGA verkliga GBP-anspråk, citations, DNS- eller GSC-åtgärder, och sajten byggs icke-indexerbar tills en människa uppgraderar den. Skriv fältet `testklient: true|false` som stack-builder lägger i `content/business.ts`, och notera att noindex slås på via `NEXT_PUBLIC_NOINDEX=1` i Vercel.
 
 ## Rules
 - Swedish market only; all customer-facing copy suggestions in Swedish
 - Never invent: betyg, review counts, certifications, response times, prices, **founder/person names, or founding year**. Missing → open question
+- Bestäm och skriv alltid Klienttyp. Osäkert eller uppenbart fiktivt namn/uppgifter → defaulta till TESTKLIENT och notera som öppen fråga; gissa aldrig SKARP.
 - The brief must be executable by stack-builder WITHOUT asking you anything — precision over prose
 - End your reply (not the file) with: 5-line executive summary + the open questions list

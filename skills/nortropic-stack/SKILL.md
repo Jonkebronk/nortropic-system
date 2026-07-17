@@ -68,6 +68,8 @@ No `(site)` route group — header/footer/phone live in the root `app/layout.tsx
 
 **`content/business.ts` is sacred**: name, address, phone, org.nr, öppettider live ONLY here and must exactly match the client's Google Företagsprofil (NAP consistency). Header, footer, schema, and copy all import from it.
 
+`content/business.ts` also carries `testklient: boolean` (from the brief's Klienttyp). When `true`, the site is built non-indexable: `robots.ts` reads a `noindex` flag (driven by `NEXT_PUBLIC_NOINDEX=1` in Vercel) and disallows all crawling, and page metadata sets `robots: { index: false, follow: false }`. A fictional/demo business must never be indexable or claimable. This flag + env var are the canonical way any agent detects a TESTKLIENT.
+
 ## URL Conventions
 - Swedish slugs, å/ä/ö transliterated: `tjanster/varmepumpar`, `omraden/taby`
 - Service pages: `/tjanster/<tjänst>` · Area pages: `/omraden/<ort>`
