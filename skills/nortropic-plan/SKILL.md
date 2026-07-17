@@ -11,7 +11,7 @@ Create a complete Nortropic PROJECT-BRIEF.md from the client research file: **$A
 
 1. Read the research file at the path above. If no path was given, look for `research.md` in the current directory; if none exists, stop and say exactly which file you need.
 2. **Run your INPUT GATE first**: verify the research contains business name, phone number, at least one service, at least one ort/service area, and a usable USP. If anything is missing, STOP and return only the numbered list of missing items — do not plan on guesses.
-3. Apply your full planning process (site-architecture, seo-plan, cro on demand) and write `PROJECT-BRIEF.md` in the same directory as the research file, with all 6 sections per your system prompt.
+3. Apply your full planning process (site-architecture, seo-plan, cro on demand) and write `PROJECT-BRIEF.md` in the same directory as the research file, with all 6 sections per your system prompt. The brief must carry the Google-betyg line (value/count/review-URL, or `saknas — öppen fråga`) and, when research.md provides reviews, the structured Omdömen block to seed `content/testimonials.ts` — so verified trust data reaches stack-builder instead of becoming a TODO-FACT.
 4. Return to the user: a 5-line executive summary of the brief (business, conversion goal, page count, keyword focus, design direction), the list of open questions that need the user's answers, and the reminder that the next step is `/nortropic-init <path-to-PROJECT-BRIEF.md>` once the brief is approved.
 
 Do not create any repository or scaffold anything — this step produces the brief only.

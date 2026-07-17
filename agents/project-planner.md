@@ -32,6 +32,7 @@ A `research.md` containing: business name, services, service area (kommun/orter)
 
 ### 1. Business Summary
 Name, org.nr, services, service area, USPs, phone, öppettider/jour. **Primary conversion goal** (calls vs quotes vs both) with reasoning from the trade (emergency trades → calls; planned work → quotes). Facts vs assumptions clearly separated; open questions for the user listed.
+- **Google-betyg**: value + count + review-URL (from research.md) — eller `saknas — öppen fråga` om inget angetts
 
 ### 2. Site Architecture
 Full page list with URL slugs per `nortropic-stack` conventions: Hem, `/tjanster/<slug>` per service, `/omraden/<slug>` per REAL working area (max the areas genuinely served — no spun pages), Om oss, Omdömen, Kontakt, FAQ, Integritetspolicy. Navigation (≤7 top items). Internal linking map (Hem→services, service↔service, area→services, footer→areas).
@@ -42,6 +43,7 @@ Full page list with URL slugs per `nortropic-stack` conventions: Hem, `/tjanster
 - Hero: pain-point headline options in Swedish (3 candidates), sub-line, trust row content
 - Quote form: exact fields (≤5), promise text (only promises the client can keep)
 - Trust signals inventory: which certifikat/betyg/garantier exist and where each appears
+- **Omdömen att seeda `content/testimonials.ts`** — för varje: namn, ort, text (verbatim), betyg, datum, källa. Ta ENDAST från research.md; om inga finns, skriv `inga omdömen tillhandahållna`.
 - Urgency elements that are TRUE for this client ("Jour dygnet runt" only if staffed)
 
 ### 4. SEO Strategy
