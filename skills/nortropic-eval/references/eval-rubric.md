@@ -28,7 +28,7 @@ Every factual claim must trace to `research.md` (the client fact source). Check:
 
 ## 3. Svensk copy-kvalitet — 10 p
 Trusted-local-tradesperson voice: korta meningar, siffror/orter/restider över adjektiv.
-- Blocklistan i `../nortropic-antislop/references/copy-blocklist.md` ren (varje träff drar) — up to 5
+- Blocklistan i **nortropic-antislop**-skillens `references/copy-blocklist.md` ren (varje träff drar) — up to 5
 - Idiomatisk, korrekt svenska; sentence-case rubriker; ≤1 utropstecken/sida — up to 3
 - Konkret (tjänst + ort + tid) snarare än generiskt — up to 2
 
@@ -57,7 +57,7 @@ Templated area pages (samma text, bara ortsnamn utbytt) → deduct the full 4. *
 Placeholdertext får aldrig läcka in i schema (FAQPage ska filtrera `TODO-FACT`/`TODO-COPY`); en läcka = deduction. **PASS ≥ 7.**
 
 ## 7. Prestanda — 10 p
-Mät mot `../nortropic-prelaunch/references/lighthouse-targets.md` (mobil, produktionsbygge, median av 3):
+Mät mot **nortropic-prelaunch**-skillens `references/lighthouse-targets.md` (mobil, produktionsbygge, median av 3):
 - Lighthouse Performance ≥ 90 — 3 · Accessibility/Best-Practices/SEO ≥ 95 — 3
 - Core Web Vitals: LCP < 2,5 s, CLS < 0,1, INP < 200 ms — 4
 

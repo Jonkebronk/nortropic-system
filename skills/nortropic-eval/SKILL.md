@@ -63,6 +63,6 @@ Faktatrohet: PASS | FAIL   (FAIL överskuggar totalpoängen)
 **Verdict-band:** 90–100 lanseringsklar · 75–89 åtgärda listade punkter · 50–74 betydande omarbetning · <50 gör om de flaggade sektionerna. A Faktatrohet FAIL is reported as **FAIL** in the header no matter the band.
 
 ## Reuse, don't duplicate
-- Criterion 7 (Prestanda) targets live in `../nortropic-prelaunch/references/lighthouse-targets.md` — use those exact numbers.
-- Criterion 3 (Copy) uses the blocklist in `../nortropic-antislop/references/copy-blocklist.md` — do not restate it here.
+- Criterion 7 (Prestanda) targets live in the **nortropic-prelaunch** skill's `references/lighthouse-targets.md` — use those exact numbers.
+- Criterion 3 (Copy) uses the blocklist in the **nortropic-antislop** skill's `references/copy-blocklist.md` — do not restate it here.
 - This skill scores; it never edits. To FIX what it flags, route to content-designer (copy) or stack-builder (technical); to deep-audit design, run `/nortropic-antislop` or the design-reviewer.
