@@ -28,10 +28,12 @@ How every Nortropic site is built. Deviations require an explicit reason written
 ```bash
 gh repo create <kebab-name> --private --clone   # 1. repo FIRST
 cd <kebab-name>                                  # 2. scaffold INSIDE the clone
-pnpm create next-app@latest . --ts --tailwind --app --src-dir --use-pnpm
+pnpm create next-app@15 . --ts --tailwind --app --src-dir --use-pnpm   # pin @15 — @latest now resolves past Next 15
 vercel link                                      # 3. Vercel from day one
 git add -A && git commit -m "chore: scaffold" && git push -u origin main
 ```
+
+**Pin `create-next-app@15`.** `@latest` now resolves to a newer major than the Next 15 the stack targets (`package.json` pins `next` 15.x; App Router config, Tailwind 4 tokens and shadcn/Base UI are written for 15). `@latest` scaffolds an unsupported version.
 
 Repo naming: `<client>-<trade>` kebab-case, ASCII only (`rorjour-stockholm`, not `rörjour`). Branch model: `main` deploys; feature branches for anything after first launch.
 

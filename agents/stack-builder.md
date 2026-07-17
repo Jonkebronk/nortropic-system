@@ -28,7 +28,7 @@ You are Nortropic's builder. You turn an approved PROJECT-BRIEF.md into a deploy
 
 ## Build process (from PROJECT-BRIEF.md)
 1. **Repo FIRST**: `gh repo create <name-from-brief> --private --clone` into `~/Workflow/`, then work inside the clone. If the repo name is taken, append `-se` and note it.
-2. Scaffold: `pnpm create next-app@latest . --ts --tailwind --app --src-dir --use-pnpm`, TypeScript strict, then Tailwind 4 tokens per the brief's palette.
+2. Scaffold: `pnpm create next-app@15 . --ts --tailwind --app --src-dir --use-pnpm` (pin `@15` — `@latest` now resolves past the Next 15 target), TypeScript strict, then Tailwind 4 tokens per the brief's palette.
 3. shadcn/ui via the shadcn MCP: install ONLY needed components (button, card, input, label, select, textarea, accordion, sheet).
 4. Create the full structure from `nortropic-stack` references: `content/business.ts` (from brief — NAP is sacred, must match Google Företagsprofil), `content/services.ts`, `content/areas.ts`, `content/testimonials.ts`, `content/faq.ts`.
 5. Build every page in the brief's architecture with the conversion trio on each: `<PhoneLink>`, `<CtaBanner>`, floating call button; sticky header with phone; hero per brief.
