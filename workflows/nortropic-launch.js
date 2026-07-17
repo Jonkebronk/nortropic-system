@@ -78,11 +78,26 @@ while (round < 3) {
   const fixable = failing.flatMap(g => (gates[g.key].findings || []).filter(f => f.category !== 'legal'))
   if (!fixable.length) break
   log(`Fix round ${round}/3: ${fixable.length} findings across ${failing.map(g => g.key).join(', ')}`)
-  const fixReport = await agent(
-    `Fix mode. Fix ONLY these verified launch-gate findings in the Nortropic site in the current working directory, minimally, then run pnpm build and confirm zero errors. Report per finding: fixed / needs-human (with reason).\n\n${JSON.stringify(fixable, null, 2)}`,
-    { label: `fix:round${round}`, phase: 'Fix loop', agentType: 'stack-builder' }
-  )
-  fixLog.push({ round, findings: fixable.length, report: typeof fixReport === 'string' ? fixReport.slice(0, 2000) : fixReport })
+  // D1: route by category — seo findings to seo-optimizer (it can Edit meta/schema), the rest to stack-builder.
+  // Sequential (not parallel) so two fixers never write the repo at once.
+  const seoFixable = fixable.filter(f => f.category === 'seo')
+  const buildFixable = fixable.filter(f => f.category !== 'seo')
+  const fixReports = []
+  if (buildFixable.length) {
+    const r = await agent(
+      `Fix mode. Fix ONLY these verified launch-gate findings in the Nortropic site in the current working directory, minimally, then run pnpm build and confirm zero errors. Report per finding: fixed / needs-human (with reason).\n\n${JSON.stringify(buildFixable, null, 2)}`,
+      { label: `fix:build:round${round}`, phase: 'Fix loop', agentType: 'stack-builder' }
+    )
+    fixReports.push({ agent: 'stack-builder', report: typeof r === 'string' ? r.slice(0, 1500) : r })
+  }
+  if (seoFixable.length) {
+    const r = await agent(
+      `Fix mode (SEO). Fix ONLY these verified SEO launch-gate findings (meta/titles/schema/NAP/sitemap) in the Nortropic site in the current working directory, minimally, then confirm the build. Report per finding: fixed / needs-human (with reason).\n\n${JSON.stringify(seoFixable, null, 2)}`,
+      { label: `fix:seo:round${round}`, phase: 'Fix loop', agentType: 'seo-optimizer' }
+    )
+    fixReports.push({ agent: 'seo-optimizer', report: typeof r === 'string' ? r.slice(0, 1500) : r })
+  }
+  fixLog.push({ round, findings: fixable.length, reports: fixReports })
   const recheck = await parallel(failing.map(g => () =>
     agent(GATES.find(x => x.key === g.key).prompt + ' This is a RE-CHECK after fixes: verify the previously failing checks first.', { label: `recheck:${g.key}:r${round}`, phase: 'Fix loop', agentType: g.agentType, schema: GATE })
   ))
