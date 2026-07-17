@@ -42,15 +42,17 @@ Repo naming: `<client>-<trade>` kebab-case, ASCII only (`rorjour-stockholm`, not
 ```
 src/
   app/
-    (site)/
-      page.tsx                    # Hem
-      tjanster/[slug]/page.tsx    # one per service, generateStaticParams
-      omraden/[slug]/page.tsx     # one per stad/kommun
-      om-oss/page.tsx
-      omdomen/page.tsx
-      kontakt/page.tsx
-      faq/page.tsx
-      integritetspolicy/page.tsx
+    layout.tsx                    # html lang="sv", header/footer/phone, Analytics
+    page.tsx                      # Hem
+    tjanster/[slug]/page.tsx      # one per service, generateStaticParams
+    omraden/[slug]/page.tsx       # one per stad/kommun
+    om-oss/page.tsx
+    omdomen/page.tsx
+    kontakt/page.tsx
+    faq/page.tsx
+    integritetspolicy/page.tsx
+    not-found.tsx                 # Swedish 404 — keeps chrome + phone
+    error.tsx                     # Swedish error — keeps chrome + phone
     actions/lead.ts               # THE server action (Zod-validated → Resend)
     sitemap.ts / robots.ts
   components/
@@ -61,6 +63,8 @@ src/
     services.ts / areas.ts / testimonials.ts / faq.ts
   lib/
 ```
+
+No `(site)` route group — header/footer/phone live in the root `app/layout.tsx` so `not-found.tsx` and `error.tsx` inherit full chrome and the phone number. Matches `references/file-structure.md` and the shipped build.
 
 **`content/business.ts` is sacred**: name, address, phone, org.nr, öppettider live ONLY here and must exactly match the client's Google Företagsprofil (NAP consistency). Header, footer, schema, and copy all import from it.
 
