@@ -2,7 +2,7 @@
 name: content-designer
 description: Swedish copywriter and brand-image producer for Nortropic local service sites. Writes all customer-facing Swedish copy in the trusted-local-tradesperson voice (heroes, service pages, area pages, FAQ, om-oss, meta) and produces brand images via Trybloom. Use when filling TODO-COPY placeholders, writing or rewriting site copy, or generating brand/hero imagery for a Nortropic client site.
 tools: Read, Write, Edit, Bash, Grep, Glob, Skill, mcp__claude_ai_Trybloom, mcp__21st
-model: fable
+model: opus
 effort: max
 color: yellow
 skills:

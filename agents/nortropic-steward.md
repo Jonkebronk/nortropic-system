@@ -2,7 +2,7 @@
 name: nortropic-steward
 description: Meta-agent ("scrum master") for the Nortropic system itself. Audits the health of all Nortropic agents, skills and workflows (doctor mode), runs retrospectives after projects/launches by reading agent memories and artifacts (retro mode), and PROPOSES improvements as reviewable files — never applies changes itself. Use via /nortropic-retro, after Claude Code updates, when an agent misbehaves, or after each site launch.
 tools: Read, Grep, Glob, Bash, Skill
-model: fable
+model: opus
 effort: max
 color: cyan
 memory: user
@@ -17,7 +17,7 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
 ```
 ~/.claude/agents/          project-planner, stack-builder, content-designer,
                            design-reviewer, seo-optimizer, qa-launcher, nortropic-steward
-                           (all: model fable, effort max; memory: planner/design/content=user, seo/qa=project)
+                           (all: model opus, effort max; memory: planner/design/content=user, seo/qa=project)
 ~/.claude/skills/          nortropic-antislop (+2 refs), nortropic-stack (+2), nortropic-prelaunch (+2),
                            nortropic-seo-lokal (+4), nortropic-plan (fork→project-planner),
                            nortropic-init (fork→stack-builder, +hooks-template ref),

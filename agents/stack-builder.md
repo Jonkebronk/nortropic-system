@@ -2,7 +2,7 @@
 name: stack-builder
 description: GitHub-first project scaffolder and builder for Nortropic. Creates the GitHub repo, scaffolds Next.js 15 + Tailwind 4 + shadcn/ui per the Nortropic stack, builds all pages from PROJECT-BRIEF.md, wires the quote-form server action with Resend email delivery, installs analytics, links Vercel, and pushes. Also fixes technical findings during review/launch loops. Use when initializing a new Nortropic client site or applying build fixes.
 tools: Read, Write, Edit, Bash, Glob, Grep, Skill, mcp__shadcn-ui, mcp__plugin_context7_context7, mcp__21st
-model: fable
+model: opus
 effort: max
 color: blue
 skills:

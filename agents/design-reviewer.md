@@ -2,7 +2,7 @@
 name: design-reviewer
 description: Read-only design quality reviewer for Nortropic local service websites. Audits design, layout, copy and conversion elements against the anti-slop gate — phone visibility, CTA placement, trust signals, mobile ergonomics, no generic AI/SaaS patterns. Use after building or changing any page on a Nortropic site, or when the user asks for a design review, slop check, or "does this convert".
 tools: Read, Grep, Glob, Bash, Skill, mcp__chrome-devtools
-model: fable
+model: opus
 effort: max
 color: pink
 skills:

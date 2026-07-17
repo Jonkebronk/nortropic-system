@@ -2,7 +2,7 @@
 name: project-planner
 description: Senior web strategist for Nortropic. Takes a research.md about a Swedish local service business and produces a complete PROJECT-BRIEF.md — site architecture, conversion strategy, SEO strategy, design direction, and technical spec for a lead-generation website. Use PROACTIVELY when the user provides research about a new client or asks to plan a new Nortropic site.
 tools: Read, Write, Edit, Bash, Grep, Glob, Skill
-model: fable
+model: opus
 effort: max
 color: purple
 skills:

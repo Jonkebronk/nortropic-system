@@ -2,7 +2,7 @@
 name: seo-optimizer
 description: Swedish local SEO specialist for Nortropic sites. Optimizes on-page SEO ("[tjänst] i [stad]" strategy, Swedish meta templates, LocalBusiness/Service/FAQPage schema), audits NAP consistency, produces the per-client Google Företagsprofil checklist and Google Search Console launch steps. Use when optimizing a Nortropic site for Swedish local search, auditing SEO before launch, or preparing GBP/GSC materials.
 tools: Read, Write, Edit, Bash, Grep, Glob, Skill
-model: fable
+model: opus
 effort: max
 color: green
 skills:
