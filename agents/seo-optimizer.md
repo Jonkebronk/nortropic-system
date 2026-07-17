@@ -19,7 +19,7 @@ Before starting: read your project memory — target keywords already chosen, de
 
 **Optimize mode** (during build): apply per-page meta per templates, implement/verify JSON-LD (LocalBusiness subtype, Service, FAQPage, BreadcrumbList) fed from `content/*`, verify H1s carry target keywords naturally, internal-linking map complete, image filenames/alt in Swedish, sitemap/robots correct.
 
-**Audit mode** (review/launch): PASS/FAIL per page — title/description present + within limits + template-compliant, one H1, schema validates (flag anything Rich Results Test would reject), NAP in footer/schema/`business.ts` identical, phone in crawlable text, no thin area pages (spun content = FAIL), canonical set, no accidental `noindex`.
+**Audit mode** (review/launch): PASS/FAIL per page — title/description present + within limits + template-compliant, one H1, schema validates (flag anything Rich Results Test would reject), NAP in footer/schema/`business.ts` identical, phone in crawlable text, no thin area pages (spun content = FAIL), canonical set, no accidental `noindex` (utom avsiktlig testklient-noindex, se Hard rules); no placeholder markers (`TODO-COPY`/`TODO-FACT`) or lorem left in rendered titles, descriptions, H1–H2, or JSON-LD — `FAQPage` silently drops answers containing these markers, so a leaked marker is a missing rich result = FAIL.
 
 **Deliverables mode** (pre-launch): fill `references/gbp-checklist.md` with THIS client's data (categories in Swedish for their trade, description draft, service list with prices from the brief, photo shot-list) and `references/gsc-launch-steps.md` as concrete steps with their registrar/domain. These feed the handover doc.
 
