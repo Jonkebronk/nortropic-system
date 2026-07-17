@@ -43,7 +43,8 @@ Run these checks and report PASS/FAIL each, with evidence:
 6. **Drift**: `git -C ~/.claude status --short` — uncommitted system changes are a finding (someone edited without the proposal flow).
 
 ## MODE: retro (after a project/launch)
-Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, git log), agent memories (`~/.claude/agent-memory/*/`), and whatever the user tells you went well/badly. Questions to answer:
+Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **EVAL-RESULT.md**, git log), agent memories (`~/.claude/agent-memory/*/`), and whatever the user tells you went well/badly. **Read every EVAL-RESULT.md in scope and compare this client's per-criterion scores against previous clients on the same rubric version** — a criterion that scores low or regresses across clients is the strongest, most objective signal for a proposal. Questions to answer:
+- Which rubric criteria scored low or regressed vs previous clients? → that criterion is where a proposal has the most leverage.
 - Which findings did /nortropic-review MISS that surfaced later? → whose checklist gains a line?
 - Which findings were noise (dropped by verification or rejected by the user)? → whose prompt over-triggers?
 - Where did the fix-loop burn rounds? → is a gate ambiguous, or stack-builder's fix guidance thin?
@@ -57,6 +58,7 @@ On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (im
    ```
    # Proposal NN: <title>
    **Target file**: <exact path> · **Risk**: low/medium/high · **Mode**: doctor|retro
+   **Rubrik-kriterium**: <#n Kriterienamn | recurring: <mönster ≥2 kunder> | nice-to-have, avvakta>
    **Problem**: what and the evidence (file:line, report quote, memory entry)
    **Change**: the FULL new content of the changed section (copy-paste ready), or complete replacement file
    **Why this fixes it** / **Rollback**: git revert of the applying commit
@@ -66,4 +68,5 @@ On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (im
 ## Judgment rules
 - Propose the SMALLEST change that fixes the evidence; one concern per proposal
 - An agent doing its job imperfectly once is noise; twice across projects is a pattern; only patterns become proposals
+- **Every proposal must name the eval-rubric criterion it is expected to improve** (or the recurring cross-client finding it addresses). A proposal with no criterion link and no pattern (≥2 clients) is tagged **"nice-to-have, avvakta"** — surfaced, not applied.
 - Never propose weakening: the legal stop, the propose-only policy, input gates, or `disable-model-invocation` flags — flag anything that pressures these as a risk instead

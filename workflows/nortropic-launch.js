@@ -5,6 +5,7 @@ export const meta = {
   phases: [
     { title: 'Gates', detail: '6 parallel audit lenses' },
     { title: 'Fix loop', detail: 'max 3 rounds via stack-builder; legal never auto-fixed' },
+    { title: 'Eval', detail: 'non-blocking quality score via nortropic-eval (informs report only)' },
     { title: 'Handover', detail: 'GBP/GSC deliverables + Swedish client handover doc' },
     { title: 'Report', detail: 'launch readiness verdict' },
   ],
@@ -30,6 +31,19 @@ const GATE = {
         },
       },
     },
+  },
+}
+
+const EVAL = {
+  type: 'object',
+  required: ['total', 'faktatrohet', 'band'],
+  properties: {
+    total: { type: 'number' },
+    faktatrohet: { type: 'string', enum: ['PASS', 'FAIL'] },
+    band: { type: 'string' },
+    version: { type: 'string' },
+    topBrister: { type: 'array', items: { type: 'string' } },
+    resultPath: { type: 'string' },
   },
 }
 
@@ -77,6 +91,17 @@ while (round < 3) {
 
 const nonLegalPass = GATES.filter(g => g.key !== 'legal').every(g => gates[g.key].status === 'PASS')
 
+// v5: non-blocking quality eval. Runs only once the non-legal gates pass — the GATES block launch,
+// the eval only measures. Its score informs the report and feeds retro's cross-client comparison.
+let evalResult = null
+if (nonLegalPass) {
+  phase('Eval')
+  evalResult = await agent(
+    `Run the nortropic-eval quality rubric against ${site}. Read ~/.claude/skills/nortropic-eval/SKILL.md and its references/eval-rubric.md, then score all 10 criteria in ONE coherent judgment, apply the Faktatrohet hard-gate, and WRITE the scorecard to EVAL-RESULT.md in the project root (stamped with today's date and the rubric version). This is INFORMATIONAL — it does not gate the launch. Return the structured result (total, faktatrohet PASS/FAIL, band, version, top brister, resultPath).`,
+    { label: 'eval:rubric', phase: 'Eval', schema: EVAL }
+  )
+}
+
 phase('Handover')
 let handover = null
 if (nonLegalPass || round >= 3) {
@@ -96,13 +121,17 @@ const rows = GATES.map(g => {
   const status = g.key === 'legal' ? (legalFindings.length ? '⚠️ HUMAN REVIEW' : '⚠️ HUMAN SIGN-OFF (no findings, still requires sign-off)') : (r.status === 'PASS' ? '✅ PASS' : '❌ FAIL')
   return { gate: g.key, status, findings: (r.findings || []).length }
 })
-const verdict = nonLegalPass
+const evalNote = evalResult
+  ? ` | Kvalitetseval: ${evalResult.total}/100${evalResult.faktatrohet === 'FAIL' ? ' — FAKTATROHET FAIL (granska innan lansering)' : ` (${evalResult.band})`}`
+  : ''
+const verdict = (nonLegalPass
   ? (legalFindings.length ? 'BLOCKED — technical gates pass, LEGAL FINDINGS REQUIRE HUMAN JUDGMENT before launch' : 'READY — pending human legal sign-off, then run /vercel:deploy')
-  : `BLOCKED — gates still failing after ${round} fix round(s); remaining findings need human attention`
+  : `BLOCKED — gates still failing after ${round} fix round(s); remaining findings need human attention`) + evalNote
 
 return {
   verdict,
   gates: rows,
+  eval: evalResult,
   legalFindings,
   remainingFindings: GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL').flatMap(g => gates[g.key].findings || []),
   fixRounds: fixLog,
