@@ -1,6 +1,6 @@
 ---
 name: nortropic-prelaunch
-description: Pre-launch QA gate for Nortropic Swedish local service websites. Use before launching or deploying any client site — performance gates (Lighthouse, Core Web Vitals), lead-generation gates (click-to-call, quote form email delivery, CTA visibility, conversion tracking), responsive checks, and Swedish/EU legal compliance (GDPR/Integritetspolicy, cookie consent, Företagsuppgifter). Trigger with /nortropic-prelaunch [url-or-path], or when the user says "are we ready to launch", "prelaunch check", "kan vi lansera", or before /vercel:deploy.
+description: Pre-launch QA gate for Nortropic Swedish local service websites. Use before launching or deploying any client site — performance gates (Lighthouse, Core Web Vitals), lead-generation gates (click-to-call, quote form email delivery, CTA visibility, conversion tracking), responsive checks, security gate (npm audit, säkerhetsheaders, formulärmissbruk, hemligheter), and Swedish/EU legal compliance (GDPR/Integritetspolicy, cookie consent, Företagsuppgifter). Trigger with /nortropic-prelaunch [url-or-path], or when the user says "are we ready to launch", "prelaunch check", "kan vi lansera", or before /vercel:deploy.
 argument-hint: "[url-or-path]"
 ---
 
@@ -55,6 +55,12 @@ Run against `$ARGUMENTS` (preview URL preferred, else local build). **Every gate
 - [ ] If prices shown: inkl. moms for consumers; ROT/RUT claims accurate
 - [ ] Marketing claims verifiable (betyg real, "auktoriserad" backed by registration)
 
+## Gate 7 — Säkerhet (details: `references/security-checklist.md`)
+- [ ] **Beroenden rena**: `npm audit --omit=dev` — FAIL on any high/critical in production dependencies. Fix: upgrade or replace the package; `npm audit fix` only if the lockfile diff is reviewed
+- [ ] **Säkerhetsheaders servas** (verify what is ACTUALLY served: `curl -sI` against the preview URL): Content-Security-Policy (baseline in the reference — copy-paste `headers()` facit for `next.config.ts`), `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `frame-ancestors 'none'` (or `X-Frame-Options: DENY`). Fix: `headers()` in `next.config.ts` — not `vercel.json` when next.config already owns config
+- [ ] **Formulärmissbruk** (the quote endpoint): honeypot → silent 200 without email · time-trap rejects submits < 3 s after page load (field set client-side, validated server-side) · server-side validation of every field (length caps, email format) · **recipient hardcoded from env `LEAD_TO_EMAIL` — NEVER read from request body** (otherwise the endpoint is an open spam relay) · client-facing errors are generic — no env names, stacks, or Resend responses leak. Rate limiting: platform-level (Vercel WAF/challenge) as optional note — **no DB-based limiter** (breaks static-first)
+- [ ] **Hemligheter**: no keys in the client bundle — `grep -r "re_" .next/static` and grep the env var names; `.env*` git-ignored and absent from git history; all API keys only in server code/route handlers
+
 ## Verdict Format
 
 ```
@@ -68,8 +74,9 @@ Run against `$ARGUMENTS` (preview URL preferred, else local build). **Every gate
 | 4 A11y | ✅/❌ | ... |
 | 5 SEO | ✅/❌ | ... |
 | 6 Legal | ⚠️ HUMAN REVIEW | findings listed, never auto-fixed |
-Launch only when 0–5 all ✅ and a human has signed off 6.
+| 7 Säkerhet | ✅/❌ | ... |
+Launch only when 0–5 and 7 all ✅ and a human has signed off 6.
 ```
 
 ## On-Demand Escalation
-`a11y-audit` (WCAG deep scan) · `ship-gate` (generic launch gate) · `pw` (Playwright E2E for the form flow) · `seo-technical` / `seo-page` (SEO deep checks) · chrome-devtools/playwright MCP for live viewport + network testing.
+`a11y-audit` (WCAG deep scan) · `ship-gate` (generic launch gate) · `pw` (Playwright E2E for the form flow) · `seo-technical` / `seo-page` (SEO deep checks) · `security-review` (deep security pass) · `dependency-auditor` (dependency deep-dive) · chrome-devtools/playwright MCP for live viewport + network testing.

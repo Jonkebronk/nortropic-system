@@ -1,6 +1,6 @@
 # Nortropic Eval Rubric
 
-**Rubrikversion: v1.0.0**
+**Rubrikversion: v1.1.0**
 
 > Semver. Bump on **any** change to criteria, weights, or thresholds so scores stay comparable over time: PATCH = wording/clarification, MINOR = threshold/guidance change, MAJOR = criteria or weights change. Record the version used in every `EVAL-RESULT.md`. Never compare totals across different MAJOR/MINOR versions without noting it.
 
@@ -79,9 +79,10 @@ Om live-mätning inte går: bedöm mot viktbudgetarna (total < 1 MB, JS < 200 kB
 Gaterade platshållare (fiktiva omdömen med `placeholder:true`, grå SVG) = korrekt hantering, ingen avdragning för att de ännu inte är riktiga. **PASS ≥ 4.**
 
 ## 10. Teknisk hygien — 5 p
-- Inga döda interna länkar — 2
+- Inga döda interna länkar — 1
 - Fungerande svensk 404-sida — 1
-- Sitemap + robots serveras korrekt — 2
+- Sitemap + robots serveras korrekt — 1
+- Säkerhet: `npm audit` rent (prod), säkerhetsheaders servas, formulär-endpoint skyddad (honeypot + fast mottagare från env) — 2
 
 **PASS ≥ 4.**
 
@@ -96,4 +97,5 @@ Gaterade platshållare (fiktiva omdömen med `placeholder:true`, grå SVG) = kor
 En **Faktatrohet-FAIL** rapporteras som **FAIL** i EVAL-RESULT-headern oavsett band.
 
 ## Changelog
+- **v1.1.0** — Kriterium 10 utökat med säkerhet (npm audit prod, säkerhetsheaders, skyddad formulär-endpoint) — ombalanserat inom oförändrade 5 p (v6 säkerhetsgrind). Poäng mot v1.0.0 jämförbara med reservation för kriterium 10.
 - **v1.0.0** — Initial rubric (v5 mätbarhetslager). 10 criteria, Faktatrohet hard-gate.
