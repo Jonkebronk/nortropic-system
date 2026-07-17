@@ -21,7 +21,8 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
 ~/.claude/skills/          nortropic-antislop (+2 refs), nortropic-stack (+2), nortropic-prelaunch (+2),
                            nortropic-seo-lokal (+4), nortropic-plan (fork→project-planner),
                            nortropic-init (fork→stack-builder, +hooks-template ref),
-                           nortropic-retro (fork→nortropic-steward)
+                           nortropic-retro (fork→nortropic-steward, +1 ref: verify-kalibrering)
+                           nortropic-eval (knowledge, +1 ref: eval-rubric)
 ~/.claude/workflows/       nortropic-review.js (3 reviewers → adversarial verify → report)
                            nortropic-launch.js (6 gates → fix-loop ≤3 → legal STOPS → handover)
 System repo: git in ~/.claude → private GitHub repo "nortropic-system" (whitelist .gitignore)

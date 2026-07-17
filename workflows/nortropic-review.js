@@ -40,6 +40,10 @@ const VERDICT = {
 }
 
 const scope = (args && args.scope) || 'the Nortropic site in the current working directory'
+// v5 calibration flag: /nortropic-review --no-verify skips the adversarial skeptic step so a run can be
+// A/B-compared against a verified run (protocol: nortropic-retro/references/verify-kalibrering.md).
+// Defensive read — the flag may arrive as noVerify or 'no-verify' depending on how args are populated.
+const noVerify = !!(args && (args.noVerify || args['no-verify']))
 
 const REVIEWERS = [
   {
@@ -70,6 +74,10 @@ const results = await pipeline(
   (review, r) => {
     const found = (review && review.findings) || []
     if (!found.length) return []
+    if (noVerify) {
+      log(`${r.key}: ${found.length} findings — verify SKIPPED (calibration run)`)
+      return found.map(f => ({ ...f, source: r.key, verdict: 'UNVERIFIED' }))
+    }
     log(`${r.key}: ${found.length} findings — verifying`)
     return parallel(found.map(f => () =>
       parallel([0, 1].map(i => () =>
@@ -88,15 +96,20 @@ const results = await pipeline(
 const all = results.filter(Boolean).flat().filter(Boolean)
 const kept = all.filter(f => f.verdict !== 'DROPPED')
 const dropped = all.filter(f => f.verdict === 'DROPPED')
-log(`Verified: ${kept.length} kept (${kept.filter(f => f.verdict === 'CONFIRMED').length} confirmed), ${dropped.length} dropped`)
+log(noVerify
+  ? `Calibration run: ${kept.length} findings, UNVERIFIED (skeptic step skipped)`
+  : `Verified: ${kept.length} kept (${kept.filter(f => f.verdict === 'CONFIRMED').length} confirmed), ${dropped.length} dropped`)
 
 phase('Report')
 const order = { CRITICAL: 0, HIGH: 1, MEDIUM: 2 }
 kept.sort((a, b) => (order[a.severity] ?? 3) - (order[b.severity] ?? 3))
 
+const reviewHeader = noVerify
+  ? 'START THE REPORT WITH A BOLD BANNER LINE: "⚠️ OVERIFIERAD KÖRNING — endast för kalibrering". The findings below were NOT adversarially verified (the skeptic step was skipped); treat every finding as UNVERIFIED, say so explicitly, and do not present any as CONFIRMED.'
+  : 'Findings below are already adversarially verified (CONFIRMED = both skeptics failed to refute; PLAUSIBLE = one skeptic doubted it, note that).'
 const report = await agent(
-  `Write a consolidated Nortropic review report in markdown for ${scope}. Findings below are already adversarially verified (CONFIRMED = both skeptics failed to refute; PLAUSIBLE = one skeptic doubted it, note that). Group by severity CRITICAL/HIGH/MEDIUM, keep each finding to location + one-line problem + one-line fix + which agent fixes it (technical/code → stack-builder, copy → content-designer, SEO → seo-optimizer, design → stack-builder with design guidance). End with a 3-line summary and the recommended fix order. Do not invent findings beyond this list:\n\n${JSON.stringify(kept, null, 2)}\n\nDropped by verification (mention only the count): ${dropped.length}`,
+  `Write a consolidated Nortropic review report in markdown for ${scope}. ${reviewHeader} Group by severity CRITICAL/HIGH/MEDIUM, keep each finding to location + one-line problem + one-line fix + which agent fixes it (technical/code → stack-builder, copy → content-designer, SEO → seo-optimizer, design → stack-builder with design guidance). End with a 3-line summary and the recommended fix order. Do not invent findings beyond this list:\n\n${JSON.stringify(kept, null, 2)}\n\nDropped by verification (mention only the count): ${dropped.length}`,
   { label: 'report', phase: 'Report' }
 )
 
-return { report, counts: { kept: kept.length, confirmed: kept.filter(f => f.verdict === 'CONFIRMED').length, dropped: dropped.length } }
+return { report, mode: noVerify ? 'calibration-unverified' : 'verified', counts: { kept: kept.length, confirmed: kept.filter(f => f.verdict === 'CONFIRMED').length, dropped: dropped.length } }
