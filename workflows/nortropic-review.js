@@ -1,7 +1,7 @@
 export const meta = {
   name: 'nortropic-review',
   description: 'Parallel design + SEO + code review of a Nortropic site with adversarial verification of every finding',
-  whenToUse: 'Run during the build phase of a Nortropic client site to get one consolidated, verified review report',
+  whenToUse: 'Run during the build phase of a Nortropic client site to get one consolidated, verified findings report. This is a FINDINGS pass — the numeric quality score/gate (0–100, the ≥90 bar) lives in /nortropic-eval, not here.',
   phases: [
     { title: 'Review', detail: 'design-reviewer, seo-optimizer and a code reviewer in parallel' },
     { title: 'Verify', detail: 'two adversarial skeptics attempt to refute each finding' },
