@@ -1,0 +1,110 @@
+export const meta = {
+  name: 'nortropic-launch',
+  description: 'Pre-launch gate for a Nortropic site: 6 parallel audit lenses, bounded fix-loop (legal always stops for human), Swedish handover doc, launch readiness report',
+  whenToUse: 'Run when a Nortropic client site is believed ready to launch, before /vercel:deploy',
+  phases: [
+    { title: 'Gates', detail: '6 parallel audit lenses' },
+    { title: 'Fix loop', detail: 'max 3 rounds via stack-builder; legal never auto-fixed' },
+    { title: 'Handover', detail: 'GBP/GSC deliverables + Swedish client handover doc' },
+    { title: 'Report', detail: 'launch readiness verdict' },
+  ],
+}
+
+const GATE = {
+  type: 'object',
+  required: ['status', 'findings'],
+  properties: {
+    status: { type: 'string', enum: ['PASS', 'FAIL'] },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['severity', 'title', 'location', 'why', 'fix', 'category'],
+        properties: {
+          severity: { type: 'string', enum: ['CRITICAL', 'HIGH', 'MEDIUM'] },
+          title: { type: 'string' },
+          location: { type: 'string' },
+          why: { type: 'string' },
+          fix: { type: 'string' },
+          category: { type: 'string', enum: ['technical', 'leadgen', 'visual', 'trust', 'seo', 'legal'] },
+        },
+      },
+    },
+  },
+}
+
+const site = (args && args.url) ? `the Nortropic site in the current working directory (preview URL: ${args.url})` : 'the Nortropic site in the current working directory (find the preview/dev URL from vercel or start the dev server if needed)'
+const structured = 'Return PASS only if every check passes. Every finding needs severity, exact location, why it matters, concrete fix, and category.'
+
+const GATES = [
+  { key: 'technical', agentType: 'qa-launcher', prompt: `Run Gates 0, 2 and 3 of your prelaunch process (build integrity, Lighthouse/Core Web Vitals with real median-of-3 numbers, responsive 375/390/768/1280/1920 + link crawl + SSL) against ${site}. Category for findings: technical. ${structured}` },
+  { key: 'leadgen', agentType: 'qa-launcher', prompt: `Run Gate 1 (lead generation) of your prelaunch process against ${site}: tel: links at mobile viewport, phone in sticky header everywhere, floating call button, quote form submitted end-to-end with [TEST] data and EMAIL DELIVERY verified (Resend status — a 200 is not delivery), form error fallback shows phone, CTA above fold per page, phone_click/quote_submit events fire, 404/error pages show phone. Category: leadgen. ${structured}` },
+  { key: 'seo', agentType: 'seo-optimizer', prompt: `Final pre-launch SEO audit of ${site}: audit mode across all pages + launch readiness (sitemap/robots served, canonicals, schema validates, NAP consistency, GSC DNS verification status — ask nothing, report what you can verify). Category: seo. ${structured}` },
+  { key: 'visual', agentType: 'design-reviewer', prompt: `Final visual QA of ${site}: run your anti-slop review as a launch gate. FAIL on any CRITICAL conversion blocker or instant-fail slop pattern. Categories: visual (design issues) or leadgen (conversion blockers). ${structured}` },
+  { key: 'trust', agentType: 'design-reviewer', prompt: `Trust audit of ${site} — a distinct lens from visual QA: verify every trust element is real and consistent. Omdömen have namn+ort and match content/testimonials.ts, betyg matches content/business.ts rating, certifikat badges correspond to business.ts certifications, NAP in footer = business.ts exactly, garanti/jour/response-time claims appear only where the content files back them, org.nr + F-skatt present. Category: trust. ${structured}` },
+  { key: 'legal', agentType: 'qa-launcher', prompt: `Run ONLY Gate 6 (Swedish/EU legal) of your prelaunch process against ${site}: Integritetspolicy completeness per your legal-requirements-se reference, cookie/consent situation (verify what actually loads — cookieless Vercel Analytics vs anything requiring consent), Företagsuppgifter in footer, Google Fonts CDN absence, claims verifiability, ångerrätt applicability. OBSERVE AND REPORT ONLY. Category: legal for every finding. ${structured}` },
+]
+
+phase('Gates')
+log('Running 6 audit lenses in parallel')
+let gateResults = await parallel(GATES.map(g => () =>
+  agent(g.prompt, { label: `gate:${g.key}`, phase: 'Gates', schema: GATE })
+))
+let gates = Object.fromEntries(GATES.map((g, i) => [g.key, gateResults[i] || { status: 'FAIL', findings: [{ severity: 'CRITICAL', title: `${g.key} gate did not complete`, location: 'workflow', why: 'auditor agent failed or was skipped', fix: 'rerun /nortropic-launch', category: g.key === 'legal' ? 'legal' : 'technical' }] }]))
+
+const legalFindings = gates.legal.findings || []
+
+phase('Fix loop')
+let round = 0
+const fixLog = []
+while (round < 3) {
+  const failing = GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL')
+  if (!failing.length) break
+  round += 1
+  const fixable = failing.flatMap(g => (gates[g.key].findings || []).filter(f => f.category !== 'legal'))
+  if (!fixable.length) break
+  log(`Fix round ${round}/3: ${fixable.length} findings across ${failing.map(g => g.key).join(', ')}`)
+  const fixReport = await agent(
+    `Fix mode. Fix ONLY these verified launch-gate findings in the Nortropic site in the current working directory, minimally, then run pnpm build and confirm zero errors. Report per finding: fixed / needs-human (with reason).\n\n${JSON.stringify(fixable, null, 2)}`,
+    { label: `fix:round${round}`, phase: 'Fix loop', agentType: 'stack-builder' }
+  )
+  fixLog.push({ round, findings: fixable.length, report: typeof fixReport === 'string' ? fixReport.slice(0, 2000) : fixReport })
+  const recheck = await parallel(failing.map(g => () =>
+    agent(GATES.find(x => x.key === g.key).prompt + ' This is a RE-CHECK after fixes: verify the previously failing checks first.', { label: `recheck:${g.key}:r${round}`, phase: 'Fix loop', agentType: g.agentType, schema: GATE })
+  ))
+  failing.forEach((g, i) => { if (recheck[i]) gates[g.key] = recheck[i] })
+}
+
+const nonLegalPass = GATES.filter(g => g.key !== 'legal').every(g => gates[g.key].status === 'PASS')
+
+phase('Handover')
+let handover = null
+if (nonLegalPass || round >= 3) {
+  const seoDeliverables = await agent(
+    `Deliverables mode for the Nortropic site in the current working directory: produce the per-client Google Företagsprofil checklist (filled with THIS client's data from content/business.ts and the services) and the concrete Google Search Console launch steps. Write them to gbp-checklist-klient.md and gsc-steg-klient.md in the project root and return a short summary of both.`,
+    { label: 'handover:seo-deliverables', phase: 'Handover', agentType: 'seo-optimizer' }
+  )
+  handover = await agent(
+    `Write the Swedish client handover document for the Nortropic site in the current working directory as HANDOVER.md in the project root. Audience: the business owner (not technical). Sections: 1) Din nya webbplats (pages, what each does), 2) Så får du dina leads (where quote emails arrive, what a lead looks like, what to do), 3) Uppdatera innehåll (how to request changes via Nortropic; which facts live where), 4) Google Företagsprofil — din checklista (incorporate gbp-checklist-klient.md), 5) Google Search Console — de första 2 veckorna (incorporate gsc-steg-klient.md), 6) Support & kontakt. Voice: clear, warm, zero jargon. Context from SEO deliverables: ${typeof seoDeliverables === 'string' ? seoDeliverables.slice(0, 3000) : JSON.stringify(seoDeliverables).slice(0, 3000)}`,
+    { label: 'handover:doc', phase: 'Handover', agentType: 'content-designer' }
+  )
+}
+
+phase('Report')
+const rows = GATES.map(g => {
+  const r = gates[g.key]
+  const status = g.key === 'legal' ? (legalFindings.length ? '⚠️ HUMAN REVIEW' : '⚠️ HUMAN SIGN-OFF (no findings, still requires sign-off)') : (r.status === 'PASS' ? '✅ PASS' : '❌ FAIL')
+  return { gate: g.key, status, findings: (r.findings || []).length }
+})
+const verdict = nonLegalPass
+  ? (legalFindings.length ? 'BLOCKED — technical gates pass, LEGAL FINDINGS REQUIRE HUMAN JUDGMENT before launch' : 'READY — pending human legal sign-off, then run /vercel:deploy')
+  : `BLOCKED — gates still failing after ${round} fix round(s); remaining findings need human attention`
+
+return {
+  verdict,
+  gates: rows,
+  legalFindings,
+  remainingFindings: GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL').flatMap(g => gates[g.key].findings || []),
+  fixRounds: fixLog,
+  handoverWritten: Boolean(handover),
+}

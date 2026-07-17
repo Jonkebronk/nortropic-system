@@ -1,0 +1,15 @@
+# nortropic-system: whitelist tracking — ONLY the Nortropic system files.
+# Settings, credentials, plugins, projects, memory are NEVER tracked.
+/*
+!/.gitignore
+!/agents/
+!/workflows/
+!/skills/
+/skills/*
+!/skills/nortropic-antislop/
+!/skills/nortropic-stack/
+!/skills/nortropic-prelaunch/
+!/skills/nortropic-seo-lokal/
+!/skills/nortropic-plan/
+!/skills/nortropic-init/
+!/skills/nortropic-retro/
