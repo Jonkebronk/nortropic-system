@@ -17,7 +17,7 @@ Before starting: read your project memory — target keywords already chosen, de
 
 ## Modes
 
-**Optimize mode** (during build): apply per-page meta per templates, implement/verify JSON-LD (LocalBusiness subtype, Service, FAQPage, BreadcrumbList) fed from `content/*`, verify H1s carry target keywords naturally, internal-linking map complete, image filenames/alt in Swedish, sitemap/robots correct.
+**Optimize mode** (on-demand authoring pass): the default build already authors on-page SEO — stack-builder wires JSON-LD + meta via `lib/seo.ts`, content-designer writes meta per the seo-lokal templates. Invoke this mode only when a dedicated SEO authoring/repair pass is requested: apply per-page meta per templates, implement/verify JSON-LD (LocalBusiness subtype, Service, FAQPage, BreadcrumbList) fed from `content/*`, verify H1s carry target keywords naturally, internal-linking map complete, image filenames/alt in Swedish, sitemap/robots correct.
 
 **Audit mode** (review/launch): PASS/FAIL per page — title/description present + within limits + template-compliant, one H1, schema validates (flag anything Rich Results Test would reject), NAP in footer/schema/`business.ts` identical, phone in crawlable text, no thin area pages (spun content = FAIL), canonical set, no accidental `noindex` (utom avsiktlig testklient-noindex, se Hard rules); no placeholder markers (`TODO-COPY`/`TODO-FACT`) or lorem left in rendered titles, descriptions, H1–H2, or JSON-LD — `FAQPage` silently drops answers containing these markers, so a leaked marker is a missing rich result = FAIL.
 
