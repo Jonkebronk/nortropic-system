@@ -1,6 +1,6 @@
 # Regelverket — systemets hårda regler
 
-Senast verifierad mot systemet: 2026-07-18 · b68252e
+Senast verifierad mot systemet: 2026-07-18 · 4101b00
 
 Det här är reglerna som aldrig är förhandlingsbara i det dagliga arbetet — de ändras bara genom ett applicerat steward-förslag. Kolumnen "Exakt fil" pekar på filen där regeln bor; varje sökväg ska existera i repot. Motiven är komprimerade ur källfilerna och beslutsloggen ([05-beslutslogg.md](05-beslutslogg.md)).
 
@@ -22,3 +22,4 @@ Det här är reglerna som aldrig är förhandlingsbara i det dagliga arbetet —
 | 14 | **TESTKLIENT** byggs icke-indexerbar (`testklient: true` + `NEXT_PUBLIC_NOINDEX=1`) och får inga verkliga GBP/citation/GSC/DNS-åtgärder; dess noindex är ett krav, inte ett fynd | Ett fiktivt företag får aldrig bli indexerbart eller anspråksbart, och audits ska inte bekämpa avsikten | `agents/project-planner.md` (§6 Klienttyp) + `skills/nortropic-stack/SKILL.md` (testklient-flaggan) + `agents/seo-optimizer.md` + `agents/stack-builder.md` (TESTKLIENT-reglerna) |
 | 15 | **Never-invent-listan**: betyg, omdömen, priser, restider, certifikat, garantier, personnamn och grundningsår hittas aldrig på — saknat blir öppen fråga eller `TODO-FACT` | Faktatrohet (regel 1) börjar uppströms: det som aldrig uppfinns behöver aldrig fällas | `agents/project-planner.md` (Rules) + `agents/content-designer.md` (Process steg 1) |
 | 16 | **Pipeline-stegen är user-triggered only**: `/nortropic-plan`, `/nortropic-init` och `/nortropic-retro` bär `disable-model-invocation: true` | Stegen skapar verkliga resurser respektive systemförslag — modellen får aldrig trigga dem själv | `skills/nortropic-plan/SKILL.md` + `skills/nortropic-init/SKILL.md` + `skills/nortropic-retro/SKILL.md` (frontmatter; vaktas av doctor #5) |
+| 17 | **Docs committas ihop med systemändringen**: ett förslag med Docs-påverkan ≠ "ingen" appliceras aldrig utan sin docs-uppdatering i samma commit, varje applicerat förslag ger en beslutslogg-rad, och doctor #12 vaktar driften mekaniskt | Dokumentation som driftar ljuger med självförtroende; ihop-commit gör drift omöjlig i stället för upptäckbar i efterhand | `agents/nortropic-steward.md` (OUTPUT #2 + doctor #12) + `skills/nortropic-retro/SKILL.md` (appliceringsregeln) |

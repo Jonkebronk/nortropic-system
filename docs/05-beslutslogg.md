@@ -1,6 +1,6 @@
 # Beslutsloggen (ADR-lite)
 
-Senast verifierad mot systemet: 2026-07-18 · b68252e
+Senast verifierad mot systemet: 2026-07-18 · 4101b00
 
 En rad per beslut: när, vad, varför, vilken commit. Loggen är seedad bakåt ur git-historiken (motiven är komprimerade ur commit-meddelandena — `git show -s <hash>` ger hela texten) och förs framåt med en ny rad för varje applicerat steward-förslag.
 
@@ -42,4 +42,5 @@ En rad per beslut: när, vad, varför, vilken commit. Loggen är seedad bakåt u
 | 2026-07-18 | v8 L13 | Cache-hygien, doctor #11: systemcommits daterade mitt i ett aktivt kundbyggefönster ⇒ WARN — systemändringar hör hemma mellan kunder, efter retro; stabila filer ger prompt-cache-träffar ~10 % av fullpris och reproducerbara byggen | `baad6ba` |
 | 2026-07-18 | inventering | Engångsinventeringens beslut (användaren godkände i session): `gsap-build` behålls och refereras i stack-builders eskalering; `threejs-build` tas bort per v7+v8 — Three.js är ute ur systemet tills en brief uttryckligen kräver 3D, då ominventeras via bibliotekarien | `b68252e` |
 | 2026-07-18 | v9 D1 | README + gitignore-vitlista: systemets ingång i repo-roten (12-nodsflödet, repokartan, docs-länkar); `!/README.md` + `!/docs/` i vitlistan | `b1592a9` |
-| 2026-07-18 | v9 D2 | docs/ skapas som versionerad dokumentation: 00-guide (operatörsguide författad ur systemfilerna), 01-oversikt, 02-agenter, 03-regelverk, 04-justeringskarta, denna beslutslogg (seedad ur git-historiken) samt arkiv/ (fryst systemplan + lokal flytt-checklista). Varje fil bär raden "Senast verifierad mot systemet" | (denna commit) |
+| 2026-07-18 | v9 D2 | docs/ skapas som versionerad dokumentation: 00-guide (operatörsguide författad ur systemfilerna), 01-oversikt, 02-agenter, 03-regelverk, 04-justeringskarta, denna beslutslogg (seedad ur git-historiken) samt arkiv/ (fryst systemplan + lokal flytt-checklista). Varje fil bär raden "Senast verifierad mot systemet" | `4101b00` |
+| 2026-07-18 | v9 D3 | Driftskyddet: doctor #12 docs-referensintegritet (fyra mekaniska delkontroller, WARN "docs har driftat, kör docs-synk"), obligatoriskt fält **Docs-påverkan** i förslagmallen, appliceringsregeln (docs-uppdatering i SAMMA commit + beslutslogg-rad per applicerat förslag) och bibliotekariens docs-fråga (retrosteg 1 punkt v). Regeln tillämpad på sig själv: berörda docs-filer uppdaterade i samma commit | (denna commit) |

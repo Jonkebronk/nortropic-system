@@ -1,6 +1,6 @@
 # Operatörsguiden
 
-Senast verifierad mot systemet: 2026-07-18 · b68252e
+Senast verifierad mot systemet: 2026-07-18 · 4101b00
 
 Det här är guiden för dig som kör Nortropic-systemet: en operatör, en sajt i taget. Den är författad ur systemfilerna själva — varje avsnitt pekar på filen där regeln faktiskt bor, och när guiden och en systemfil säger olika saker är det systemfilen som gäller. Guiden förklarar hur du använder systemet och varför det ser ut som det gör; den exakta nodkartan finns i [01-oversikt.md](01-oversikt.md), agenterna i [02-agenter.md](02-agenter.md) och de hårda reglerna med källhänvisningar i [03-regelverk.md](03-regelverk.md).
 
@@ -58,13 +58,15 @@ Briefens §5 bär det obligatoriska fältet **Motion-nivå**: `ingen`, `subtil` 
 
 ## Retro och underhåll
 
-`/nortropic-retro` forkar stewarden i två lägen. **Doctor** (skope `system`) är den mekaniska hälsokontrollen: elva numrerade kontroller från frontmatter-parsning och workflow-kompilering till modellkontraktet, vendored-drift, usage-loggtäckning och cache-hygien (`agents/nortropic-steward.md`, MODE: doctor). **Retro** (skope projektmapp) läser projektets rapporter, EVAL-RESULT och agentminnen, jämför rubrikpoäng mot tidigare klienter och kör tre obligatoriska retrosteg i ordning: bibliotekarien (skill- och MCP-inventering — installerat jämförs mot refererat, varje orefererad skill klassas), det aktiva engångssteget verify-kalibrering, och usage-loggen. Minneskurateringen är också obligatorisk: varje minnespost klassas generell/kundspecifik/föråldrad och redovisas under "Minneshälsa". Varje STEWARD-REPORT avslutas med **"Största hävstången"** — DEN enskilda förändring som betalar sig mest just nu, en förändring, inte en lista.
+`/nortropic-retro` forkar stewarden i två lägen. **Doctor** (skope `system`) är den mekaniska hälsokontrollen: tolv numrerade kontroller från frontmatter-parsning och workflow-kompilering till modellkontraktet, vendored-drift, usage-loggtäckning, cache-hygien och docs-referensintegritet (`agents/nortropic-steward.md`, MODE: doctor). **Retro** (skope projektmapp) läser projektets rapporter, EVAL-RESULT och agentminnen, jämför rubrikpoäng mot tidigare klienter och kör tre obligatoriska retrosteg i ordning: bibliotekarien (skill- och MCP-inventering — installerat jämförs mot refererat, varje orefererad skill klassas), det aktiva engångssteget verify-kalibrering, och usage-loggen. Minneskurateringen är också obligatorisk: varje minnespost klassas generell/kundspecifik/föråldrad och redovisas under "Minneshälsa". Varje STEWARD-REPORT avslutas med **"Största hävstången"** — DEN enskilda förändring som betalar sig mest just nu, en förändring, inte en lista.
 
 Systemändringar hör hemma **mellan kunder, efter retro**. Det är cache-hygienregeln (doctor #11): stabila systemfiler ger prompt-cache-träffar på ungefär en tiondel av fullpris och reproducerbara byggen, så systemcommits mitt i ett aktivt kundbyggefönster flaggas.
 
 ## Docs-underhållet (nytt i v9)
 
 Dokumentationen i `docs/` är en del av systemet och underhålls med samma disciplin. Varje docs-fil (och README) inleds med raden `Senast verifierad mot systemet: <datum> · <kort hash>` — datumet säger när filens påståenden senast verifierades mot systemfilerna, hashen vilken commit de verifierades mot. **Docs-synk** betyder: verifiera om varje påstående i filen mot källfilerna och uppdatera raden. Filerna under `docs/arkiv/` är fryst historik och uppdateras inte. En ändring i agents/, skills/ eller workflows/ som gör en docs-fil inaktuell ska rätta docs-filen i samma commit — dokumentation som driftar är värre än ingen, för den ljuger med självförtroende.
+
+Underhållet är inbyggt på fyra ställen. Stewardens förslagmall bär det obligatoriska fältet **Docs-påverkan** (`<docs-fil + sektion | "ingen">`), och appliceringsregeln säger att ett förslag med docs-påverkan committas IHOP med sin docs-uppdatering — aldrig separat — samt att varje applicerat förslag ger en rad i [05-beslutslogg.md](05-beslutslogg.md) (`agents/nortropic-steward.md`, OUTPUT #2; `skills/nortropic-retro/SKILL.md`). Bibliotekarien i retron ställer följdfrågan om något i retron gjort en docs-fil inaktuell (`agents/nortropic-steward.md`, retrosteg 1 punkt v). Och doctor-kontroll **#12** vaktar drift mekaniskt: agenttabellen mot frontmattern, regelverkets sökvägar mot disken, kommandona mot skills/workflows, och Senast verifierad-datumen mot senaste systemcommit — avvikelse ger WARN "docs har driftat, kör docs-synk".
 
 ## Kostnadsdisciplin
 
