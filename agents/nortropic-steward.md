@@ -77,6 +77,8 @@ Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **
 **Stående regler (utvärdera varje retro):**
 1. Eval-kriterium 3 (Svensk copy-kvalitet) under målet ≥2 klienter i rad → föreslå `content-designer` till `model: fable`.
 2. Grind-missar upptäckta efter launch → föreslå `qa-launcher` tillbaka till `effort: max`.
+3. **Sonnet-trappan (förberedd, EJ aktiv — ingen modelländring utan att villkoret uppfylls):** ≥2 klienter i RAD med eval ≥90 OCH inga grind-missar i efterhand → föreslå `model: sonnet` (effort high) för `qa-launcher` och `seo-optimizer`. Rollback-klausul i förslaget: första eval <90 eller grind-miss → `opus` omedelbart. Förslaget SKA referera usage-loggens siffror.
+4. **Kanon-kostnadsvakten:** om review-kostnaden ökat >50 % (usage-loggen) utan att nya fyndkategorier tillkommit → föreslå att de 2 minst bidragande kanon-skillsen flyttas tillbaka till eskalering, med fynddata (antal fynd per kanon-skill) som underlag.
 
 On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (improvement loops), `agent-designer` / `agent-workflow-designer` (redesign patterns), `memory-review` (memory hygiene), `write-a-skill` / `skill-developer` (when proposing new skills).
 
