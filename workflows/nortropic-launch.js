@@ -71,6 +71,7 @@ const legalFindings = gates.legal.findings || []
 
 phase('Fix loop')
 let round = 0
+let freshUrl = (args && args.url) ? args.url : null   // repointed to each round's redeploy
 const fixLog = []
 while (round < 3) {
   const failing = GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL')
@@ -99,8 +100,19 @@ while (round < 3) {
     fixReports.push({ agent: 'seo-optimizer', report: typeof r === 'string' ? r.slice(0, 1500) : r })
   }
   fixLog.push({ round, findings: fixable.length, reports: fixReports })
+  // Commit + redeploy BEFORE re-checking so URL-based gates (Lighthouse, curl-headers,
+  // end-to-end lead, SSL) audit the FIXED build — not the stale origin/main preview.
+  // rorjour: fixes sat uncommitted → the preview served pre-fix values → rounds were wasted
+  // re-finding fixed issues. This step NEVER edits code: legal is still excluded from `fixable`,
+  // the 3-round bound and D1 routing are unchanged.
+  const release = await agent(
+    `Release step for the Nortropic site in the current working directory — do NOT change any code. (1) git add -A and commit the round-${round} launch-gate fixes with a descriptive message. (2) Redeploy a fresh preview of THIS commit (vercel deploy) and return the new preview URL on the final line as exactly PREVIEW_URL=<url>. If no deploy is possible, run pnpm build to prove the fixed tree compiles and return PREVIEW_URL=none.`,
+    { label: `release:round${round}`, phase: 'Fix loop', agentType: 'stack-builder' }
+  )
+  const um = typeof release === 'string' ? release.match(/PREVIEW_URL=(\S+)/) : null
+  if (um && um[1] && um[1] !== 'none') freshUrl = um[1]
   const recheck = await parallel(failing.map(g => () =>
-    agent(GATES.find(x => x.key === g.key).prompt + ' This is a RE-CHECK after fixes: verify the previously failing checks first.', { label: `recheck:${g.key}:r${round}`, phase: 'Fix loop', agentType: g.agentType, schema: GATE })
+    agent(GATES.find(x => x.key === g.key).prompt + ` This is a RE-CHECK after fixes. The working-tree fixes are now COMMITTED and REDEPLOYED${freshUrl ? ` — run every check against this fresh preview: ${freshUrl}` : ''}. Verify the previously failing checks first; before reporting any issue, confirm it still reproduces on THIS build (not a cached/stale one).`, { label: `recheck:${g.key}:r${round}`, phase: 'Fix loop', agentType: g.agentType, schema: GATE })
   ))
   failing.forEach((g, i) => { if (recheck[i]) gates[g.key] = recheck[i] })
 }
