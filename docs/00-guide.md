@@ -1,6 +1,6 @@
 # Operatörsguiden
 
-Senast verifierad mot systemet: 2026-07-18 · 4101b00
+Senast verifierad mot systemet: 2026-07-18 · v12 (denna commit)
 
 Det här är guiden för dig som kör Nortropic-systemet: en operatör, en sajt i taget. Den är författad ur systemfilerna själva — varje avsnitt pekar på filen där regeln faktiskt bor, och när guiden och en systemfil säger olika saker är det systemfilen som gäller. Guiden förklarar hur du använder systemet och varför det ser ut som det gör; den exakta nodkartan finns i [01-oversikt.md](01-oversikt.md), agenterna i [02-agenter.md](02-agenter.md) och de hårda reglerna med källhänvisningar i [03-regelverk.md](03-regelverk.md).
 
@@ -16,7 +16,7 @@ Den tredje är att **varje faktapåstående ska vara spårbart**. Ett påståend
 
 Pipelinen är tolv noder — tabellen finns i [01-oversikt.md](01-oversikt.md). Så här ser den ut från operatörsstolen:
 
-Du börjar med att skriva `research.md` om kunden. Fem fält är obligatoriska: företagsnamn, telefonnummer, minst en tjänst, minst en ort och något som duger som USP. Saknas något stannar planeringen med en numrerad lista över vad som fattas — systemet planerar aldrig på gissningar (`agents/project-planner.md`, INPUT GATE). Sedan kör du `/nortropic-plan`, som ger dig en `PROJECT-BRIEF.md` med exakt sex sektioner, en lista öppna frågor och ett fält **Klienttyp**: `SKARP` eller `TESTKLIENT`. En testklient byggs icke-indexerbar och får aldrig verkliga GBP-, citation- eller DNS-åtgärder (`agents/project-planner.md` §6, `skills/nortropic-stack/SKILL.md`).
+Du börjar med att skriva `research.md` om kunden. Fem fält är obligatoriska: företagsnamn, telefonnummer, minst en tjänst, minst en ort och något som duger som USP. Saknas något stannar planeringen med en numrerad lista över vad som fattas — systemet planerar aldrig på gissningar (`agents/project-planner.md`, INPUT GATE). Sedan kör du `/nortropic-plan`, som ger dig en `PROJECT-BRIEF.md` med exakt sex sektioner, en lista öppna frågor och ett fält **Klienttyp**: `SKARP` eller `TESTKLIENT`. Plannern gör alltid en egen inspirationsinhämtning ur källbiblioteket (`skills/nortropic-plan/references/inspirationskallor.md` — omdömesjakten först, gallerierna som smaklyft, koncept sist; budget max 6 egna kandidater/~10 sidhämtningar) och väger dina eventuella Designreferenser i research.md likvärdigt med sina egna fynd — frasen "hoppa över inspirationsjakt" i research.md stänger av den egna jakten. Smakgrinden är briefgodkännandet: §5:s Referensöversättning visar per rad om ett val kom från din research eller plannerns jakt, och det är där du accepterar eller vänder riktningen (`agents/project-planner.md`, steg 5d). En testklient byggs icke-indexerbar och får aldrig verkliga GBP-, citation- eller DNS-åtgärder (`agents/project-planner.md` §6, `skills/nortropic-stack/SKILL.md`).
 
 **Första hårda stoppet är briefgodkännandet.** Läs briefen, svara på de öppna frågorna, godkänn. Allt nedströms — bygge, copy, granskning — behandlar briefen som auktoritet, så en slarvigt godkänd brief blir en slarvig sajt.
 

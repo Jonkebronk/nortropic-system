@@ -1,6 +1,6 @@
 # Beslutsloggen (ADR-lite)
 
-Senast verifierad mot systemet: 2026-07-18 · v10 (denna commit)
+Senast verifierad mot systemet: 2026-07-18 · v12 (denna commit)
 
 En rad per beslut: när, vad, varför, vilken commit. Loggen är seedad bakåt ur git-historiken (motiven är komprimerade ur commit-meddelandena — `git show -s <hash>` ger hela texten) och förs framåt med en ny rad för varje applicerat steward-förslag.
 
@@ -47,3 +47,4 @@ En rad per beslut: när, vad, varför, vilken commit. Loggen är seedad bakåt u
 | 2026-07-18 | v9 D4 | Stewardens SYSTEM MAP får docs/-posten: innehållet i docs/ (00–05 + arkiv), att doctor #12 vaktar drift och att förslag bär Docs-påverkan och appliceras ihop med sin docs-uppdatering. Beslutslogg-rad i samma commit per appliceringsregeln | (denna commit) |
 | 2026-07-18 | v9 lokal flytt | Pekfiler på plats i ~/Workflow, minnet uppdaterat, städgrep ren | (denna commit) |
 | 2026-07-18 | v10 | Plannern får ögon: chrome-devtools i tools-raden + obligatoriskt steg 5d (rendera + skärmdumpa varje designreferens till `<kundmapp>/referenser/`, verifiera mot användarens motivering, "kunde ej öppnas"-fallback utan fabricering) + obligatorisk Referensöversättning i §5 (en rad per referens: öppnad ✓/✗, detta tas, detta förkastas med skäl). Motiv: plannern läste beskrivningar av referenser, inte referenserna — Emil-briefen räddades av tät research; 5d gör verifieringen mekanisk. Research-sektionen "Designreferenser (valfri men rekommenderad)" namnstandardiseras i nortropic-plan; användarens referensarbete förblir primärkällan | (denna commit) |
+| 2026-07-18 | v12 | Användarreferenser är inte längre primära; plannern inhämtar ALLTID själv från källbiblioteket (`skills/nortropic-plan/references/inspirationskallor.md`: omdömesjakten > gallerier > koncept, budget max 6 kandidater/~10 sidhämtningar, avstängningsfras "hoppa över inspirationsjakt") och väger hela poolen likvärdigt; smakkontroll = nod 3 (briefgodkännandet) via Referensöversättningens nya kolumner Ursprung (research/planner) + Källtyp. Ersätter v10/tidigare v12-utkasts käll-primat. Read-only-regeln mot främmande sajter (aldrig formulär/CTA:er/inloggningar) → regelverket #18. tools-raden får WebSearch + WebFetch (hitta kandidater; chrome-devtools ser dem) | (denna commit) |
