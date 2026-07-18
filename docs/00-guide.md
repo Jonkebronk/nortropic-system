@@ -1,0 +1,71 @@
+# Operatörsguiden
+
+Senast verifierad mot systemet: 2026-07-18 · b68252e
+
+Det här är guiden för dig som kör Nortropic-systemet: en operatör, en sajt i taget. Den är författad ur systemfilerna själva — varje avsnitt pekar på filen där regeln faktiskt bor, och när guiden och en systemfil säger olika saker är det systemfilen som gäller. Guiden förklarar hur du använder systemet och varför det ser ut som det gör; den exakta nodkartan finns i [01-oversikt.md](01-oversikt.md), agenterna i [02-agenter.md](02-agenter.md) och de hårda reglerna med källhänvisningar i [03-regelverk.md](03-regelverk.md).
+
+## Systemets idé
+
+Tre principer bär allt. Den första är att **stewarden föreslår, människan godkänner**. Meta-agenten `nortropic-steward` får diagnostisera hela systemet men aldrig ändra det — den skriver förslag som du godkänner och som huvudsessionen sedan applicerar och committar (`agents/nortropic-steward.md`, HARD WRITE POLICY). Det är styrning, inte blygsamhet: ett system som skriver om sig självt utan mänskligt godkännande driftar.
+
+Den andra är att **kvalitet mäts, inte känns**. Varje färdig sajt poängsätts 0–100 mot en versionerad rubrik (`skills/nortropic-eval/references/eval-rubric.md`, just nu v1.1.0) med tio viktade kriterier. Poängen är jämförbar mellan klienter, och varje steward-förslag måste namnge vilket rubrikkriterium det förväntas förbättra — annars taggas det "nice-to-have, avvakta" (`agents/nortropic-steward.md`, Judgment rules).
+
+Den tredje är att **varje faktapåstående ska vara spårbart**. Ett påstående på en kundsajt som inte går att spåra till kundens `research.md` fäller hela evalen, oavsett totalpoäng (`skills/nortropic-eval/SKILL.md`, "The hard rule"). Samma princip gäller den här dokumentationen: den beskriver det systemet ÄR, och varje påstående ska gå att spåra till en systemfil.
+
+## Flödet i praktiken
+
+Pipelinen är tolv noder — tabellen finns i [01-oversikt.md](01-oversikt.md). Så här ser den ut från operatörsstolen:
+
+Du börjar med att skriva `research.md` om kunden. Fem fält är obligatoriska: företagsnamn, telefonnummer, minst en tjänst, minst en ort och något som duger som USP. Saknas något stannar planeringen med en numrerad lista över vad som fattas — systemet planerar aldrig på gissningar (`agents/project-planner.md`, INPUT GATE). Sedan kör du `/nortropic-plan`, som ger dig en `PROJECT-BRIEF.md` med exakt sex sektioner, en lista öppna frågor och ett fält **Klienttyp**: `SKARP` eller `TESTKLIENT`. En testklient byggs icke-indexerbar och får aldrig verkliga GBP-, citation- eller DNS-åtgärder (`agents/project-planner.md` §6, `skills/nortropic-stack/SKILL.md`).
+
+**Första hårda stoppet är briefgodkännandet.** Läs briefen, svara på de öppna frågorna, godkänn. Allt nedströms — bygge, copy, granskning — behandlar briefen som auktoritet, så en slarvigt godkänd brief blir en slarvig sajt.
+
+`/nortropic-init` skapar GitHub-repot FÖRST (`gh repo create … --clone`, aldrig lokalt först), scaffoldar Next.js 15 + TypeScript strict + Tailwind 4 + shadcn/ui, bygger varje sida i briefens arkitektur och kopplar Vercel från dag ett (`skills/nortropic-init/SKILL.md`, `skills/nortropic-stack/SKILL.md`). Stacken är fast och medvetet enkel: **ingen databas** — allt innehåll är typad TS i `content/`, och den enda serverkoden är lead-actionen som mejlar offertförfrågningar via Resend. Därefter kör huvudsessionen agenten `content-designer` som fyller varje `TODO-COPY` med svensk copy i hantverkarton och kör alltihop genom det obligatoriska Humanisera-steget (`agents/content-designer.md`, steg 4). Fakta som saknas blir `TODO-FACT` — de får aldrig fyllas i av en agent, de är blockerande kundfrågor.
+
+Granskning och launch beskrivs i egna avsnitt nedan. Efter launch återstår tre saker: **andra hårda stoppet** (juridiken — du signerar Gate 6-fynden själv), `/vercel:deploy`, och efterarbetet där du kör de klientfyllda checklistorna `gbp-checklist-klient.md` och `gsc-steg-klient.md` under de första två veckorna (`workflows/nortropic-launch.js`, Handover-fasen). Sist kör du `/nortropic-retro` och når **tredje hårda stoppet**: du läser stewardens förslag och säger "applicera förslag N" till huvudsessionen.
+
+När fixloopen i launch hittar åtgärdbara fynd routas de per kategori: seo-fynd går till `seo-optimizer`, allt annat till `stack-builder`, sekventiellt så att två agenter aldrig skriver i repot samtidigt — och juridik går aldrig in i loopen alls (`workflows/nortropic-launch.js`, Fix loop).
+
+## Modellmatrisen
+
+Principen är **Fable där systemet tänker, Opus där det bygger**. `project-planner` och `nortropic-steward` — de två agenter vars omdöme formar allt nedströms — kör `model: fable` med `effort: max`. Byggarna och granskaren (`stack-builder`, `content-designer`, `design-reviewer`) kör Opus på max, och de två verifierarna (`seo-optimizer`, `qa-launcher`) Opus på high. Matrisen är kodifierad som MODELLKONTRAKTET i stewardens SYSTEM MAP, och doctor-kontroll #8 fäller varje avvikelse mellan kontraktet och agenternas frontmatter (`agents/nortropic-steward.md`).
+
+Matrisen är justerbar åt båda hållen, men bara via stående regler som utvärderas i varje retro: sjunker svensk copy-kvalitet (kriterium 3) under målet två klienter i rad föreslås `content-designer` upp till Fable; upptäcks grind-missar efter launch föreslås `qa-launcher` tillbaka till effort max. Och **Sonnet-trappan** är förberedd men INTE aktiv: först efter två raka klienter med eval ≥90 och noll grind-missar föreslås `qa-launcher` och `seo-optimizer` ner till Sonnet, med rollback-klausul vid första eval under 90 (`agents/nortropic-steward.md`, Stående regler 1–3).
+
+## Kanon och auktoritetsordning
+
+Designkvaliteten vaktas av **designkanonen**: sju tredjepartsskills som `design-reviewer` laddar obligatoriskt i varje granskning — `web-design-guidelines`, `ui-ux-pro-max` (facit för briefens valda riktning), `taste`, `impeccable`, `soft-skill`, `emil-design-eng` och `find-animation-opportunities` (bunden till briefens Motion-nivå). Eskaleringslistan är tömd; kanonen är inte valfri (`agents/design-reviewer.md`, steg 2). På copysidan har `content-designer` motsvarande obligatorium: hela copyn körs genom `content-humanizer` före rapport (`agents/content-designer.md`, steg 4). Dessa åtta skills är systemets bärande tredjepartsberoenden, och därför vendorade — se [04-justeringskarta.md](04-justeringskarta.md).
+
+Vid konflikt gäller alltid **auktoritetsordningen**: PROJECT-BRIEF §5 Designriktning > `nortropic-antislop` > designkanonen > övrigt. Generiska riktlinjer får aldrig övertrumfa briefens valda riktning eller antislops förbud, och komponent-MCP:er är uppslag — aldrig en källa som får ändra riktningen (`agents/stack-builder.md` och `agents/design-reviewer.md`).
+
+Kanonen har en kostnadsvakt: ökar review-kostnaden med mer än 50 % utan att nya fyndkategorier tillkommit, föreslås de två minst bidragande kanon-skillsen tillbaka till eskalering — med fynddata som underlag (`agents/nortropic-steward.md`, Stående regel 4).
+
+## Kadens och färskhet
+
+Granskningskadensen är **full → diff → full**: första granskningen efter init och granskningen före launch är alltid fullständiga; mellanliggande granskningar körs med `/nortropic-review --diff`, som mekaniskt diffar mot commiten i förra rapportens meta-block och granskar enbart ändrade filer med direkt kontext. Det är granskningsytan som skopas, inte kvalitetsribban — kanonen laddas som vanligt (`workflows/nortropic-review.js`).
+
+Launchen vägrar köra på gammal information: **freshness-grinden** blockerar om `REVIEW-REPORT.md` saknas, om senaste granskningen var diff-skopad, eller om det finns commits på `src`/`content` efter granskningens commit. Då är svaret alltid detsamma — kör en full `/nortropic-review` först (`workflows/nortropic-launch.js`, Freshness). Kalibreringskörningar (`--no-verify`) skriver till en egen fil, `REVIEW-REPORT-CALIBRATION.md`, så de aldrig kan lura freshness-grinden.
+
+## Grindarna
+
+Var precis med orden här, för det finns två uppsättningar. **Prelaunch-skillen har åtta grindar, numrerade 0–7** (`skills/nortropic-prelaunch/SKILL.md`): 0 bygge, 1 leadgenerering, 2 prestanda, 3 responsivitet, 4 tillgänglighet, 5 SEO, 6 juridik, 7 säkerhet. **Launch-workflowen kör sju parallella granskningslinser** — technical, leadgen, seo, visual, trust, security, legal — som fördelar grindarna över `qa-launcher`, `seo-optimizer` och `design-reviewer`, var och en med explicita INGÅR/INGÅR INTE-gränser så att ingen lins dubbelrapporterar en annans område (`workflows/nortropic-launch.js`).
+
+Gate 1 är hjärtat: leadkedjan testas på riktigt — formuläret skickas end-to-end och **mejlets ankomst är testet, inte ett 200-svar**. Här bor också RESEND_FROM-regeln: utan verifierad avsändardomän faller Resend tillbaka på `onboarding@resend.dev`, som bara levererar till kontoägaren — leveranstestet måste därför gå till den skarpa `LEAD_TO_EMAIL`. Gate 6 är juridiken: enbart observation och rapport, aldrig auto-fix, alltid mänskligt sign-off. Gate 7 är säkerheten: beroenden, servade headers, formulärmissbruk (honeypot, en-klocks-tidsfälla, mottagare hårdkodad från env — aldrig från request body) och hemligheter. Fixloopen kör max tre rundor, och varje runda committar och redeployar det fixade trädet INNAN omkontrollen så att URL-baserade grindar granskar rätt bygge (`workflows/nortropic-launch.js`, Fix loop).
+
+## Motion-nivå och animation
+
+Briefens §5 bär det obligatoriska fältet **Motion-nivå**: `ingen`, `subtil` eller `uttrycksfull`, med `subtil` som default. Det är animationsanvändningens kontrakt nedströms — stack-builder bygger efter det och design-reviewer granskar mot det (`agents/project-planner.md` §5). Sedan gäller **en-biblioteksregeln**: ett animationsbibliotek per projekt, aldrig båda. Motion är default; GSAP väljs endast när nivån är `uttrycksfull` OCH behovet är tidslinje-/scrollsekvenser som Motion inte löser elegant, och valet motiveras med en mening i byggrapporten. Oavsett bibliotek gäller motion-reglerna a–d: rörelse endast när briefen anger det, `prefers-reduced-motion` respekteras alltid, rörelse får aldrig kosta Lighthouse-poäng, och mikrorörelser/entrances — aldrig scroll-jacking (`agents/stack-builder.md`, Rules). Skillen `gsap-build` innehåller SSR-säkra recept och används ENDAST när en-biblioteksregeln redan valt GSAP.
+
+## Retro och underhåll
+
+`/nortropic-retro` forkar stewarden i två lägen. **Doctor** (skope `system`) är den mekaniska hälsokontrollen: elva numrerade kontroller från frontmatter-parsning och workflow-kompilering till modellkontraktet, vendored-drift, usage-loggtäckning och cache-hygien (`agents/nortropic-steward.md`, MODE: doctor). **Retro** (skope projektmapp) läser projektets rapporter, EVAL-RESULT och agentminnen, jämför rubrikpoäng mot tidigare klienter och kör tre obligatoriska retrosteg i ordning: bibliotekarien (skill- och MCP-inventering — installerat jämförs mot refererat, varje orefererad skill klassas), det aktiva engångssteget verify-kalibrering, och usage-loggen. Minneskurateringen är också obligatorisk: varje minnespost klassas generell/kundspecifik/föråldrad och redovisas under "Minneshälsa". Varje STEWARD-REPORT avslutas med **"Största hävstången"** — DEN enskilda förändring som betalar sig mest just nu, en förändring, inte en lista.
+
+Systemändringar hör hemma **mellan kunder, efter retro**. Det är cache-hygienregeln (doctor #11): stabila systemfiler ger prompt-cache-träffar på ungefär en tiondel av fullpris och reproducerbara byggen, så systemcommits mitt i ett aktivt kundbyggefönster flaggas.
+
+## Docs-underhållet (nytt i v9)
+
+Dokumentationen i `docs/` är en del av systemet och underhålls med samma disciplin. Varje docs-fil (och README) inleds med raden `Senast verifierad mot systemet: <datum> · <kort hash>` — datumet säger när filens påståenden senast verifierades mot systemfilerna, hashen vilken commit de verifierades mot. **Docs-synk** betyder: verifiera om varje påstående i filen mot källfilerna och uppdatera raden. Filerna under `docs/arkiv/` är fryst historik och uppdateras inte. En ändring i agents/, skills/ eller workflows/ som gör en docs-fil inaktuell ska rätta docs-filen i samma commit — dokumentation som driftar är värre än ingen, för den ljuger med självförtroende.
+
+## Kostnadsdisciplin
+
+Mätryggraden är **usage-loggen** (`~/Workflow/usage-log.md`): efter varje retro loggas förbrukning per agent och projekt, och inga kostnadsförslag får läggas utan loggrader (`agents/nortropic-steward.md`, retrosteg 3 + doctor #10). Ovanpå den vilar tre mekanismer: **verify-kalibreringen**, en engångsmätning där en verifierad och en overifierad review körs på samma commit och stewarden dömer mekaniskt efter beslutsreglerna — en skeptiker, skeptiker endast för CRITICAL/HIGH, eller verify endast i launch (`skills/nortropic-retro/references/verify-kalibrering.md`); **diff-skopningen**, som gör mellangranskningar billiga utan att sänka ribban; och **Sonnet-trappan** ovan. Allt är förslag, inget självutlösande — siffrorna kommer från loggen, besluten från dig.

@@ -1,0 +1,45 @@
+# Agenterna
+
+Senast verifierad mot systemet: 2026-07-18 · b68252e
+
+Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna.
+
+<!-- doctor läser tabellraderna mekaniskt: håll formatet "| namn | modell · effort | ... |" med agentnamnet i första kolumnen och modell · effort i den andra -->
+
+| Agent | Modell · effort | Förladdad skill | Minne | MCP:er i tools-raden |
+|---|---|---|---|---|
+| project-planner | fable · max | nortropic-stack | user | — |
+| stack-builder | opus · max | nortropic-stack | inget | shadcn-ui, plugin_context7_context7, 21st, reactbits, magicuidesign, motion-dev, gsap |
+| content-designer | opus · max | nortropic-antislop | user | claude_ai_Trybloom, 21st, higgsfield |
+| design-reviewer | opus · max | nortropic-antislop | user | chrome-devtools |
+| seo-optimizer | opus · high | nortropic-seo-lokal | project | — |
+| qa-launcher | opus · high | nortropic-prelaunch | project | chrome-devtools, plugin_playwright_playwright |
+| nortropic-steward | fable · max | — | user | — |
+
+## project-planner — `agents/project-planner.md`
+
+Senior webbstrateg: gör om en `research.md` till en komplett `PROJECT-BRIEF.md` för en leadgenererande sajt. Obligatoriska steg: **INPUT GATE** körs först (fem obligatoriska fält, annars STOPP med numrerad bristlista), därefter processteg 1–6 där **5b** laddar `nortropic-antislop` (slop-mönstren läses, inte minns) och **5c** slår upp designriktning per bransch i `ui-ux-pro-max`, läser de två senaste klienternas §5 och väljer en riktning som skiljer sig — motmedlet mot att alla sajter konvergerar. Briefen har exakt sex sektioner, med obligatoriska fälten **Vald riktning**, **Motion-nivå** (`ingen`/`subtil`/`uttrycksfull`, default subtil) och **Klienttyp** (`SKARP`/`TESTKLIENT`). Skills på begäran i processen: `site-architecture`, `nortropic-seo-lokal`, `cro`, `seo-plan`. Hårda regler: hitta aldrig på betyg, priser, restider, certifikat, personnamn eller grundningsår — saknat blir öppen fråga.
+
+## stack-builder — `agents/stack-builder.md`
+
+Byggaren: GitHub-first-scaffoldern som gör en godkänd brief till en deploy-färdig sajt, och fixaren i review-/launch-looparna. Byggprocessen är steg 1–12: repo FIRST (`gh repo create --clone`), scaffold med pinnad `create-next-app@15`, shadcn via MCP (endast behövda komponenter), contentfiler med helig NAP i `business.ts`, konverteringstrion på varje sida, lead-pipelinen (`app/actions/lead.ts` med Zod + honeypot + Resend), schema, analytics, sitemap/robots/svenska felsidor, projekthooks, `vercel link` + deploy, och `pnpm build` med noll fel innan klart. **Fix mode**: fixa ENDAST listade fynd, minimalt, aldrig "förbättra" orelaterat. En PostToolUse-hook kör prettier på varje skriven fil. Eskalering på begäran: `react-best-practices`, `composition-patterns`, `senior-frontend`, `vercel-geist-design`, `spec-to-repo`, context7-MCP, 21st/React Bits/Magic UI-MCP:er (inspiration, aldrig rakt av), motion-dev/gsap-MCP:er samt `gsap-build` (endast när en-biblioteksregeln redan valt GSAP). Reglerna bär auktoritetsordningen, en-biblioteksregeln och motion-reglerna a–d — se [03-regelverk.md](03-regelverk.md). Inget agentminne: allt kontrakt kommer ur briefen och skillsen.
+
+## content-designer — `agents/content-designer.md`
+
+Svensk copywriter och bildproducent i hantverkarton — skriver för en stressad husägare som bestämmer sig på 30 sekunder. Processteg 1–5: läs brief + `business.ts` (fakta ENDAST därifrån), fyll varje `TODO-COPY` i prioritetsordning, följ per-sida-reglerna (inkl. FAQ-undantaget: en FAQ som inte kan besvaras ur bekräftade fakta BEHÅLLER sin `TODO-FACT`-markör så `FaqSchema` filtrerar bort den ur JSON-LD), **steg 4 Humanisera (obligatoriskt)**: hela copyn genom `content-humanizer` med två hårda gränser — blocklistan får aldrig brytas och fakta ändras aldrig — och steg 5 självrevision mot blocklistan. Bilder via Trybloom: aldrig fejkade människor, jobb eller certifikat; vid noll krediter hoppas bildgenerering över helt — placeholders som skeppas är okej, en stannad pipeline är det inte. Eskalering: `copywriting`, `impeccable`, `image`, 21st-MCP, `nortropic-seo-lokal` (laddas före metaskrivning så mallarna aldrig divergerar från seo-optimizers).
+
+## design-reviewer — `agents/design-reviewer.md`
+
+Read-only designgranskare: rapporterar fynd med exakt plats och konkret fix, redigerar aldrig filer. Processteg 1–6: läs briefens §5 (Vald riktning + Motion-nivå; saknas nivån behandlas den som `subtil` med notering), **steg 2 Ladda designkanonen (obligatoriskt — invoke SAMTLIGA sju)**: `web-design-guidelines`, `ui-ux-pro-max` (facit för briefens riktning), `taste`, `impeccable`, `soft-skill`, `emil-design-eng`, `find-animation-opportunities` (bunden till Motion-nivån), steg 3 antislop-gaten (ryggraden i varje granskning), steg 4 live viewport-pass via chrome-devtools när URL finns, steg 5 konverteringskritiska kontroller (var och en CRITICAL vid miss), och **steg 6 premium-checklistan** PK-1…PK-8 med `[PK-n]`-taggning. Ingen eskaleringslista — den togs bort när kanonen blev obligatorisk (v7 L3). Auktoritetsordningen gäller varje bedömning.
+
+## seo-optimizer — `agents/seo-optimizer.md`
+
+Svensk lokal-SEO-specialist med tre lägen: **Optimize** (på begäran — dedikerad SEO-författarpass; normalbygget skriver SEO själv), **Audit** (PASS/FAIL per sida i review/launch: meta, en H1, schema validerar, NAP identisk, inga tunna ortssidor, inga läckta `TODO`-markörer i renderade fält) och **Deliverables** (pre-launch: fyller GBP-checklistan och GSC-stegen med klientens data). Hårda regler: `content/business.ts` är NAP:s enda källa — varje avvikelse CRITICAL; aldrig fabricera betyg/hreflang/nyckelordsstoppade namn; tunna ortssidor rekommenderas bort hellre än behålls; TESTKLIENT får inga verkliga GBP/citation/GSC/DNS-åtgärder och dess avsiktliga noindex är ett krav, inte ett fynd. Eskalering: elva seo-skills (`seo-local`, `seo-schema`, `seo-technical`, `seo-sitemap`, `seo-page`, `seo-content`, `seo-images`, `local-seo-manager`, `seo-google`, `seo-maps`, `seo-hreflang`) med när-triggers i agentfilen.
+
+## qa-launcher — `agents/qa-launcher.md`
+
+Launchgrindvakten: verifierar och rapporterar med evidens, fixar aldrig. Kör prelaunch-grindarna **i ordning 0 → 7** med evidensregler per grind: Gate 1 är hjärtat och testas på riktigt (tel-länkar på 375px, formulär end-to-end, **mejlleverans är testet — inte ett 200**, felvägen med saknad Resend-nyckel måste visa telefonnumret), Gate 2 Lighthouse median-av-3 med siffror inte adjektiv, Gate 3 fem viewports + länkcrawl + PK-7, Gate 4 tillgänglighet, Gate 5 SEO-servering, **Gate 6 juridik: observera och rapportera ENDAST, aldrig PASS på egen auktoritet**, Gate 7 säkerhet med bifogad evidens (`npm audit`, `curl -sI`-dump, secret-grep). Verdiktet är Launch Readiness-tabellen: LAUNCH-READY endast när 0–5 och 7 alla PASS och Gate 6-fynden är listade för sign-off. Eskalering: `a11y-audit`, `ship-gate`, `pw`, `seo-technical`/`seo-page`.
+
+## nortropic-steward — `agents/nortropic-steward.md`
+
+Meta-agenten vars ämne är systemet självt: diagnostiserar och föreslår, en människa godkänner, huvudsessionen applicerar. **HARD WRITE POLICY**: får bara skriva i sitt eget minne, `~/Workflow/steward-proposals/` och STEWARD-REPORT.md — aldrig i agents/, skills/, workflows/ eller settings, inte ens för en bekräftad bugg. **MODE doctor** kör elva mekaniska kontroller: frontmatter-parsning, workflow-kompilering, referensintegritet (inkl. de 8 obligatoriska bärande skillsen), MCP-integritet, governance (bl.a. `disable-model-invocation` och legal-stoppet), git-drift, minneshälsa (>200 rader), modelltillgänglighet + modellkontraktet, vendored-drift, usage-loggtäckning och cache-hygien. **MODE retro** läser rapporter, EVAL-RESULT och agentminnen, jämför rubrikpoäng mellan klienter, kör obligatorisk minneskuratering samt de tre obligatoriska retrostegen (bibliotekarien, engångssteget verify-kalibrering, usage-loggen) och utvärderar de fyra stående reglerna (Fable-lyft för copy, effort-återställning för qa, Sonnet-trappan, kanon-kostnadsvakten). Output-kontraktet: STEWARD-REPORT.md, en förslagsfil per ändring enligt mallen i OUTPUT #2, ärlig summering ("ett tomt förslagsarkiv från en ärlig steward är ett BRA resultat") och den obligatoriska slutsektionen **"Största hävstången"**. Skills på begäran: `reflect`, `post-mortem`, `self-improving-agent`, `agent-designer`/`agent-workflow-designer`, `memory-review`, `write-a-skill`/`skill-developer`.

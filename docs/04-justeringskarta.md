@@ -1,0 +1,47 @@
+# Justeringskartan — ändra med öppna ögon
+
+Senast verifierad mot systemet: 2026-07-18 · b68252e
+
+Varje större designval i systemet kostar något och köper något. Det här dokumentet finns för att du ska kunna skruva — eller ta bort — ett val medvetet: här står vad det kostar, vad det köper, exakt var man skruvar, och vad som sannolikt händer utan det. Ändringar går som vanligt via steward-förslag och commit; historiken bakom varje val finns i [05-beslutslogg.md](05-beslutslogg.md).
+
+## Adversarial verify (två skeptiker per granskningsfynd)
+
+**Vad det kostar:** ungefär en fördubbling av agent-anropen i reviewens Verify-fas — två skeptiker per fynd, var och en med egen lins (faktisk sanning i koden respektive spelar-det-roll) (`workflows/nortropic-review.js`).
+**Vad det köper:** rapporter utan brus. Fynd som båda skeptikerna misslyckas att vederlägga är CONFIRMED; det en skeptiker tvivlar på blir PLAUSIBLE; resten stryks. Utan det behandlas varje granskarhugskott som sanning och fixloopar bränner rundor på pedanteri.
+**Exakt fil att skruva i:** `workflows/nortropic-review.js` (Verify-steget) — och kalibreringsprotokollet med mekaniska beslutsregler i `skills/nortropic-retro/references/verify-kalibrering.md` (en skeptiker; skeptiker endast CRITICAL/HIGH; verify endast i launch). Skruva via kalibreringen, inte på känsla.
+**Om det tas bort:** fler falska fynd når rapporten, fixloopen åtgärdar saker som inte är trasiga, och förtroendet för CONFIRMED-etiketten försvinner. `--no-verify` finns redan som kontrollerad väg att mäta exakt detta.
+
+## Designkanonen (7 obligatoriska skills i design-reviewer)
+
+**Vad det kostar:** sju skill-laddningar per granskning — kanonen är den enskilt största kostnadsposten i review-fasen, vilket är precis varför kanon-kostnadsvakten finns (`agents/nortropic-steward.md`, Stående regel 4).
+**Vad det köper:** granskning mot en extern, stabil kvalitetsribba i stället för granskarens dagsform. `ui-ux-pro-max` fungerar som facit för briefens valda riktning; `find-animation-opportunities` binds till Motion-nivån.
+**Exakt fil att skruva i:** `agents/design-reviewer.md` (processteg 2 — listan över vilka som laddas). Kostnadsvaktens avsedda justering: flytta de två minst bidragande skillsen tillbaka till eskalering, med fynddata som underlag.
+**Om det tas bort:** granskningarna konvergerar mot generiskt tyckande, slop-mönster slinker igenom och eval-kriterierna 1/3/9 faller över tid. Kanonen gjordes obligatorisk för att "when depth is needed"-eskalering i praktiken aldrig triggades (v7 L3).
+
+## Modellmatrisen (Fable där systemet tänker, Opus där det bygger)
+
+**Vad det kostar:** premiummodell med effort max på de två tänkande agenterna, och Opus i stället för billigare modeller på resten — medveten överkapacitet i verifierarleden.
+**Vad det köper:** brief- och stewardkvalitet (allt nedströms ärver deras omdöme) och förutsägbar kvalitet i bygge/granskning. Doctor #8 fäller varje tyst avvikelse från kontraktet.
+**Exakt fil att skruva i:** frontmattern (`model:`/`effort:`) i respektive `agents/*.md` OCH MODELLKONTRAKTET i `agents/nortropic-steward.md` (SYSTEM MAP) — båda samtidigt, annars fäller doctor #8. Den avsedda nedskruvningsvägen är Sonnet-trappan (Stående regel 3): aktiveras först efter två raka klienter med eval ≥90 och noll grind-missar, med rollback-klausul.
+**Om det tas bort:** utan kontraktet kan modellval drifta per agent utan att någon märker det förrän kvaliteten sjunker — och utan trappvillkoren blir nedskruvning en gissning i stället för ett mätt beslut.
+
+## Diff-skopning (mellangranskningar med `--diff`)
+
+**Vad det kostar:** en extra mekanisk scout-agent per diff-körning, plus regelbördan att hålla kadensen full → diff → full.
+**Vad det köper:** mellangranskningar som bara betalar för det som ändrats, utan att sänka ribban — kanonen laddas som vanligt, ytan är skopad. Rapportmetan + freshness-grinden garanterar att launch aldrig sker mot en diff-skopad eller föråldrad bild.
+**Exakt fil att skruva i:** `workflows/nortropic-review.js` (Scope-fasen + kadensregeln i `whenToUse`) och `workflows/nortropic-launch.js` (Freshness-fasen).
+**Om det tas bort:** antingen fullpris för varje mellangranskning, eller — om man tar bort freshness-grinden — launch mot en rapport som inte beskriver nuvarande commit. Det senare är dyrare: grindar som godkänner fel bygge upptäcks först av kunden.
+
+## Vendoring (facit-kopior av de 8 bärande skillsen)
+
+**Vad det kostar:** åtta kopior att hålla i repot och en diff-kontroll per doctor-körning; upprepade WARNs när marketplace auto-uppdaterar original.
+**Vad det köper:** obligatoriska steg som inte kan ändras under fötterna på systemet. Kedjan är obligatorisk ⇒ bärande ⇒ vendorad: det design-reviewer och content-designer MÅSTE ladda har ett fruset facit med innehållshash, och varje uppströmsändring blir en medveten granskning i stället för tyst drift (`vendored-skills/*/VENDORED.md`, doctor #9).
+**Exakt fil att skruva i:** `vendored-skills/` (kopiorna) och `agents/nortropic-steward.md` (doctor #3-listan över vilka som är obligatoriska + doctor #9-diffen).
+**Om det tas bort:** en marketplace-uppdatering av t.ex. `content-humanizer` ändrar systemets beteende utan spår — kvalitetsskiften som inte går att härleda till någon commit i det här repot.
+
+## En-biblioteksregeln (Motion ELLER GSAP, aldrig båda)
+
+**Vad det kostar:** ett uttrycksmedel mindre i enskilda fall — den som vill ha GSAP:s tidslinjer OCH Motions deklarativa API i samma projekt får välja.
+**Vad det köper:** mindre bundle, en mental modell per projekt, och ett motiverat val i byggrapporten i stället för ett slentrianmässigt. Regeln kopplar till briefens Motion-nivå: GSAP kräver `uttrycksfull` plus ett konkret tidslinje-/scrollbehov.
+**Exakt fil att skruva i:** `agents/stack-builder.md` (Rules — regeln + motiveringskravet) och `skills/gsap-build/SKILL.md` (GSAP-receptens gränser).
+**Om det tas bort:** projekt samlar båda biblioteken, bundlevikt och CWV-risk stiger (prestandagrinden i Gate 2 fäller ändå till slut — men då som launchblockerare i stället för ett tidigt byggbeslut), och motiveringen i byggrapporten försvinner som beslutslogg.
