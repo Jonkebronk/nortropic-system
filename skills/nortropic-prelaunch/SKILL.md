@@ -14,7 +14,8 @@ Run against `$ARGUMENTS` (preview URL preferred, else local build). **Every gate
 - [ ] **`TODO-FACT`/`TODO-COPY` markers appear ONLY inside FAQ answers** (where `FaqSchema` strips them from JSON-LD). A marker in ANY other rendered field — `priceNote`, hero, meta description, service/area body copy — renders the literal "TODO-FACT…" to the customer and is a **FAIL** (H2). Grep every rendered content field: `grep -rn "TODO-FACT\|TODO-COPY" src/content src/app` → each hit must be a FAQ *answer* string or a code comment, nothing else. And confirm no marker text survives in the built FAQPage JSON-LD (proves the `FaqSchema` filter is doing its job).
 - [ ] `.env.local.example` documents every env var; real values exist in Vercel (`RESEND_API_KEY`, `LEAD_TO_EMAIL`, and — before real launch — `RESEND_FROM` set to a verified-domain sender; unset falls back to `onboarding@resend.dev`, which only delivers to the Resend account owner: see Gate 1)
 
-## Gate 1 — Lead Generation (THE gate — full targets in this file)
+## Gate 1 — Primärhandlingsgrinden (THE gate — full targets in this file)
+Läs `content/profile.ts` FÖRST: `primaraktion` + `gate1Test` definierar vad som testas end-to-end för denna kund. Saknas profile.ts i byggrepot = Gate 1 FAIL med tydligt meddelande — kör aldrig på gissad default. **Invarianter oavsett primärhandling:** primärhandlingen nåbar above fold på varje sida (375×667), mobilergonomisk, testad PÅ RIKTIGT end-to-end, fallback vid fel som visar en alternativ kontaktväg, konverteringsevent avfyras. **Offert/samtal-fallet (hantverkar-defaulten) = punkterna nedan, exakt:**
 - [ ] **Click-to-call works**: every phone number is a `tel:` link; tap on 375px viewport opens dialer
 - [ ] **Phone visible in sticky header** on every page, mobile and desktop
 - [ ] **Floating call button** on mobile after scroll, ≥56px target
@@ -24,6 +25,8 @@ Run against `$ARGUMENTS` (preview URL preferred, else local build). **Every gate
 - [ ] CTA above the fold on every page at 375×667
 - [ ] **Conversion tracking fires**: `phone_click` and `quote_submit` events visible in analytics debug
 - [ ] 404 and error pages render the phone number
+
+**Annan primärhandling** (boka tid / platsförfrågan / besök): motsvarande kedja per `gate1Test` — t.ex. boka-flödet når den externa bokningstjänsten och fungerar, bokningsevent spåras, felväg visar telefon/alternativ kontaktväg; 404/error visar alltid en kontaktväg. Kravnivån är identisk: leveransen/genomförandet är testet, aldrig ett 200.
 
 ## Gate 2 — Performance (details: `references/lighthouse-targets.md`)
 - [ ] Lighthouse mobile: **Performance ≥90, Accessibility ≥95, Best Practices ≥95, SEO ≥95**

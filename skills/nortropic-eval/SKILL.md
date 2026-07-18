@@ -20,15 +20,15 @@ The rubric is **versioned** (semver at the top of `references/eval-rubric.md`). 
 
 | # | Kriterium | Vikt |
 |---|---|---|
-| 1 | Konverteringsarkitektur (tel-länkar, sticky nummer, CTA above fold, formulär ≤5 fält, flytande ringknapp) | 15 |
+| 1 | Konverteringsarkitektur (primärhandlingen enligt `content/profile.ts` omedelbart nåbar, mobilergonomisk, ≤5 formulärfält där formulär ingår) | 15 |
 | 2 | **Faktatrohet** (varje faktapåstående spårbart till research.md) | 15 |
-| 3 | Svensk copy-kvalitet (hantverkarton, blocklistan ren, korrekt svenska) | 10 |
+| 3 | Svensk copy-kvalitet (röst enligt briefens §7-register, blocklistan — bas + bransch — ren, korrekt svenska) | 10 |
 | 4 | NAP-konsistens (identisk i business.ts, schema, footer, kontaktsida) | 10 |
-| 5 | Lokal SEO ("[tjänst] i [stad]", unika meta, unika ortssidor) | 10 |
-| 6 | Schema-korrekthet (LocalBusiness validerar, svensk PostalAddress, öppettider) | 10 |
+| 5 | Lokal SEO (uppfyller §7:s SEO-läge — ortssidor endast där seoLage kräver dem, då unika) | 10 |
+| 6 | Schema-korrekthet (schema-typ enligt profile.ts validerar, svensk PostalAddress, öppettider) | 10 |
 | 7 | Prestanda (Lighthouse-mål från nortropic-prelaunch) | 10 |
 | 8 | Juridik komplett (integritetspolicy, org.nr, cookie-hantering) | 10 |
-| 9 | Förtroendesignaler (omdömen, certifikat, foton nära hero) | 5 |
+| 9 | Förtroendesignaler (förtroendekvitton enligt §7.4 nära hero — omdömen, kvitton, foton) | 5 |
 | 10 | Teknisk hygien (inga döda länkar, 404-sida, sitemap) | 5 |
 
 ## The hard rule — Faktatrohet is a gate, not just points

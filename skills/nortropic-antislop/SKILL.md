@@ -48,7 +48,7 @@ Judge every element by one question: *does this get a stressed person in Sverige
 - Real photos: the team, the vans, actual jobs (before/after). Imperfect beats perfect.
 - Trust signals near every CTA: F-skatt, försäkring, garantier, riktiga omdömen med namn och ort
 - Service pages that answer the visitor's actual situation, ending in the same CTA pair
-- Warm, professional palette anchored by the trade (blue = VVS/rör, green = städ/miljö, amber/orange = el/energi) — never the default indigo-500
+- Warm, professional palette anchored by the client's bransch per briefens §5 (t.ex. blue = VVS/rör, green = städ/miljö, amber/orange = el/energi) — never the default indigo-500
 
 ## Copy Blocklist (summary — full list in `references/copy-blocklist.md`)
 
@@ -57,7 +57,7 @@ Forbidden AI-slop phrases, Swedish and English. Each occurrence −3 points:
 - "Unlock", "Elevate", "Seamless", "Empower", "Effortless", "state-of-the-art", em-dash chains, rule-of-three adjective triplets ("snabbt, smidigt och säkert" as filler)
 - Generic superlatives without proof ("marknadsledande", "bäst i branschen")
 
-**Good Nortropic copy** sounds like a trusted local tradesperson: concrete services, concrete response times, concrete areas ("Vi rensar avlopp i hela Täby — oftast samma dag"). Short sentences. Numbers and place names beat adjectives.
+**Good Nortropic copy** is concrete, calm, direct Swedish — concrete services, concrete tider, concrete areas ("Vi rensar avlopp i hela Täby — oftast samma dag"). Short sentences. Numbers and place names beat adjectives. These universal principles apply to every bransch; THE VOICE (adjektiv, exempelmeningar, legitimt bransch-vernacular) is defined per client in the brief's **§7 Röstregister**, and the brief's **bransch-antislop (§7.3)** applies on top of the base blocklist. §7 can never whitelist the universal sins.
 
 ## Premium-checklistan (det positiva rummet)
 

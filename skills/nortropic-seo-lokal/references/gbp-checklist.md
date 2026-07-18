@@ -10,7 +10,7 @@
 - [ ] Verify (postcard/phone/video — whatever Google offers). Start EARLY: postcard = 1–2 veckor
 
 ## B. Kategori (biggest ranking lever)
-- [ ] **Primary category** = the exact trade in Swedish: Rörmokare / Elektriker / Städfirma / VVS-firma / Låssmed / Målare / Byggfirma...
+- [ ] **Primary category** = den exakta branschkategorin på svenska: Rörmokare / Hunddagis / Blomsterhandel / Frisör / Elektriker / Städfirma / Låssmed / Målare / Byggfirma...
 - [ ] Secondary: 2–4 genuinely applicable ("Jourrörmokare", "Värmepumpsinstallatör") — never aspirational
 
 ## C. NAP + kontakt

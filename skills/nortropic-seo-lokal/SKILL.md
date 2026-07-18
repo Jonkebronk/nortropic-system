@@ -1,6 +1,6 @@
 ---
 name: nortropic-seo-lokal
-description: Swedish local SEO playbook for Nortropic local service business websites. Use when optimizing a Swedish trades/service site for local search — "[tjänst] i [stad]" keyword strategy, Swedish citations (eniro, hitta.se, reco), LocalBusiness schema with Swedish conventions, Nordic hreflang, service-area pages per kommun, Google Företagsprofil checklist, and Google Search Console launch steps. Trigger with /nortropic-seo-lokal [url-or-business], or for "lokal SEO", "rank in Swedish local search", "GBP optimization", "Google Företagsprofil".
+description: Swedish local SEO playbook for Nortropic local business websites. Use when optimizing a Swedish local business site for local search — "[tjänst] i [stad]" keyword strategy, Swedish citations (eniro, hitta.se, reco), LocalBusiness schema with Swedish conventions, Nordic hreflang, service-area pages per kommun, Google Företagsprofil checklist, and Google Search Console launch steps. Trigger with /nortropic-seo-lokal [url-or-business], or for "lokal SEO", "rank in Swedish local search", "GBP optimization", "Google Företagsprofil".
 argument-hint: "[url-or-business]"
 ---
 
@@ -16,7 +16,7 @@ Swedes search `elektriker uppsala`, `stopp i avloppet täby`, `flyttstädning v�
 - **Hem**: targets `[yrke/kategori] [huvudort]` ("Rörmokare Stockholm")
 - Long-tail lives in FAQ blocks: "vad kostar avloppsrensning", "rörmokare jour pris", "gäller rot-avdrag för..."
 
-Rules: å/ä/ö transliterate in slugs (`/omraden/taby`), keep å/ä/ö in titles/H1/copy. Never spin area pages — each needs genuinely local content (local landmarks, real jobs done there, restider) or it's thin-content risk. Start with the orter where the business actually works; 5 real area pages beat 25 spun ones.
+Rules: å/ä/ö transliterate in slugs (`/omraden/taby`), keep å/ä/ö in titles/H1/copy. Never spin area pages — each needs genuinely local content (local landmarks, real jobs done there, restider) or it's thin-content risk. Start with the orter where the business actually works; 5 real area pages beat 25 spun ones. Ortssideskravet gäller `seoLage: lokal`/`hybrid` (briefens §7 / `content/profile.ts`) — vid `varumarke` genereras inga ortssidor alls; playbookens grunder (meta, schema, teknik, NAP) gäller alltid.
 
 ## Meta templates (per page type)
 | Page | Title (≤60 chars) | Description (≤155 chars) |

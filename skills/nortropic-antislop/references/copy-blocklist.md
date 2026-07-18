@@ -1,6 +1,6 @@
 # Nortropic Copy Blocklist — Full Reference
 
-The voice is a **trusted local tradesperson**: concrete, calm, direct Swedish. Short sentences. Numbers, place names, and response times instead of adjectives. Every page ends in a call to action a stressed homeowner can act on in five seconds.
+This is the UNIVERSAL base — it applies to every bransch and can never be whitelisted away. The universal principles: concrete, calm, direct Swedish; short sentences; numbers and place names instead of adjectives; every page ends in a call to action a stressed visitor can act on in five seconds. THE VOICE itself (adjektiv, exempelmeningar, legitimt bransch-vernacular) comes from the brief's **§7 Röstregister**, and the brief's **bransch-antislop (§7.3)** applies ON TOP of this list for that build. §7 can never whitelist anything below.
 
 ## Forbidden phrases — Swedish (rewrite on sight)
 
@@ -12,7 +12,7 @@ The voice is a **trusted local tradesperson**: concrete, calm, direct Swedish. S
 | "Vi finns här för dig" | Says nothing | "Ring oss — vi svarar 07–22 alla dagar" |
 | "skräddarsydda lösningar" | Agency-speak | Name what is actually adapted: "Fast pris efter kostnadsfri besiktning" |
 | "helhetslösningar" | Vague | List the included services |
-| "ta ... till nästa nivå" | SaaS-speak on a plumber site | Delete |
+| "ta ... till nästa nivå" | SaaS-speak on a local business site | Delete |
 | "Vi brinner för..." | Cliché | Show it: years, certifications, photos |
 | "kvalitet i fokus / kunden i centrum" | Empty claim | Replace with garanti/certifikat facts |
 | "marknadsledande / bäst i branschen" | Unprovable superlative | Real proof: betyg, antal jobb, år |
@@ -31,19 +31,14 @@ Never on a Swedish site, and never in meta tags either: unlock, elevate, seamles
 - **Exclamation marks** — max one per page, ideally zero.
 - **"Välkommen till [Företag] AB"** as a headline — the hero states the problem/outcome, never a greeting.
 
-## Required copy elements (absence is a violation)
-- Response time promise somewhere above the fold — only if genuinely true
-- Service area named in hero + repeated on service pages ("i Nacka, Värmdö och Tyresö")
-- **ROT/RUT-avdrag** mentioned where applicable, with the customer's actual price after avdrag when possible
-- Price transparency signal: "Fast pris", "Kostnadsfri offert", or fr.-priser — one of these must exist
-- Öppettider/jour clearly stated; if "Jour dygnet runt" appears, the phone number must actually be staffed
-- Org.nr + F-skatt in footer
+## Required copy elements (absence is a violation — universal)
+- Service area/plats named in hero + repeated on service pages ("i Nacka, Värmdö och Tyresö")
+- Price transparency signal where prices are relevant: "Fast pris", "Kostnadsfri offert", fr.-priser, or a clear "så tar vi betalt"
+- Öppettider clearly stated and truthful; every availability claim ("Jour dygnet runt", "Öppet nu", "svar inom X") must be genuinely staffed/true
+- Org.nr + F-skatt in footer (invariant för näringsidkare)
+- Every trust claim backed by a kvitto per the brief's §7.4 attributionsregler
 
-## Tone calibration by trade
-- **VVS/rör**: urgent-capable, reassuring. Emergencies are the entry point; planned work is the upsell.
-- **El**: safety + behörighet first (auktoriserad elinstallatör, Elsäkerhetsverket) — trust beats speed.
-- **Städ**: reliability + recurring relationship. RUT-avdrag prominent, "samma team varje gång".
-- **Bygg/hantverk**: portfolio + process. Before/after, referensjobb med ort, tydlig offertprocess.
+Bransch-specific required elements (ROT/RUT-avdrag, restidslöfte above fold, jour-mönster osv.) live in the bransch profile (`~/Workflow/profiler/`), carried into each build by the brief's §7 — not here.
 
 ## Meta/SEO copy
 - Title: `[Tjänst] i [Stad] | [Företag]` — ≤60 chars, no superlatives
