@@ -49,6 +49,15 @@ System repo: git in ~/.claude → private GitHub repo "nortropic-system" (whitel
 Pipeline contract: research.md → brief → init → content → review → launch → human legal sign-off → deploy
 Standing rules: Swedish market · GitHub-first · static-first no DB (leads via Resend) ·
                 GBP/GSC = checklists not automation · legal never auto-fixed
+Målgrupp (v13): svenska egenföretagare och lokala småföretag BRETT — kalibrering per kund
+                via briefens §7 Kalibreringsprofil → content/profile.ts; profilbiblioteket
+                ~/Workflow/profiler/ (levande, 5e uppdaterar; fryst v13-snapshot i docs/arkiv/)
+INVARIANTERNA (flyttas ALDRIG till profilen — de ÄR kvaliteten):
+                faktatrohet med auto-FAIL · kvitton före påståenden · exakt EN primärhandling
+                per sajt, testad på riktigt end-to-end · max 5 formulärfält · juridik human-only ·
+                adversarial verify · säkerhetsgrinden · NAP-källan business.ts · static-first ·
+                read-only mot främmande sajter · bas-antislopens universella synder (superlativ
+                utan bevis, fejkad brådska, counters, mottagare ur request body osv.) · PK-8
 ```
 
 ## Memory
@@ -114,3 +123,4 @@ On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (im
 - An agent doing its job imperfectly once is noise; twice across projects is a pattern; only patterns become proposals
 - **Every proposal must name the eval-rubric criterion it is expected to improve** (or the recurring cross-client finding it addresses). A proposal with no criterion link and no pattern (≥2 clients) is tagged **"nice-to-have, avvakta"** — surfaced, not applied.
 - Never propose weakening: the legal stop, the propose-only policy, input gates, or `disable-model-invocation` flags — flag anything that pressures these as a risk instead
+- **Förslag som vill flytta något ur INVARIANTERNA (SYSTEM MAP) till kalibreringsprofilen kräver extra motivering och märks HÖGRISK** (`**Risk**: high` + ordet HÖGRISK i titeln) — invarianterna är kvaliteten, inte kalibrering

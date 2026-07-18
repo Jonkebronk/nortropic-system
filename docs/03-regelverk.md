@@ -1,6 +1,6 @@
 # Regelverket — systemets hårda regler
 
-Senast verifierad mot systemet: 2026-07-18 · v12.1 (denna commit)
+Senast verifierad mot systemet: 2026-07-18 · v13 (denna commit)
 
 Det här är reglerna som aldrig är förhandlingsbara i det dagliga arbetet — de ändras bara genom ett applicerat steward-förslag. Kolumnen "Exakt fil" pekar på filen där regeln bor; varje sökväg ska existera i repot. Motiven är komprimerade ur källfilerna och beslutsloggen ([05-beslutslogg.md](05-beslutslogg.md)).
 
@@ -24,3 +24,11 @@ Det här är reglerna som aldrig är förhandlingsbara i det dagliga arbetet —
 | 16 | **Pipeline-stegen är user-triggered only**: `/nortropic-plan`, `/nortropic-init` och `/nortropic-retro` bär `disable-model-invocation: true` | Stegen skapar verkliga resurser respektive systemförslag — modellen får aldrig trigga dem själv | `skills/nortropic-plan/SKILL.md` + `skills/nortropic-init/SKILL.md` + `skills/nortropic-retro/SKILL.md` (frontmatter; vaktas av doctor #5) |
 | 17 | **Docs committas ihop med systemändringen**: ett förslag med Docs-påverkan ≠ "ingen" appliceras aldrig utan sin docs-uppdatering i samma commit, varje applicerat förslag ger en beslutslogg-rad, och doctor #12 vaktar driften mekaniskt | Dokumentation som driftar ljuger med självförtroende; ihop-commit gör drift omöjlig i stället för upptäckbar i efterhand | `agents/nortropic-steward.md` (OUTPUT #2 + doctor #12) + `skills/nortropic-retro/SKILL.md` (appliceringsregeln) |
 | 18 | **Read-only mot främmande sajter**: vid extern rendering (plannerns 5d och varje annan extern granskning) aldrig formulär, kontakt-CTA:er eller inloggningar — skärmdumpa och observera, inget annat | Plannern besöker verkliga företags sajter i inspirationsjakten — en agent som råkar skicka ett kontaktformulär skapar en verklig lead hos ett verkligt företag | `agents/project-planner.md` (steg 5d, hårda regler + 5d.4) |
+
+## Invarianterna (v13 — flyttas ALDRIG till kalibreringsprofilen)
+
+Systemet byggs åt svenska egenföretagare/lokala småföretag brett genom att kalibreringen genereras per kund (briefens §7 → `content/profile.ts`) — men följande är INVARIANTER som förblir hårdkodade, för de ÄR kvaliteten:
+
+**Faktatrohet med auto-FAIL · kvitton före påståenden · exakt EN primärhandling per sajt, testad på riktigt end-to-end · max 5 formulärfält · juridik human-only · adversarial verify · säkerhetsgrinden · NAP-källan business.ts · static-first · read-only mot främmande sajter · bas-antislopens universella synder (superlativ utan bevis, fejkad brådska, counters, mottagare ur request body osv.) · PK-8.**
+
+Steward-förslag som vill flytta något härifrån till profilen kräver extra motivering och märks **HÖGRISK** (`agents/nortropic-steward.md`, SYSTEM MAP INVARIANTERNA + Judgment rules). §7:s röstregister kan aldrig vitlista de universella synderna (`agents/design-reviewer.md`, Auktoritetsordning).

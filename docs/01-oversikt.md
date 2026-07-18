@@ -1,6 +1,6 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-18 · b68252e
+Senast verifierad mot systemet: 2026-07-18 · v13 (denna commit)
 
 Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara människan får trigga), de två workflowsen och två plattformskommandon; tre noder är rent mänskliga stopp. Modell och effort kommer ur respektive agents frontmatter — samma värden som MODELLKONTRAKTET i stewardens SYSTEM MAP och doctor #8 vaktar.
 
@@ -9,7 +9,7 @@ Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara män
 | Nod | Steg | Kommando | Utförare (modell · effort) | Artefakt |
 |---|---|---|---|---|
 | 1 | Research | inget — operatören skriver filen | människa | `research.md` (5 obligatoriska fält) |
-| 2 | Plan | `/nortropic-plan <research.md>` | project-planner (fable · max) | `PROJECT-BRIEF.md` (6 sektioner + öppna frågor) |
+| 2 | Plan | `/nortropic-plan <research.md>` | project-planner (fable · max) | `PROJECT-BRIEF.md` (7 sektioner + öppna frågor) |
 | 3 | Briefgodkännande | **HÅRT STOPP** | människa | godkänd brief, besvarade frågor |
 | 4 | Init | `/nortropic-init <PROJECT-BRIEF.md>` | stack-builder (opus · max) | GitHub-repo + Vercel-preview |
 | 5 | Innehåll | inget eget kommando — huvudsessionen kör agenten | content-designer (opus · max) | copy, bilder, `TODO-COPY` fylld, Humanisera-passet |
