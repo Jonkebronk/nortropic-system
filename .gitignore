@@ -2,6 +2,8 @@
 # Settings, credentials, plugins, projects, memory are NEVER tracked.
 /*
 !/.gitignore
+!/README.md
+!/docs/
 !/agents/
 !/workflows/
 !/vendored-skills/

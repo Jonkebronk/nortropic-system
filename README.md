@@ -1,0 +1,46 @@
+# nortropic-system
+
+Senast verifierad mot systemet: 2026-07-18 · b68252e
+
+Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar leadgenererande webbplatser för svenska lokala tjänsteföretag — rörmokare, elektriker, städfirmor, byggfirmor. Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som bara får föreslå — aldrig ändra.
+
+Det här repot är systemets källa till sanning: i drift är repo-roten operatörens `~/.claude`, och `.gitignore` är en vitlista som spårar enbart systemfilerna.
+
+## Flödet
+
+En kundsajt går genom tolv noder. Tre av dem är hårda stopp där en människa måste agera; resten drivs av kommandon.
+
+| Nod | Steg | Kommando | Artefakt |
+|---|---|---|---|
+| 1 | Research | inget — operatören skriver `research.md` (5 obligatoriska fält) | `research.md` |
+| 2 | Plan | `/nortropic-plan <research.md>` | `PROJECT-BRIEF.md` |
+| 3 | Briefgodkännande | **HÅRT STOPP** — människan godkänner briefen och svarar på öppna frågor | godkänd brief |
+| 4 | Init | `/nortropic-init <PROJECT-BRIEF.md>` | GitHub-repo + Vercel-preview |
+| 5 | Innehåll | inget eget kommando — huvudsessionen kör agenten `content-designer` på projektet | copy + bilder, `TODO-COPY` fylld |
+| 6 | Review | `/nortropic-review` (kadens: full → `--diff` → full) | `REVIEW-REPORT.md` |
+| 7 | Launch | `/nortropic-launch` | verdikt, `EVAL-RESULT.md`, `HANDOVER.md` |
+| 8 | Juridik | **HÅRT STOPP** — människan signerar Gate 6-fynden | juridiskt sign-off |
+| 9 | Deploy | `/vercel:deploy` (efter sign-off) | produktionssajt |
+| 10 | Efterarbete | inget kommando — kör `gbp-checklist-klient.md` + `gsc-steg-klient.md` | GBP live, GSC verifierad |
+| 11 | Retro | `/nortropic-retro <projektmapp \| system>` | `STEWARD-REPORT.md` + förslag |
+| 12 | Godkänn förslag | **HÅRT STOPP** — "applicera förslag N" till huvudsessionen | systemcommits |
+
+Detaljerad nodkarta med agent, modell och effort per nod finns i [docs/01-oversikt.md](docs/01-oversikt.md).
+
+## Repokartan
+
+- **`agents/`** — de 7 agenterna: `project-planner`, `stack-builder`, `content-designer`, `design-reviewer`, `seo-optimizer`, `qa-launcher`, `nortropic-steward`. Frontmattern bär modellkontraktet (model/effort) som doctor #8 vaktar.
+- **`skills/`** — 9 skills: tre pipeline-steg som bara människan får trigga (`nortropic-plan`, `nortropic-init`, `nortropic-retro`, alla med `disable-model-invocation: true`) och sex kunskaps-/grindskills (`nortropic-stack`, `nortropic-antislop`, `nortropic-seo-lokal`, `nortropic-prelaunch`, `nortropic-eval`, `gsap-build`).
+- **`workflows/`** — 2 workflows: `nortropic-review.js` (3 granskningslinser + adversariell verifiering) och `nortropic-launch.js` (freshness-grind → 7 granskningslinser → fixloop ≤3 → eval → handover).
+- **`vendored-skills/`** — facit-kopior av de 8 bärande tredjepartsskillsen (designkanonen ×7 + `content-humanizer`), var och en med `VENDORED.md`. Doctor #9 diffar originalen mot kopiorna.
+- **`docs/`** — dokumentationen (denna leverans). Beskriver det systemet ÄR; varje påstående ska gå att spåra till en fil.
+
+## Dokumentation
+
+- [docs/00-guide.md](docs/00-guide.md) — operatörsguiden: hur systemet används och varför det ser ut som det gör
+- [docs/01-oversikt.md](docs/01-oversikt.md) — nodkartan, de fyra hårda stoppen och artefaktkedjan
+- [docs/02-agenter.md](docs/02-agenter.md) — de 7 agenterna: roll, modell/effort, obligatoriska steg, eskaleringar, minne
+- [docs/03-regelverk.md](docs/03-regelverk.md) — systemets hårda regler med motiv och exakt källfil
+- [docs/04-justeringskarta.md](docs/04-justeringskarta.md) — vad varje större designval kostar, köper och hur det skruvas
+- [docs/05-beslutslogg.md](docs/05-beslutslogg.md) — beslutslogg (ADR-lite), seedad ur git-historiken och förd framåt vid varje applicerat förslag
+- [docs/arkiv/](docs/arkiv/) — fryst designhistorik (`systemplan.md`) och engångschecklistan för den lokala flytten (`lokal-flytt.md`)
