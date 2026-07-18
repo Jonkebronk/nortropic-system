@@ -11,13 +11,14 @@ Run against `$ARGUMENTS` (preview URL preferred, else local build). **Every gate
 ## Gate 0 — Build Integrity
 - [ ] `pnpm build` completes: zero TS errors, zero ESLint errors
 - [ ] No `console.log`/`TODO`/lorem ipsum/placeholder images in shipped code
-- [ ] `.env.local.example` documents every env var; real values exist in Vercel (`RESEND_API_KEY`, `LEAD_TO_EMAIL`)
+- [ ] `.env.local.example` documents every env var; real values exist in Vercel (`RESEND_API_KEY`, `LEAD_TO_EMAIL`, and — before real launch — `RESEND_FROM` set to a verified-domain sender; unset falls back to `onboarding@resend.dev`, which only delivers to the Resend account owner: see Gate 1)
 
 ## Gate 1 — Lead Generation (THE gate — full targets in this file)
 - [ ] **Click-to-call works**: every phone number is a `tel:` link; tap on 375px viewport opens dialer
 - [ ] **Phone visible in sticky header** on every page, mobile and desktop
 - [ ] **Floating call button** on mobile after scroll, ≥56px target
 - [ ] **Quote form end-to-end**: submit a real test lead → **the email ARRIVES at `LEAD_TO_EMAIL`** (check via Resend dashboard/API status or confirmed receipt). Delivery is the test — a 200 response is not
+- [ ] **Avsändaren är verifierad, inte onboarding-fallbacken**: vid RIKTIG lansering måste `RESEND_FROM` peka på en avsändare på klientens **verifierade domän**. Är den tom faller `lead.ts` tillbaka på `onboarding@resend.dev`, som Resend BARA levererar till kontoägarens egen verifierade adress — leads till klientens `LEAD_TO_EMAIL` når då aldrig fram (tyst). Leveranstestet ovan måste därför gå till den SKARPA `LEAD_TO_EMAIL`, inte till utvecklarens egen Resend-kontoadress (annars döljer onboarding-fallbacken felet). Testklient/ingen skarp lansering: onboarding-avsändaren är OK — notera som utestående lanseringspunkt, inte PASS.
 - [ ] Form error state shows the phone number as fallback
 - [ ] CTA above the fold on every page at 375×667
 - [ ] **Conversion tracking fires**: `phone_click` and `quote_submit` events visible in analytics debug
