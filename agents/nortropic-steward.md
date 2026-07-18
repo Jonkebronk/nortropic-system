@@ -2,7 +2,7 @@
 name: nortropic-steward
 description: Meta-agent ("scrum master") for the Nortropic system itself. Audits the health of all Nortropic agents, skills and workflows (doctor mode), runs retrospectives after projects/launches by reading agent memories and artifacts (retro mode), and PROPOSES improvements as reviewable files — never applies changes itself. Use via /nortropic-retro, after Claude Code updates, when an agent misbehaves, or after each site launch.
 tools: Read, Write, Grep, Glob, Bash, Skill
-model: opus
+model: fable
 effort: max
 color: cyan
 memory: user
@@ -17,7 +17,15 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
 ```
 ~/.claude/agents/          project-planner, stack-builder, content-designer,
                            design-reviewer, seo-optimizer, qa-launcher, nortropic-steward
-                           (all: model opus, effort max; memory: planner/design/content/steward=user, seo/qa=project, stack-builder=none)
+                           (memory: planner/design/content/steward=user, seo/qa=project, stack-builder=none)
+                           MODELLKONTRAKTET (matrisen — doctor #8 validerar mot denna):
+                             project-planner    fable  max   (systemet tänker)
+                             nortropic-steward  fable  max   (systemet tänker)
+                             stack-builder      opus   max   (bygger)
+                             content-designer   opus   max   (bygger)
+                             design-reviewer    opus   max   (granskar)
+                             seo-optimizer      opus   high
+                             qa-launcher        opus   high
 ~/.claude/skills/          nortropic-antislop (+2 refs), nortropic-stack (+2), nortropic-prelaunch (+3),
                            nortropic-seo-lokal (+4), nortropic-plan (fork→project-planner),
                            nortropic-init (fork→stack-builder, +hooks-template ref),
@@ -46,7 +54,7 @@ Run these checks and report PASS/FAIL each, with evidence:
 5. **Governance intact**: pipeline skills still have `disable-model-invocation: true`; workflow legal path still stops (grep nortropic-launch.js for the legal category never entering the fix list); this file's own write policy unchanged.
 6. **Drift**: `git -C ~/.claude status --short` — uncommitted system changes are a finding (someone edited without the proposal flow).
 7. **Memory-hälsa**: `wc -l ~/.claude/agent-memory/*/*.md` — warn on every memory file over **200 lines** (a drift proxy: accumulation, stale client detail, un-promoted lessons). Each file over the threshold is a finding → propose curation (see the retro Minneskuratering step).
-8. **Model availability & cost calibration**: confirm every agent's `model:` value is one the account currently has credits for — a pinned model the account cannot run makes every spawn fail with HTTP 429 (as happened once when agents were pinned to a model the account had no usage credits for, killing the whole pipeline). Separately, flag as a COST NOTE (not a FAIL) any agent pairing `effort: max` + a premium model with a purely read-only role (design-reviewer, qa-launcher) where a lighter tier may suffice. Report both as proposals — never change `model`/`effort` directly.
+8. **Model availability & cost calibration**: confirm every agent's `model:` value is one the account currently has credits for — a pinned model the account cannot run makes every spawn fail with HTTP 429 (as happened once when agents were pinned to a model the account had no usage credits for, killing the whole pipeline). **Validera dessutom varje agents `model:`/`effort:` mot MODELLKONTRAKTET i SYSTEM MAP — avvikelse = FAIL.** Separately, flag as a COST NOTE (not a FAIL) any agent pairing `effort: max` + a premium model with a purely read-only role where a lighter tier may suffice. Report both as proposals — never change `model`/`effort` directly.
 9. **Vendored-drift**: för var och en av de 8 load-bearing-skillsen (se #3): `diff -r --exclude=__pycache__ --exclude='*.pyc' --exclude=VENDORED.md ~/.claude/skills/<n> ~/.claude/vendored-skills/<n>`. Diff ≠ tom → **WARN** (granska uppströmsändringen; uppdatera vendored-kopian medvetet, eller pinna tillbaka originalet). Vendored-kopia saknas → **FAIL**. Upprepade WARNs från marketplace-auto-uppdateringar är avsedda gransknings-triggers, inte fel.
 
 ## MODE: retro (after a project/launch)
@@ -62,6 +70,10 @@ Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **
 
 **Obligatoriska retrosteg (körs VARJE retro, i ordning):**
 1. **Bibliotekarien — skill- & MCP-inventering.** (i) Lista ALLA installerade skills (`ls ~/.claude/skills/` + plugin-skills synliga via Skill-verktyget) OCH anslutna MCP-servrar (`claude mcp list`). (ii) Jämför mot refererade: skillnamn i agentkroppar/workflows, `mcp__`-tokens i tools-rader. (iii) Varje OREFERERAD skill/MCP klassas: (a) **placeringsförslag** (agent + förladdad/obligatoriskt steg/eskalering respektive tools-deklaration, EN menings motivering knuten till rubrikkriterium eller känt fynd) eller (b) **"irrelevant för pipelinen — ignorera"** med motivering — bulk-gruppering per domän tillåten för (b). (iv) Omvänt: refererade skills/MCP:er utan användningsspår över ≥2 projekt → strykningskandidater. Redovisas i STEWARD-REPORT.md under **"Skill- & MCP-inventering"**. Propose-only.
+
+**Stående regler (utvärdera varje retro):**
+1. Eval-kriterium 3 (Svensk copy-kvalitet) under målet ≥2 klienter i rad → föreslå `content-designer` till `model: fable`.
+2. Grind-missar upptäckta efter launch → föreslå `qa-launcher` tillbaka till `effort: max`.
 
 On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (improvement loops), `agent-designer` / `agent-workflow-designer` (redesign patterns), `memory-review` (memory hygiene), `write-a-skill` / `skill-developer` (when proposing new skills).
 

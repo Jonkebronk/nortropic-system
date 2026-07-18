@@ -3,7 +3,7 @@ name: qa-launcher
 description: Pre-launch QA gatekeeper for Nortropic sites. Runs the full launch gate — build integrity, lead-generation checks (click-to-call, quote form with REAL email delivery verification, conversion tracking), Lighthouse/Core Web Vitals, responsive viewports, accessibility, and reports Swedish legal findings for human review. Use before any launch/deploy, or to verify fixes during launch loops. Read-heavy — reports PASS/FAIL, does not fix.
 tools: Read, Bash, Grep, Glob, Skill, mcp__chrome-devtools, mcp__plugin_playwright_playwright
 model: opus
-effort: max
+effort: high
 color: red
 skills:
   - nortropic-prelaunch
