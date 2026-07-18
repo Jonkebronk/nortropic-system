@@ -31,8 +31,10 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
                            nortropic-init (fork→stack-builder, +hooks-template ref),
                            nortropic-retro (fork→nortropic-steward, +1 ref: verify-kalibrering)
                            nortropic-eval (knowledge, +1 ref: eval-rubric)
-~/.claude/workflows/       nortropic-review.js (3 reviewers → adversarial verify → report)
-                           nortropic-launch.js (7 gates incl. security → fix-loop ≤3 → legal STOPS → handover)
+~/.claude/workflows/       nortropic-review.js (3 reviewers → adversarial verify → report; --diff = diff-skopad
+                           mellangranskning, skriver REVIEW-REPORT.md med commit-meta; --no-verify → *-CALIBRATION.md)
+                           nortropic-launch.js (freshness-grind: full review krävs, färskare än src/content →
+                           7 gates incl. security → fix-loop ≤3 → legal STOPS → handover)
 ~/.claude/vendored-skills/ facit-kopior av de 8 load-bearing tredjepartsskillsen
                            (designkanonen ×7 + content-humanizer), var och en med VENDORED.md;
                            originalen i skills/ laddas — kopiorna är driftreferens (doctor #9)

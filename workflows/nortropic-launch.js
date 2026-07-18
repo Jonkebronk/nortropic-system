@@ -3,6 +3,7 @@ export const meta = {
   description: 'Pre-launch gate for a Nortropic site: 7 parallel audit lenses, bounded fix-loop (legal always stops for human), Swedish handover doc, launch readiness report',
   whenToUse: 'Run when a Nortropic client site is believed ready to launch, before /vercel:deploy',
   phases: [
+    { title: 'Freshness', detail: 'block launch if the last FULL review predates changes on the main pages' },
     { title: 'Gates', detail: '7 parallel audit lenses' },
     { title: 'Fix loop', detail: 'max 3 rounds via stack-builder; legal never auto-fixed' },
     { title: 'Eval', detail: 'non-blocking quality score via nortropic-eval (informs report only)' },
@@ -49,6 +50,42 @@ const EVAL = {
 
 const site = (args && args.url) ? `the Nortropic site in the current working directory (preview URL: ${args.url})` : 'the Nortropic site in the current working directory (find the preview/dev URL from vercel or start the dev server if needed)'
 const structured = 'Return PASS only if every check passes. Every finding needs severity, exact location, why it matters, concrete fix, and category.'
+
+// v8 freshness gate: launch refuses to run if the last FULL review predates changes on the main pages.
+const FRESH = {
+  type: 'object',
+  required: ['status'],
+  properties: {
+    status: { type: 'string', enum: ['FRESH', 'STALE', 'MISSING'] },
+    scope: { type: 'string' },
+    commit: { type: 'string' },
+    newerCommits: { type: 'number' },
+    detail: { type: 'string' },
+  },
+}
+
+phase('Freshness')
+const fresh = await agent(
+  `Mechanical pre-launch freshness check in the project root of the Nortropic site in the current working directory. Do exactly this:\n` +
+  `1) Read REVIEW-REPORT.md. If the file is missing → return status MISSING with detail "ingen granskningsrapport — kör en FULL /nortropic-review först".\n` +
+  `2) Parse commit and scope from its <!-- nortropic-review-meta --> comment block. Unparseable → MISSING.\n` +
+  `3) If scope is not "full" → return STALE with detail "senaste granskningen var DIFF-SKOPAD — pre-launch kräver en FULL /nortropic-review".\n` +
+  `4) Run git log --oneline <commit>..HEAD -- src content. Any commits listed → STALE with the count in newerCommits and a one-line detail. Otherwise → FRESH.\n` +
+  `Judge nothing; report mechanically.`,
+  { label: 'freshness', phase: 'Freshness', schema: FRESH }
+)
+if (!fresh || fresh.status !== 'FRESH') {
+  return {
+    verdict: `BLOCKED-STALE — ${fresh && fresh.detail ? fresh.detail : 'freshness-checken kunde inte köras'}. Kör en FULL /nortropic-review på nuvarande commit, sedan /nortropic-launch igen.`,
+    freshness: fresh || null,
+    gates: [],
+    eval: null,
+    legalFindings: [],
+    remainingFindings: [],
+    fixRounds: [],
+    handoverWritten: false,
+  }
+}
 
 const GATES = [
   { key: 'technical', agentType: 'qa-launcher', prompt: `Run Gates 0, 2, 3 and 4 of your prelaunch process (build integrity; Lighthouse/Core Web Vitals with real median-of-3 numbers; responsive 375/390/768/1280/1920 + link crawl + SSL; accessibility — keyboard-only operability, focus visibility, skip-link, contrast ≥4.5:1, meaningful Swedish alt text, prefers-reduced-motion, heading order / one h1) against ${site}.\n\nINGÅR (din gate): build-integritet, Lighthouse/Core Web Vitals, responsivitet, länkcrawl, SSL, döda länkar, tillgänglighet (Gate 4).\nINGÅR INTE (annan gate äger): lead-kedjan formulär→mejl, tel-länkar, CTA → leadgen-gaten; visuellt utseende → visual-gaten.\nCategory for findings: technical. ${structured}` },
