@@ -10,7 +10,8 @@ Run against `$ARGUMENTS` (preview URL preferred, else local build). **Every gate
 
 ## Gate 0 — Build Integrity
 - [ ] `pnpm build` completes: zero TS errors, zero ESLint errors
-- [ ] No `console.log`/`TODO`/lorem ipsum/placeholder images in shipped code
+- [ ] No `console.log`, lorem ipsum, or placeholder images in shipped code
+- [ ] **`TODO-FACT`/`TODO-COPY` markers appear ONLY inside FAQ answers** (where `FaqSchema` strips them from JSON-LD). A marker in ANY other rendered field — `priceNote`, hero, meta description, service/area body copy — renders the literal "TODO-FACT…" to the customer and is a **FAIL** (H2). Grep every rendered content field: `grep -rn "TODO-FACT\|TODO-COPY" src/content src/app` → each hit must be a FAQ *answer* string or a code comment, nothing else. And confirm no marker text survives in the built FAQPage JSON-LD (proves the `FaqSchema` filter is doing its job).
 - [ ] `.env.local.example` documents every env var; real values exist in Vercel (`RESEND_API_KEY`, `LEAD_TO_EMAIL`, and — before real launch — `RESEND_FROM` set to a verified-domain sender; unset falls back to `onboarding@resend.dev`, which only delivers to the Resend account owner: see Gate 1)
 
 ## Gate 1 — Lead Generation (THE gate — full targets in this file)
