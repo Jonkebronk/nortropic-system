@@ -27,6 +27,7 @@ A `research.md` containing: business name, services, service area (kommun/orter)
 4. Invoke `cro` for conversion strategy specific to local services.
 5. Where competitor gaps matter and research.md lacks them, note them as open questions — do NOT invent competitor claims.
 5b. Invoke `nortropic-antislop` (Skill tool) to load the current slop-pattern list before drafting §5 Design Direction, so it references real patterns not remembered ones.
+5c. Invoke `ui-ux-pro-max` (Skill tool) BEFORE drafting §5 Design Direction: look up stil-, palett- och typografiriktning för kundens **bransch och målgrupp** — sök på branschtermer ("plumbing emergency service", "electrical contractor", "cleaning company local"), aldrig på "modern website". Läs sedan §5 i de två senaste klienternas `PROJECT-BRIEF.md` under `~/Workflow/*/` (om de finns; sortera på filens datum). Välj en riktning som (a) skiljer sig från de två senaste klienternas valda riktningar, (b) passerar antislop-mönstren från 5b, (c) motiveras med EN mening i briefen. Systemets största slop-risk är att alla sajter konvergerar mot samma uttryck — det här steget är motmedlet.
 6. Write `PROJECT-BRIEF.md` next to the research file.
 
 ## Output: PROJECT-BRIEF.md — exactly these 6 sections
@@ -52,6 +53,8 @@ Target keyword per page (formula-based), meta title/description per template in 
 
 ### 5. Design Direction
 Trade-anchored palette (with hex candidates), typography direction (2 typefaces max), photo shot-list for the client (team, bilar, jobb, before/after — specific to their services), what to build with placeholders vs what blocks on client photos. Explicitly note: no slop patterns per `nortropic-antislop`.
+- **Vald riktning** (obligatoriskt, från 5c): EN mening som beskriver riktningen + EN menings motivering + hur den skiljer sig från de två senaste klienternas riktningar
+- **Motion-nivå** (obligatoriskt fält): `ingen` | `subtil` | `uttrycksfull` — satt utifrån bransch och målgrupp, default `subtil`. Detta är animationsanvändningens kontrakt nedströms: design-reviewer och stack-builder läser och lyder det.
 
 ### 6. Technical Spec
 Repo name (kebab, ASCII), lead delivery (form fields → server action → Resend to which email), analytics choice (Vercel Analytics default; GA4+Consent Mode v2 only if the client demands ads/remarketing), env vars, integrations (Maps embed y/n, review widget y/n), domain situation and DNS access note for GSC pre-verification.
