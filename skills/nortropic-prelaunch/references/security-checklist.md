@@ -65,6 +65,8 @@ const nextConfig: NextConfig = {
 
 Efter fixen: kör `curl -sI` igen mot en ny preview-deploy och verifiera att varje header servas. En CSP som blockerar Analytics eller kartan syns direkt i konsolen — testa Hem + Kontakt i webbläsaren efter deploy.
 
+**Analytics-loadern får inte CSP-blockeras (bekräftad regress — rorjour Gate 1).** Stacken kör Vercel Analytics som standard. `connect-src 'self'` täcker BARA beacon-POSTen till `/_vercel/insights/event` — INTE själva loader-scriptet. Om loadern hämtas cross-origin (t.ex. `https://va.vercel-scripts.com/...`) blockeras den av `script-src 'self'`: `track()` köar `phone_click`/`quote_submit` i `window.vaq` men INGEN beacon skickas (konsolen: "Failed to load script") → konverteringsspårningen är tyst död, fast alla headers ser rena ut i curl. **Verifiera efter deploy:** öppna konsolen på en skarp preview, klicka en `tel:`-länk eller skicka formuläret, och bekräfta en POST till `/_vercel/insights/event` (inte bara att `window.vaq` växer). Blockeras loadern → lägg dess exakta host i `script-src` och verifiera om. Detta är samma gate-krock som kart-embedden (Gate 6 juridik ⟷ Gate 7 CSP): en säkerhets-CSP får aldrig tyst slå ut en konverterings- eller leadfunktion — härda OCH verifiera att default-analytics fortfarande skickar.
+
 ## 3. Formulärmissbruk (offert-endpointen — sajtens enda server)
 
 | Kontroll | Krav | Kanonisk fix |
