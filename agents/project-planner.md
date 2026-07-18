@@ -35,7 +35,7 @@ A `research.md` containing: business name, services, service area (kommun/orter)
    - **5d.4 Källtypsregler:** verklig sajt = rendera desktop + mobil 390 px, skärmdumpa hero + tjänste-/trustsektion; galleripost = följ länken till den FAKTISKA sajten, galleribild endast som markerad fallback; koncept (Dribbble) = märk "koncept — ej verifierat byggbart"; omdömesprofiler = endast trust-mönster, aldrig designriktning. Betyg/omdömesantal som endast förekommer i sökresultat eller aggregat och INTE kan verifieras på källsidan själv märks "ej verifierat på källan" och får aldrig användas som trust-mönster-fakta eller föras vidare till §5 som belägg — samma anda som faktatrohet: syns det inte på källan är det ett rykte.
 6. Write `PROJECT-BRIEF.md` next to the research file.
 
-## Output: PROJECT-BRIEF.md — exactly these 6 sections
+## Output: PROJECT-BRIEF.md — exactly these 7 sections
 
 ### 1. Business Summary
 Name, org.nr, services, service area, USPs, phone, öppettider/jour. **Primary conversion goal** (calls vs quotes vs both) with reasoning from the trade (emergency trades → calls; planned work → quotes). Facts vs assumptions clearly separated; open questions for the user listed.
@@ -65,6 +65,17 @@ Trade-anchored palette (with hex candidates), typography direction (2 typefaces 
 ### 6. Technical Spec
 Repo name (kebab, ASCII), lead delivery (form fields → server action → Resend to which email), analytics choice (Vercel Analytics default; GA4+Consent Mode v2 only if the client demands ads/remarketing), env vars, integrations (Maps embed y/n, review widget y/n), domain situation and DNS access note for GSC pre-verification.
 - **Klienttyp** (obligatoriskt): `SKARP` (verklig klient som ska lanseras) eller `TESTKLIENT` (fiktiv/demo/portfolio). Vid TESTKLIENT planeras INGA verkliga GBP-anspråk, citations, DNS- eller GSC-åtgärder, och sajten byggs icke-indexerbar tills en människa uppgraderar den. Skriv fältet `testklient: true|false` som stack-builder lägger i `content/business.ts`, och notera att noindex slås på via `NEXT_PUBLIC_NOINDEX=1` i Vercel.
+
+### 7. Kalibreringsprofil
+Kalibreringskontraktet nedströms: agenter, grindar och eval läser detta i stället för hantverkar-antaganden. **Bevisregel:** varje fältvärde citerar sin källa — en research-rad eller en 5d-skärmdump/kandidat. Fält utan belägg lämnas som öppen fråga, gissas aldrig.
+1. **Arketyp & primärhandling** (obligatoriskt): `ring nu` | `boka tid` | `platsförfrågan` | `offert` | `besök (fysisk)` — plus exakt vad Gate 1 ska testa end-to-end för denna kund, i klartext ("formulär → mejl levererat" / "tel-länk + boka-flöde till extern bokning" osv.).
+2. **Röstregister**: 3–5 adjektiv + 2 ordagranna exempelmeningar ur kundens eget material (research-rösten) + legitimt bransch-vernacular — språk som är hemma i branschen men skulle flaggas i en annan (t.ex. wellness-register). Registret gäller ENDAST denna kund; det vitlistar aldrig invarianternas universella synder (superlativ utan bevis, fejkad brådska, tomma löften).
+3. **Bransch-antislop (additiv)**: 5–10 av branschens egna klichéfraser, skördade ur 5d-jaktens konkurrentobservationer, som ADDERAS till bas-blocklistan för detta bygge.
+4. **Kvittolista & attribution**: vilka förtroendekvitton branschen har (F-skatt/certifikat | utbildningar med skola+datum | portfolio/case | omdömen | försäkring | fysisk plats) + attributionsregler (t.ex. "utbildning redovisas som utbildning, aldrig som utfall").
+5. **Schema-typ**: `LocalBusiness` | `ProfessionalService` | `Restaurant` | ... (korrekt subtyp).
+6. **SEO-läge**: `lokal ortsjakt` | `varumärke/portfolio` | `hybrid` — styr seo-optimizerns playbook-tillämpning.
+7. **Juridikflaggor**: sätts ur research mot `references/juridikflaggor.md` i nortropic-plan-skillen. Ohanterad flagga → öppen fråga i briefen: "kräver juridikmodul X som inte finns — beslut vid nod 3: bygg modulen (offereras som eget arbete) eller tacka nej." Scope-nej-flagga → briefen rekommenderar hänvisning.
+8. **Motion-nivå**: värdet sätts i §5 (en plats) — §7 korsrefererar dit.
 
 ## Rules
 - Swedish market only; all customer-facing copy suggestions in Swedish
