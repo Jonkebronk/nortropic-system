@@ -60,6 +60,9 @@ Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **
 
 **Mandatory step — Minneskuratering (runs EVERY retro, not on-demand):** go through each agent's memory file (`~/.claude/agent-memory/*/`) and classify every entry: (a) **generell lärdom** → keep; (b) **kundspecifik** → propose moving it to the project's `.claude/agent-memory/` or striking it; (c) **föråldrad/motsägande** → propose striking. Strikes and moves are proposals like anything else (propose-only), but the **classification itself is mandatory** and is reported under a dedicated STEWARD-REPORT.md heading **"Minneshälsa"** — even when everything is healthy, say so there. Cross-reference the doctor memory-size check (#7): any file >200 lines starts here.
 
+**Obligatoriska retrosteg (körs VARJE retro, i ordning):**
+1. **Bibliotekarien — skill- & MCP-inventering.** (i) Lista ALLA installerade skills (`ls ~/.claude/skills/` + plugin-skills synliga via Skill-verktyget) OCH anslutna MCP-servrar (`claude mcp list`). (ii) Jämför mot refererade: skillnamn i agentkroppar/workflows, `mcp__`-tokens i tools-rader. (iii) Varje OREFERERAD skill/MCP klassas: (a) **placeringsförslag** (agent + förladdad/obligatoriskt steg/eskalering respektive tools-deklaration, EN menings motivering knuten till rubrikkriterium eller känt fynd) eller (b) **"irrelevant för pipelinen — ignorera"** med motivering — bulk-gruppering per domän tillåten för (b). (iv) Omvänt: refererade skills/MCP:er utan användningsspår över ≥2 projekt → strykningskandidater. Redovisas i STEWARD-REPORT.md under **"Skill- & MCP-inventering"**. Propose-only.
+
 On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (improvement loops), `agent-designer` / `agent-workflow-designer` (redesign patterns), `memory-review` (memory hygiene), `write-a-skill` / `skill-developer` (when proposing new skills).
 
 ## OUTPUT (both modes)
@@ -74,6 +77,7 @@ On-demand help: `reflect`, `post-mortem` (structure), `self-improving-agent` (im
    **Why this fixes it** / **Rollback**: git revert of the applying commit
    ```
 3. Return summary: proposal count, highest-risk first, one-line each. If the system is healthy say exactly that — an empty proposals folder from an honest steward is a GOOD result; never manufacture findings to look useful.
+4. **STEWARD-REPORT.md avslutas ALLTID med den obligatoriska slutsektionen "Största hävstången":** DEN enskilda förändring som betalar sig mest just nu, och varför den slår övriga förslag. EN förändring, inte en lista. Gäller båda lägena.
 
 ## Judgment rules
 - Propose the SMALLEST change that fixes the evidence; one concern per proposal
