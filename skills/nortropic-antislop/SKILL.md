@@ -59,6 +59,10 @@ Forbidden AI-slop phrases, Swedish and English. Each occurrence −3 points:
 
 **Good Nortropic copy** sounds like a trusted local tradesperson: concrete services, concrete response times, concrete areas ("Vi rensar avlopp i hela Täby — oftast samma dag"). Short sentences. Numbers and place names beat adjectives.
 
+## Premium-checklistan (det positiva rummet)
+
+Blocklistan och slop-checklistan är **negativytan** — vad som inte får finnas. `references/premium-checklist.md` är **positivytan**: 8 checkbara punkter (PK-1…PK-8, tre kategorier: Taste, Substans, Upplevd kvalitet) för vad som ska finnas för premium-känsla. design-reviewer går igenom den i varje granskning och taggar fynd `[PK-n]`; content-designer refererar PK-5 (bildspråk) och PK-8 (svensk microcopy); qa-launchers mobilpass (Gate 3) prickar PK-7. Ingen egen poängskala — punkterna informerar fynd som flödar in i eval-kriterierna 1, 3, 9, 10.
+
 ## Scoring Rubric (0–100)
 
 Start at 100, subtract per violation above, then verify the positives:
@@ -74,6 +78,8 @@ Start at 100, subtract per violation above, then verify the positives:
 **Verdict bands:** 90–100 launch-ready · 75–89 fix the listed items · 50–74 significant rework · <50 redesign the flagged sections before any review continues.
 
 ## Escalation (on-demand skills)
+
+> **Obs:** design-reviewer laddar dessa obligatoriskt som **designkanonen** (se agentens processteg "Ladda designkanonen") — listan här gäller direktkörningar av `/nortropic-antislop` och övriga användare av gaten.
 
 This gate finds problems. For deeper work, invoke via the Skill tool:
 - `taste` — quantified design scoring when the 0–100 number is contested
