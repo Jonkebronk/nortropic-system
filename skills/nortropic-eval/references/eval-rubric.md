@@ -1,6 +1,6 @@
 # Nortropic Eval Rubric
 
-**Rubrikversion: v1.2.0**
+**Rubrikversion: v1.2.1**
 
 > Semver. Bump on **any** change to criteria, weights, or thresholds so scores stay comparable over time: PATCH = wording/clarification, MINOR = threshold/guidance change, MAJOR = criteria or weights change. Record the version used in every `EVAL-RESULT.md`. Never compare totals across different MAJOR/MINOR versions without noting it.
 
@@ -27,8 +27,8 @@ Every factual claim must trace to `research.md` (the client fact source). Check:
 - Cite the claim verbatim, its `file:line`, and why it is untraceable.
 
 ## 3. Svensk copy-kvalitet — 10 p
-Röst enligt briefens §7-register (adjektiv, exempelmeningar, legitimt bransch-vernacular); universella basen alltid: korta meningar, siffror/orter över adjektiv. §7-legitimerat vernacular är inte avdrag; §7:s bransch-antislop drar utöver basen.
-- Blocklistan ren — bas (**nortropic-antislop** `references/copy-blocklist.md`) + briefens bransch-antislop (§7.3); varje träff drar — up to 5
+Röst enligt §7-registret (adjektiv, exempelmeningar, legitimt bransch-vernacular — läses ur briefens §7.2 eller `content/profile.ts` `rostregister` i byggrepot); universella basen alltid: korta meningar, siffror/orter över adjektiv. §7-legitimerat vernacular är inte avdrag; bransch-antislopen drar utöver basen.
+- Blocklistan ren — bas (**nortropic-antislop** `references/copy-blocklist.md`) + bransch-antislopen (§7.3 / `content/profile.ts` `branschAntislop`); varje träff drar — up to 5
 - Idiomatisk, korrekt svenska; sentence-case rubriker; ≤1 utropstecken/sida — up to 3
 - Konkret (tjänst + ort + tid) snarare än generiskt — up to 2
 
@@ -99,6 +99,7 @@ Gaterade platshållare (fiktiva omdömen med `placeholder:true`, grå SVG) = kor
 En **Faktatrohet-FAIL** rapporteras som **FAIL** i EVAL-RESULT-headern oavsett band.
 
 ## Changelog
+- **v1.2.1** — Förtydligande (PATCH): kriterium 3:s datakälla i byggrepot är `content/profile.ts` (`rostregister`/`branschAntislop`) — transportfälten fanns inte i v1.2.0-texten, vilket gjorde kriteriet odömbart utan brief. Inga trösklar/vikter ändrade.
 - **v1.2.0** — v13 kalibreringsprofilen: kriterierna 1/3/5/6/9 neutraliserade från hantverkar-antaganden till §7/`content/profile.ts` med OFÖRÄNDRAD kravnivå (offert/samtal-fallet ger exakt v1.1.0:s delkrav — poäng bakåtjämförbara för hantverkarklienter; andra arketyper får härledda delkrav på samma nivå).
 - **v1.1.0** — Kriterium 10 utökat med säkerhet (npm audit prod, säkerhetsheaders, skyddad formulär-endpoint) — ombalanserat inom oförändrade 5 p (v6 säkerhetsgrind). Poäng mot v1.0.0 jämförbara med reservation för kriterium 10.
 - **v1.0.0** — Initial rubric (v5 mätbarhetslager). 10 criteria, Faktatrohet hard-gate.

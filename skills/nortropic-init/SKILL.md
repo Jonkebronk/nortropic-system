@@ -13,7 +13,7 @@ Initialize a new Nortropic client site from the approved brief: **$ARGUMENTS**
 2. Execute your full build process from the brief:
    - `gh repo create <repo-name-from-brief> --private --clone` into `~/Workflow/` — repo FIRST, always
    - Scaffold Next.js 15 + TS strict + Tailwind 4 + shadcn/ui per `nortropic-stack`
-   - All content files (`business.ts` with the brief's exact NAP, services, areas, testimonials, faq)
+   - All content files (`business.ts` with the brief's exact NAP, `profile.ts` from the brief's §7 Kalibreringsprofil, services, areas, testimonials, faq)
    - Every page in the brief's architecture with the conversion trio (PhoneLink, CtaBanner, floating call button)
    - Lead pipeline: `app/actions/lead.ts` with Zod + honeypot + Resend. If `RESEND_API_KEY` is not available, wire everything and mark the env var as pending in your report — do not invent keys
    - Schema markup, sitemap, robots, Swedish 404/error pages, analytics per brief

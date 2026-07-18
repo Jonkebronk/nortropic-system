@@ -12,7 +12,7 @@ If `$ARGUMENTS` names a project directory, evaluate that site; otherwise evaluat
 
 ## How to judge (Anthropic LLM-judge pattern)
 
-Make **one coherent judgment**, not a checklist skim. Read the actual project before scoring: `src/content/business.ts` (the single source of truth), the pages under `src/app/**`, the site components, and the client's `research.md` (the fact source — usually in the project dir or a sibling `test-*`/research folder). Then score every criterion in **one pass** against `references/eval-rubric.md`, which holds the full weighted definitions and the pass thresholds. Cite `file:line` evidence for every deduction. Do not invent findings to look thorough; an honest 94 is worth more than a padded 78.
+Make **one coherent judgment**, not a checklist skim. Read the actual project before scoring: `src/content/business.ts` (the single source of truth for NAP), `src/content/profile.ts` (kalibreringsfacit — primärhandling, kvitton, seoLage, schemaTyp, röstregister, branschAntislop), the pages under `src/app/**`, the site components, and the client's `research.md` (the fact source — usually in the project dir or a sibling `test-*`/research folder; läs även `PROJECT-BRIEF.md` §7 när den är åtkomlig). Then score every criterion in **one pass** against `references/eval-rubric.md`, which holds the full weighted definitions and the pass thresholds. Cite `file:line` evidence for every deduction. Do not invent findings to look thorough; an honest 94 is worth more than a padded 78.
 
 The rubric is **versioned** (semver at the top of `references/eval-rubric.md`). Always record the version you used — scores are only comparable within the same rubric version.
 

@@ -1,8 +1,8 @@
 # nortropic-system
 
-Senast verifierad mot systemet: 2026-07-18 · b68252e
+Senast verifierad mot systemet: 2026-07-18 · v13 (denna commit)
 
-Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar leadgenererande webbplatser för svenska lokala tjänsteföretag — rörmokare, elektriker, städfirmor, byggfirmor. Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som bara får föreslå — aldrig ändra.
+Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som bara får föreslå — aldrig ändra.
 
 Det här repot är systemets källa till sanning: i drift är repo-roten operatörens `~/.claude`, och `.gitignore` är en vitlista som spårar enbart systemfilerna.
 
@@ -43,4 +43,5 @@ Detaljerad nodkarta med agent, modell och effort per nod finns i [docs/01-oversi
 - [docs/03-regelverk.md](docs/03-regelverk.md) — systemets hårda regler med motiv och exakt källfil
 - [docs/04-justeringskarta.md](docs/04-justeringskarta.md) — vad varje större designval kostar, köper och hur det skruvas
 - [docs/05-beslutslogg.md](docs/05-beslutslogg.md) — beslutslogg (ADR-lite), seedad ur git-historiken och förd framåt vid varje applicerat förslag
-- [docs/arkiv/](docs/arkiv/) — fryst designhistorik (`systemplan.md`) och engångschecklistan för den lokala flytten (`lokal-flytt.md`)
+- [docs/06-scope.md](docs/06-scope.md) — ringmodellen: vad som byggs, vad som byggs vid efterfrågan, vad som är nej med hänvisning
+- [docs/arkiv/](docs/arkiv/) — fryst designhistorik (`systemplan.md`), engångschecklistan för den lokala flytten (`lokal-flytt.md`) och v13-snapshotten av hantverkarprofilen (`hantverkare-profil-v13.md`)

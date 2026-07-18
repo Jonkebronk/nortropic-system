@@ -42,8 +42,9 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
                            spårbart till en fil (+ README.md i repo-roten: ingång + 12-nodsflödet):
                            00-guide.md (operatörsguiden) · 01-oversikt.md (nodkarta + hårda stopp +
                            artefaktkedjan) · 02-agenter.md · 03-regelverk.md · 04-justeringskarta.md ·
-                           05-beslutslogg.md (en rad per applicerat förslag) · arkiv/ (fryst:
-                           systemplan.md, lokal-flytt.md). Doctor #12 vaktar drift; förslag bär
+                           05-beslutslogg.md (en rad per applicerat förslag) · 06-scope.md (ringmodellen) ·
+                           arkiv/ (fryst: systemplan.md, lokal-flytt.md, hantverkare-profil-v13.md).
+                           Doctor #12 vaktar drift; förslag bär
                            fältet Docs-påverkan och appliceras IHOP med sin docs-uppdatering
 System repo: git in ~/.claude → private GitHub repo "nortropic-system" (whitelist .gitignore)
 Pipeline contract: research.md → brief → init → content → review → launch → human legal sign-off → deploy
