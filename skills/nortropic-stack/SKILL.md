@@ -60,6 +60,7 @@ src/
     ui/                           # shadcn primitives (generated)
   content/
     business.ts                   # NAP, org.nr, öppettider, phone — SINGLE SOURCE
+    profile.ts                    # kalibreringsfacit ur briefens §7 — SINGLE SOURCE för primärhandling/kvitton/schema/SEO-läge/juridikflaggor
     services.ts / areas.ts / testimonials.ts / faq.ts
   lib/
 ```
@@ -69,6 +70,8 @@ No `(site)` route group — header/footer/phone live in the root `app/layout.tsx
 **`content/business.ts` is sacred**: name, address, phone, org.nr, öppettider live ONLY here and must exactly match the client's Google Företagsprofil (NAP consistency). Header, footer, schema, and copy all import from it.
 
 `content/business.ts` also carries `testklient: boolean` (from the brief's Klienttyp). When `true`, the site is built non-indexable: `robots.ts` reads a `noindex` flag (driven by `NEXT_PUBLIC_NOINDEX=1` in Vercel) and disallows all crawling, and page metadata sets `robots: { index: false, follow: false }`. A fictional/demo business must never be indexable or claimable. This flag + env var are the canonical way any agent detects a TESTKLIENT.
+
+**`content/profile.ts` is the calibration facit** — written by stack-builder at init from the brief's §7 Kalibreringsprofil (grindar och eval arbetar i byggrepot och kan inte läsa briefen; profile.ts är transporten, samma mönster som business.ts). Typed fields: `primaraktion` (typ `'ring' | 'boka' | 'platsforfragan' | 'offert' | 'besok'` + `etikett` för CTA-text, t.ex. "Få kostnadsfri offert"/"Boka tid"), `gate1Test` (klartext: vad som testas end-to-end, t.ex. "formulär → mejl levererat till LEAD_TO_EMAIL"), `kvitton` (lista över förtroendekvitton + attributionsregler), `schemaTyp` (LocalBusiness-subtyp eller annan typ), `seoLage` (`'lokal' | 'varumarke' | 'hybrid'`), `juridikflaggor` (string-array). Komponenter importerar den (CTA-etiketter, formulärrubrik, schema-typ); grindar och eval läser den som facit. business.ts förblir NAP-facit; profile.ts är kalibreringsfacit — de blandas aldrig.
 
 ## URL Conventions
 - Swedish slugs, å/ä/ö transliterated: `tjanster/varmepumpar`, `omraden/taby`
@@ -83,7 +86,7 @@ No `(site)` route group — header/footer/phone live in the root `app/layout.tsx
 - Schema markup (`LocalBusiness`, `Service`, `FAQPage`) as JSON-LD components fed from `content/*`
 
 ## Lead Server Action (the only backend)
-`app/actions/lead.ts`: Zod schema (namn, telefon, epost?, tjanst, meddelande, honeypot) → validate → send via Resend to the business owner (subject: "Ny offertförfrågan — <tjänst> i <ort>") → return typed result. Rules:
+`app/actions/lead.ts`: Zod schema (namn, telefon, epost?, tjanst, meddelande, honeypot) → validate → send via Resend to the business owner → return typed result. Ämnesraden genereras ur `profile.ts` `primaraktion.etikett`: "Ny <etikett i bestämd form> — <tjänst> i <ort>" (offert-primärhandling ger exakt "Ny offertförfrågan — <tjänst> i <ort>"; platsförfrågan ger "Ny platsförfrågan — ..."). Rules:
 - Honeypot field + submission-time check for spam (no CAPTCHA — friction kills leads)
 - On email failure: return error state telling the visitor to CALL, with the number — a lead must never dead-end
 - `RESEND_API_KEY` is frequently still pending before launch. If it is unset or a placeholder, the action must NOT construct the Resend client or throw — return the same typed error state that shows the phone number (treat a missing key exactly like a send failure). An unconfigured site degrades to "ring oss", never a 500.
