@@ -1,6 +1,6 @@
 # Beslutsloggen (ADR-lite)
 
-Senast verifierad mot systemet: 2026-07-18 · e656325
+Senast verifierad mot systemet: 2026-07-18 · v10 (denna commit)
 
 En rad per beslut: när, vad, varför, vilken commit. Loggen är seedad bakåt ur git-historiken (motiven är komprimerade ur commit-meddelandena — `git show -s <hash>` ger hela texten) och förs framåt med en ny rad för varje applicerat steward-förslag.
 
@@ -46,3 +46,4 @@ En rad per beslut: när, vad, varför, vilken commit. Loggen är seedad bakåt u
 | 2026-07-18 | v9 D3 | Driftskyddet: doctor #12 docs-referensintegritet (fyra mekaniska delkontroller, WARN "docs har driftat, kör docs-synk"), obligatoriskt fält **Docs-påverkan** i förslagmallen, appliceringsregeln (docs-uppdatering i SAMMA commit + beslutslogg-rad per applicerat förslag) och bibliotekariens docs-fråga (retrosteg 1 punkt v). Regeln tillämpad på sig själv: berörda docs-filer uppdaterade i samma commit | `e656325` |
 | 2026-07-18 | v9 D4 | Stewardens SYSTEM MAP får docs/-posten: innehållet i docs/ (00–05 + arkiv), att doctor #12 vaktar drift och att förslag bär Docs-påverkan och appliceras ihop med sin docs-uppdatering. Beslutslogg-rad i samma commit per appliceringsregeln | (denna commit) |
 | 2026-07-18 | v9 lokal flytt | Pekfiler på plats i ~/Workflow, minnet uppdaterat, städgrep ren | (denna commit) |
+| 2026-07-18 | v10 | Plannern får ögon: chrome-devtools i tools-raden + obligatoriskt steg 5d (rendera + skärmdumpa varje designreferens till `<kundmapp>/referenser/`, verifiera mot användarens motivering, "kunde ej öppnas"-fallback utan fabricering) + obligatorisk Referensöversättning i §5 (en rad per referens: öppnad ✓/✗, detta tas, detta förkastas med skäl). Motiv: plannern läste beskrivningar av referenser, inte referenserna — Emil-briefen räddades av tät research; 5d gör verifieringen mekanisk. Research-sektionen "Designreferenser (valfri men rekommenderad)" namnstandardiseras i nortropic-plan; användarens referensarbete förblir primärkällan | (denna commit) |

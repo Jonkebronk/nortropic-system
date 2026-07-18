@@ -1,6 +1,6 @@
 # Agenterna
 
-Senast verifierad mot systemet: 2026-07-18 · 4101b00
+Senast verifierad mot systemet: 2026-07-18 · v10 (denna commit)
 
 Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna.
 
@@ -8,7 +8,7 @@ Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatte
 
 | Agent | Modell · effort | Förladdad skill | Minne | MCP:er i tools-raden |
 |---|---|---|---|---|
-| project-planner | fable · max | nortropic-stack | user | — |
+| project-planner | fable · max | nortropic-stack | user | chrome-devtools |
 | stack-builder | opus · max | nortropic-stack | inget | shadcn-ui, plugin_context7_context7, 21st, reactbits, magicuidesign, motion-dev, gsap |
 | content-designer | opus · max | nortropic-antislop | user | claude_ai_Trybloom, 21st, higgsfield |
 | design-reviewer | opus · max | nortropic-antislop | user | chrome-devtools |
@@ -18,7 +18,7 @@ Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatte
 
 ## project-planner — `agents/project-planner.md`
 
-Senior webbstrateg: gör om en `research.md` till en komplett `PROJECT-BRIEF.md` för en leadgenererande sajt. Obligatoriska steg: **INPUT GATE** körs först (fem obligatoriska fält, annars STOPP med numrerad bristlista), därefter processteg 1–6 där **5b** laddar `nortropic-antislop` (slop-mönstren läses, inte minns) och **5c** slår upp designriktning per bransch i `ui-ux-pro-max`, läser de två senaste klienternas §5 och väljer en riktning som skiljer sig — motmedlet mot att alla sajter konvergerar. Briefen har exakt sex sektioner, med obligatoriska fälten **Vald riktning**, **Motion-nivå** (`ingen`/`subtil`/`uttrycksfull`, default subtil) och **Klienttyp** (`SKARP`/`TESTKLIENT`). Skills på begäran i processen: `site-architecture`, `nortropic-seo-lokal`, `cro`, `seo-plan`. Hårda regler: hitta aldrig på betyg, priser, restider, certifikat, personnamn eller grundningsår — saknat blir öppen fråga.
+Senior webbstrateg: gör om en `research.md` till en komplett `PROJECT-BRIEF.md` för en leadgenererande sajt. Obligatoriska steg: **INPUT GATE** körs först (fem obligatoriska fält, annars STOPP med numrerad bristlista), därefter processteg 1–6 där **5b** laddar `nortropic-antislop` (slop-mönstren läses, inte minns) och **5c** slår upp designriktning per bransch i `ui-ux-pro-max`, läser de två senaste klienternas §5 och väljer en riktning som skiljer sig — motmedlet mot att alla sajter konvergerar, och **5d** (när research.md har en Designreferenser-sektion) öppnar och skärmdumpar varje designreferens via chrome-devtools till `<kundmapp>/referenser/`, extraherar det faktiskt observerbara och verifierar användarens motivering mot det renderade — skärmdumpen vinner vid konflikt, en referens som inte kan renderas markeras "kunde ej öppnas", aldrig fabricerade observationer. Briefen har exakt sex sektioner, med obligatoriska fälten **Vald riktning**, **Motion-nivå** (`ingen`/`subtil`/`uttrycksfull`, default subtil), **Referensöversättning** (när referenser finns: en tabellrad per referens — öppnad ✓/✗, detta tas, detta förkastas med skäl) och **Klienttyp** (`SKARP`/`TESTKLIENT`). Skills på begäran i processen: `site-architecture`, `nortropic-seo-lokal`, `cro`, `seo-plan`. Hårda regler: hitta aldrig på betyg, priser, restider, certifikat, personnamn eller grundningsår — saknat blir öppen fråga.
 
 ## stack-builder — `agents/stack-builder.md`
 
