@@ -41,7 +41,9 @@ Click = primary conversion event (fire `phone_click` to analytics in a client wr
 
 **Area page** (`omraden/[slug]`): H1 "「Tjänst」 i 「Ort」" → local intro (genuine local references, no spun text) → services offered there → testimonials filtered by ort when available → `CtaBanner area={ort}`
 
-**Kontakt**: phone + hours FIRST (above form), `QuoteForm`, map embed (lazy, `&hl=sv`), address + org.nr
+**Kontakt**: phone + hours FIRST (above form), `QuoteForm`, **consent-gated map facade**, address + org.nr
+
+> **Never embed a live Google Maps `<iframe>` on render.** It fires ~35 requests to Google/US hosts on page load, transfers the visitor's IP to a third country without consent, and contradicts the cookieless "no banner needed" claim (a CRITICAL legal finding). Use a small `"use client"` facade: a self-hosted placeholder (map-pin + address + a "Visa karta" button) that injects the `google.com/maps?...&output=embed` iframe **only on explicit click**, with a factual line ("Kartan laddas från Google först när du klickar"). Google then loads only after consent, so the cookieless-on-load promise stays true. Keep `frame-src https://www.google.com` in the CSP (needed for the post-click iframe). Reference implementation: `map-embed.tsx`.
 
 ## shadcn/ui usage
 - Install per component: `button`, `card`, `input`, `label`, `select`, `textarea`, `accordion`, `sheet` (mobile nav) — nothing speculative
