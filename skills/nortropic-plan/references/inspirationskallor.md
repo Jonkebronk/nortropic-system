@@ -5,7 +5,7 @@ Systemets enda sanning om var designinspiration hämtas och hur källorna viktas
 ## Riktiga sajter, återhållen smak (förstahandskällor)
 
 - **SiteInspire** (siteinspire.com) — handplockat sedan 2010, grundlig taggning per stil/typ/ämne; lutar mot ren, redaktionell, typografiskt sofistikerad design: generöst whitespace, återhållen färg, stark typografi. I praktiken premium-checklistan (PK-1…PK-8) som galleri. **Bästa enskilda källan.**
-- **Land-book** (land-book.com) — riktiga landningssidor, kategoriserat. Hantverkarsajter ÄR landningssidor med undersidor.
+- **Land-book** (land-book.com) — riktiga landningssidor, kategoriserat. Småföretagssajter ÄR landningssidor med undersidor.
 - **One Page Love** (onepagelove.com) — enkelsidiga sajter; använd när kundens omfång är litet — visar hur en sida känns komplett.
 - **Httpster** (httpster.net) — typografidrivna riktiga sajter; använd när §5 behöver en modig men byggbar rubrikriktning.
 
@@ -19,7 +19,7 @@ Systemets enda sanning om var designinspiration hämtas och hur källorna viktas
 
 ## Guldgruvan — omdömesjakten (metod, inte galleri)
 
-1. **Reco eller Google Maps:** filtrera fram hantverkare i branschen med betyg ≥4,7 och många omdömen → granska DERAS sajter.
+1. **Reco eller Google Maps:** filtrera fram företag i branschen med betyg ≥4,7 och många omdömen → granska DERAS sajter.
 2. **Footer-jakten:** bra sajt → läs "Hemsida av X" i footern → öppna byråns portfolio (t.ex. Dalboviken Media, Introwise — kartor över vad som fungerar för kundtypen i marknaden).
 3. **Selektionsprincipen:** prisgallerier väljer för designerapplåder; omdömesjakten väljer för kundförtroende — och kundförtroende är vad sajterna ska producera. Därför väger verkliga bevisade sajter alltid tyngst i poolen.
 4. **Småmarknadsfallback:** ger den lokala marknaden <5 kandidater vid ≥4,7-filtret: vidga geografin stegvis (länet → Norrland/motsvarande landsdel → Sverige) med bibehållet betygskrav — sänk aldrig kravet. Notera i Referensöversättningen vilken geografi som gav varje fynd. Motivering: designinspiration får vara nationell — en snickerisajt i Skåne bevisar samma sak om vad som skapar kundförtroende; konkurrentanalysen i research förblir lokal. De tjänar olika syften och får inte blandas ihop.
