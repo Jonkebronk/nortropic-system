@@ -4,6 +4,7 @@
 !/.gitignore
 !/agents/
 !/workflows/
+!/vendored-skills/
 !/skills/
 /skills/*
 !/skills/nortropic-antislop/

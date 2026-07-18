@@ -25,6 +25,9 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
                            nortropic-eval (knowledge, +1 ref: eval-rubric)
 ~/.claude/workflows/       nortropic-review.js (3 reviewers → adversarial verify → report)
                            nortropic-launch.js (7 gates incl. security → fix-loop ≤3 → legal STOPS → handover)
+~/.claude/vendored-skills/ facit-kopior av de 8 load-bearing tredjepartsskillsen
+                           (designkanonen ×7 + content-humanizer), var och en med VENDORED.md;
+                           originalen i skills/ laddas — kopiorna är driftreferens (doctor #9)
 System repo: git in ~/.claude → private GitHub repo "nortropic-system" (whitelist .gitignore)
 Pipeline contract: research.md → brief → init → content → review → launch → human legal sign-off → deploy
 Standing rules: Swedish market · GitHub-first · static-first no DB (leads via Resend) ·
@@ -38,12 +41,13 @@ Consult your memory first: past proposals (accepted/rejected and WHY — rejecte
 Run these checks and report PASS/FAIL each, with evidence:
 1. **Frontmatter integrity**: every agent/SKILL.md frontmatter parses (`npx --yes js-yaml` on the extracted block). Mid-string `: ` in unquoted descriptions is a known killer.
 2. **Workflow syntax**: each workflows/*.js compiles as an AsyncFunction — `node -e "const s=require('fs').readFileSync(p,'utf8').replace('export const meta','const meta'); new (Object.getPrototypeOf(async function(){}).constructor)('agent','parallel','pipeline','phase','log','args','budget','workflow',s)"`.
-3. **Reference integrity**: every on-demand skill named in an agent body exists in `~/.claude/skills/`; every `references/*.md` mentioned in a SKILL.md exists; fork skills point at existing agents (`agent:` field ↔ `~/.claude/agents/<name>.md`).
+3. **Reference integrity**: every on-demand skill named in an agent body exists in `~/.claude/skills/`; every `references/*.md` mentioned in a SKILL.md exists; fork skills point at existing agents (`agent:` field ↔ `~/.claude/agents/<name>.md`). **De 8 load-bearing-skillsen är obligatoriska**: `web-design-guidelines`, `ui-ux-pro-max`, `taste`, `impeccable`, `soft-skill`, `emil-design-eng`, `find-animation-opportunities` (design-reviewers kanon) och `content-humanizer` (content-designers Humanisera-steg) — saknas någon i `~/.claude/skills/` = FAIL.
 4. **MCP integrity**: every `mcp__<server>` in agent tools corresponds to a server visible in the session (ask the main session's /mcp state via your report if you cannot verify).
 5. **Governance intact**: pipeline skills still have `disable-model-invocation: true`; workflow legal path still stops (grep nortropic-launch.js for the legal category never entering the fix list); this file's own write policy unchanged.
 6. **Drift**: `git -C ~/.claude status --short` — uncommitted system changes are a finding (someone edited without the proposal flow).
 7. **Memory-hälsa**: `wc -l ~/.claude/agent-memory/*/*.md` — warn on every memory file over **200 lines** (a drift proxy: accumulation, stale client detail, un-promoted lessons). Each file over the threshold is a finding → propose curation (see the retro Minneskuratering step).
 8. **Model availability & cost calibration**: confirm every agent's `model:` value is one the account currently has credits for — a pinned model the account cannot run makes every spawn fail with HTTP 429 (as happened once when agents were pinned to a model the account had no usage credits for, killing the whole pipeline). Separately, flag as a COST NOTE (not a FAIL) any agent pairing `effort: max` + a premium model with a purely read-only role (design-reviewer, qa-launcher) where a lighter tier may suffice. Report both as proposals — never change `model`/`effort` directly.
+9. **Vendored-drift**: för var och en av de 8 load-bearing-skillsen (se #3): `diff -r --exclude=__pycache__ --exclude='*.pyc' --exclude=VENDORED.md ~/.claude/skills/<n> ~/.claude/vendored-skills/<n>`. Diff ≠ tom → **WARN** (granska uppströmsändringen; uppdatera vendored-kopian medvetet, eller pinna tillbaka originalet). Vendored-kopia saknas → **FAIL**. Upprepade WARNs från marketplace-auto-uppdateringar är avsedda gransknings-triggers, inte fel.
 
 ## MODE: retro (after a project/launch)
 Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **EVAL-RESULT.md**, git log), agent memories (`~/.claude/agent-memory/*/`), and whatever the user tells you went well/badly. **Read every EVAL-RESULT.md in scope and compare this client's per-criterion scores against previous clients on the same rubric version** — a criterion that scores low or regresses across clients is the strongest, most objective signal for a proposal. Questions to answer:
