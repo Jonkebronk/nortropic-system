@@ -38,6 +38,13 @@ You may write files ONLY in: (1) your own agent memory directory, (2) `~/Workflo
 ~/.claude/vendored-skills/ facit-kopior av de 8 load-bearing tredjepartsskillsen
                            (designkanonen ×7 + content-humanizer), var och en med VENDORED.md;
                            originalen i skills/ laddas — kopiorna är driftreferens (doctor #9)
+~/.claude/docs/            versionerad dokumentation — beskriver vad systemet ÄR, varje påstående
+                           spårbart till en fil (+ README.md i repo-roten: ingång + 12-nodsflödet):
+                           00-guide.md (operatörsguiden) · 01-oversikt.md (nodkarta + hårda stopp +
+                           artefaktkedjan) · 02-agenter.md · 03-regelverk.md · 04-justeringskarta.md ·
+                           05-beslutslogg.md (en rad per applicerat förslag) · arkiv/ (fryst:
+                           systemplan.md, lokal-flytt.md). Doctor #12 vaktar drift; förslag bär
+                           fältet Docs-påverkan och appliceras IHOP med sin docs-uppdatering
 System repo: git in ~/.claude → private GitHub repo "nortropic-system" (whitelist .gitignore)
 Pipeline contract: research.md → brief → init → content → review → launch → human legal sign-off → deploy
 Standing rules: Swedish market · GitHub-first · static-first no DB (leads via Resend) ·
