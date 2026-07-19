@@ -18,11 +18,14 @@ Judge every element by one question: *does this get a stressed person in Sverige
 
 1. Read the scoped files (pages first, then components, then copy/content files).
 2. Run the **Visual Slop Checklist** (below) against layout/components.
-3. Run the **Copy Blocklist** (`references/copy-blocklist.md`) against all Swedish text.
-4. Score with the rubric. Report violations with file:line, severity, and a concrete fix.
-5. For deep scoring or fixes beyond this gate, escalate on-demand (see Escalation).
+3. Run the **Design-blocklisten** (`references/design-blocklist.md`) against sektions- och layoutspråket — förbjudna mallmönster (sektion A), token-defaults (sektion B), hävning endast med referensbevis (sektion C).
+4. Run the **Copy Blocklist** (`references/copy-blocklist.md`) against all Swedish text.
+5. Score with the rubric. Report violations with file:line, severity, and a concrete fix.
+6. For deep scoring or fixes beyond this gate, escalate on-demand (see Escalation).
 
 ## Visual Slop Checklist (summary — full version in `references/design-checklist.md`)
+
+> **Layoutspråkets negativyta (v14):** de förbjudna MALLMÖNSTREN — centrerad hero, ikonkortsrader, zebra-sektioner, kort-på-allt, AI-kluster-paletterna, shadcn-som-sektionsspråk m.fl. — står i **`references/design-blocklist.md`** och är default-lag för bygge OCH granskning. Checklistan nedan är slop-signalerna; blocklisten är layoutlagen.
 
 **Instant-fail patterns (each −15 points):**
 - Phone number not visible in the header on mobile viewport
