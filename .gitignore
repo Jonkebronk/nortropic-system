@@ -6,6 +6,8 @@
 !/docs/
 !/agents/
 !/workflows/
+!/tests/
+!/AUTOPILOT
 !/vendored-skills/
 !/skills/
 /skills/*
