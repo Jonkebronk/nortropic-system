@@ -117,6 +117,23 @@ Run these checks and report PASS/FAIL each, with evidence:
 5. **Ingen förhandsfråga** — allt granskas i efterhand via digesten (§B4).
 6. **Körs:** fristående via `/nortropic-retro vaktmastare`, eller automatiskt som doctors avslutningspass när skopet är `system` och AUTOPILOT ≥ `n1`.
 
+## MODE: nattskift (N2 — eval-grindad förbättring i utpekade zoner)
+0. **Förkontroller i EXAKT denna ordning — första miss vägrar och avslutar:**
+   (a) AUTOPILOT = `on` (saknad fil = `off`; TRAPPAN #1).
+   (b) Ingen `AUTO-INCIDENT.md` med Läge N2 eller ALL (TRAPPAN #2).
+   (c) **Aktiveringsgrinden:** raden `RETRO-1-GENOMFÖRD` finns i `docs/05-beslutslogg.md` — annars vägra med EXAKT: "retro #1 måste köras manuellt först (kalibrering av zonlistorna)".
+   (d) `workflows/nortropic-verify-suite.js` existerar — annars vägra OAVSETT AUTOPILOT: "verify-suiten saknas — nattskiftet kör aldrig utan regressionsnät".
+   (e) **Takregeln (§B5):** räkna `[AUTO-N2]`-rader i `~/Workflow/AUTO-DIGEST.md` med digest-id senare än senaste `CHECKPOINT`-radens ackade id i `docs/05-beslutslogg.md` (ingen CHECKPOINT-rad = räkna alla). ≥3 → hela körningen blir vanliga förslag: "taket nått — väntar på CHECKPOINT".
+1. **Zonerna (uttömmande — allt annat är förslag, oförändrat dagens flöde):**
+   - **Zon 1 — bransch-antislop-skörd** → `~/Workflow/profiler/<bransch>.md` §7.3: ADDITIVT; varje ny fras med källnot `(källa: 5d/granskning — <projekt/rapport> <datum>)`; aldrig stryka eller omformulera befintliga rader. §7.4 och §7.7 rörs aldrig (§A7).
+   - **Zon 2 —** `skills/nortropic-plan/references/inspirationskallor.md`: nya källor/metodnoteringar med belägg (varför källan är bra, varifrån belägget kommer); aldrig stryka källor, aldrig ändra receptets tak eller viktningsprincip (regelvärden).
+   - **Zon 3 — referens-/exempeltexter i skills:** förtydligande exempel, aldrig regeländringar; eval-rubriken kategoriskt undantagen (§A2), SKILL.md-regeltext likaså (ALDRIG-listan).
+   - **Zon 4 — agentkroppars PROSA:** omformulering utan semantisk förändring av regler/tal/severity. **Tveksamhetsregeln:** behöver du argumentera för att ändringen är semantiskt neutral, är den inte det → förslag i stället.
+2. **Protokoll per ändring:** EN ändring → kör `/nortropic-verify-suite` → icke-försämring krävs (verdikt GRÖN i `~/Workflow/VERIFY-SUITE-RESULT.md`-metablocket) → granulär commit `[AUTO-N2] zon <n>: <vad> — <motivering> — regression: <suite-sammanfattning>` → digestrad. Endast git-spårade zoner committas; profiler-ändringar (zon 1) följer backup-protokollet (TRAPPAN #4) och digestraden noterar "ej versionerad — ingen commit".
+3. **Försämring (verdikt RÖD):** auto-revert av committen (eller återlägg backupen) + `AUTO-INCIDENT.md` (Läge: N2) + digestrad + STOPP. **Odömbar suite (verdikt OGILTIG** — baseline-version matchar inte rubriken, eller frysta previewn onåbar): revert + skriv förslaget i stället — ingen incident, men körningen avslutas.
+4. **Allt utanför zonerna** → dagens förslagflöde (`~/Workflow/steward-proposals/`), oförändrat.
+5. **Körs:** efter retro, eller på begäran via `/nortropic-retro nattskift`.
+
 ## MODE: retro (after a project/launch)
 Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **EVAL-RESULT.md**, git log), agent memories (`~/.claude/agent-memory/*/`), and whatever the user tells you went well/badly. **Read every EVAL-RESULT.md in scope and compare this client's per-criterion scores against previous clients on the same rubric version** — a criterion that scores low or regresses across clients is the strongest, most objective signal for a proposal. Questions to answer:
 - Which rubric criteria scored low or regressed vs previous clients? → that criterion is where a proposal has the most leverage.
