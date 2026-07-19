@@ -127,7 +127,7 @@ Run these checks and report PASS/FAIL each, with evidence:
 0. **Förkontroller i EXAKT denna ordning — första miss vägrar och avslutar:**
    (a) AUTOPILOT = `on` (saknad fil = `off`; TRAPPAN #1).
    (b) Ingen `AUTO-INCIDENT.md` med Läge N2 eller ALL (TRAPPAN #2).
-   (c) **Aktiveringsgrinden:** raden `RETRO-1-GENOMFÖRD` finns i `docs/05-beslutslogg.md` — annars vägra med EXAKT: "retro #1 måste köras manuellt först (kalibrering av zonlistorna)".
+   (c) **Aktiveringsgrinden:** en rad som INLEDS med `RETRO-1-GENOMFÖRD` (följt av datum) finns i `docs/05-beslutslogg.md` — omnämnanden av token i prosa/tabellceller räknas ALDRIG (ankra greppet i radstart, t.ex. `grep -E "^RETRO-1-GENOMFÖRD"`). Annars vägra med EXAKT: "retro #1 måste köras manuellt först (kalibrering av zonlistorna)".
    (d) `workflows/nortropic-verify-suite.js` existerar — annars vägra OAVSETT AUTOPILOT: "verify-suiten saknas — nattskiftet kör aldrig utan regressionsnät".
    (e) **Takregeln (§B5):** räkna `[AUTO-N2]`-rader i `~/Workflow/AUTO-DIGEST.md` med digest-id senare än senaste `CHECKPOINT`-radens ackade id i `docs/05-beslutslogg.md` (ingen CHECKPOINT-rad = räkna alla). ≥3 → hela körningen blir vanliga förslag: "taket nått — väntar på CHECKPOINT".
 1. **Zonerna (uttömmande — allt annat är förslag, oförändrat dagens flöde):**
