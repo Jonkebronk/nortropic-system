@@ -1,0 +1,32 @@
+# Konstitutionen — det som aldrig självmodifieras, och trappans lagar
+
+Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
+
+v15 ger stewarden en avgränsad rätt att applicera vissa ändringar själv — självförbättringstrappan: Nivå 1 **Vaktmästaren** och Nivå 2 **Nattskiftet** (MODE-definitionerna i `agents/nortropic-steward.md`). Den rätten är bara säker så länge gränsen är skriven, mekaniskt kontrollerbar och omöjlig att flytta inifrån. Den här filen ÄR gränsen: **§A** listar det som aldrig får självmodifieras — oavsett nivå, oavsett hur grön en regressionskörning ser ut; **§B** är trappans lagar. Designprincipen (ur evaluator-optimizer-mönstret och valideringsgrindad självmodifiering): det mänskliga godkännandet per ändring ersätts av mekaniska grindar, en regressionssvit, granskning i efterhand via digesten — och mänskligt ägande av måtten. Tillsynen flyttas till META-nivån; den tas inte bort.
+
+**Ändringar i den här filen görs alltid av en människa och committas märkta HÖGRISK** (ordet HÖGRISK i commit-meddelandet). En autonom mod som hittar ett fel här skriver ett förslag — aldrig en fix. Det gäller §A och §B lika.
+
+## §A — Aldrig självmodifierbart
+
+Fynd i §A-områden blir förslag enligt dagens flöde (`~/Workflow/steward-proposals/`), aldrig autonoma ändringar. Doctor #5 vaktar mekaniskt: en commit taggad `[AUTO-N1]` eller `[AUTO-N2]` som rört §A-skyddad yta = FAIL.
+
+1. **Invarianterna** — v13-listan i [03-regelverk.md](03-regelverk.md) och stewardens SYSTEM MAP. Oförändrad regel: flytt till kalibreringsprofilen kräver människa + HÖGRISK-märkning. De ÄR kvaliteten.
+2. **Eval-rubriken** — `skills/nortropic-eval/references/eval-rubric.md`: kriterier, vikter, trösklar och versionsnummer. Måttet ägs av människan; systemet får aldrig ändra det det mäts mot. En agent som får redigera sin egen måttstock optimerar förr eller senare måttet i stället för kvaliteten — detta är systemets reward-hacking-skydd, inte en formalitet.
+3. **Grindarnas kravnivåer och severity-regler** — i `workflows/nortropic-launch.js` och `workflows/nortropic-review.js`: GATE/FINDINGS-schemata, PASS/FAIL-logik, fixloopens 3-rundorsgräns, freshness-grinden och legal-exkluderingen. Trappan får aldrig sänka ett krav för att en körning ska bli grön.
+4. **Juridiken** — allt Gate 6-relaterat, juridikflaggregistret (`skills/nortropic-plan/references/juridikflaggor.md`) och villkorstexter. Human-only står kvar i alla lägen — trappan ändrar ingenting här.
+5. **Affären** — priser, paketinnehåll, kundlöften och all kundvänd affärscopy på nortropic.se.
+6. **Styrningen själv** — stewardens HARD WRITE POLICY (inklusive den villkorade utvidgningen), trappans regler (§B + MODE-definitionerna), kill-switch-filen `AUTOPILOT` — samt regressionssviten `workflows/nortropic-verify-suite.js` och dess baselines i `tests/fixtures/`. Ett regressionsnät som kan redigeras av det som ska fångas är inget nät; baselines uppdateras endast av människa (kandidater via `--cut-baseline`, se §B6).
+7. **Profilernas kvittolistor och juridikflaggor** — `~/Workflow/profiler/*` §7.4 (Kvittolista & attribution) och §7.7 (Juridikflaggor): kalibrering som bär kundlöften. Gränsdragningen mot trappan: §7.3 Bransch-antislop får ADDERAS av Nattskiftet (zon 1, alltid med källnot) men aldrig strykas eller omformuleras — kvitton och flaggor rörs aldrig.
+
+## §B — Trappans lagar
+
+1. **Nivåerna.** `off` = ingen självapplicering (default vid leverans) · `n1` = endast Vaktmästaren (mekanisk synk per uttömmande vitlista) · `on` = Vaktmästaren + Nattskiftet (fyra utpekade zoner). Vitlistan och zonerna bor i MODE-sektionerna i `agents/nortropic-steward.md`; LAGEN att de är uttömmande bor här — allt utanför dem är ett förslag, aldrig en autonom ändring.
+2. **Kill-switchen.** Filen `AUTOPILOT` i systemrepots rot, med exakt innehåll `off` | `n1` | `on`. Saknad eller ogiltig fil = `off`. Kontrollen körs FÖRST i båda moderna, före allt annat. Ingen mod skriver någonsin filen (§A6) — nivåbyte är alltid en mänsklig commit.
+3. **Aktiveringsgrinden.** Nattskiftet kräver att raden `RETRO-1-GENOMFÖRD <datum>` finns i [05-beslutslogg.md](05-beslutslogg.md) — retro #1 kalibrerar zonlistorna manuellt innan självförbättringen släpps på. Saknas raden vägrar Nattskiftet med exakt: **"retro #1 måste köras manuellt först (kalibrering av zonlistorna)"** — oavsett vad `AUTOPILOT` säger.
+4. **Digest-kontraktet.** Ingen förhandsfråga; all granskning sker i efterhand. Varje självapplicerad ändring ger en rad i `~/Workflow/AUTO-DIGEST.md`: id · datum · nivå · ändring · motivering · regressionsresultat · commit (eller "ej versionerad — ingen commit"). Digesten är obligatorisk läsning i varje retro (retrosteg 4).
+5. **Checkpoint-regeln (taket).** Max **3** självapplicerade N2-ändringar mellan mänskliga checkpoints. Checkpoint = människan läser digesten och skriver raden `CHECKPOINT <datum> · t.o.m. <digest-id>` i beslutsloggen; räkningen görs på digest-id (löpnummer), inte datum, så flera ändringar samma dag räknas rätt. Tak nått → resten blir vanliga förslag.
+6. **Regressionslagen.** N1: doctor grön (0 FAIL) före OCH efter varje ändring. N2: verify-suiten (`/nortropic-verify-suite`) körs efter VARJE ändring och måste vara icke-försämrande (verdikt GRÖN). Försämring = auto-revert + incident + modstopp. Odömbar suite (verdikt OGILTIG: baseline-version matchar inte rubriken, eller frysta previewn onåbar) = revert + förslag i stället — ingen incident, men körningen avslutas. Nya baselines klipps av människan; `--cut-baseline` skriver endast KANDIDATER till `~/Workflow`.
+7. **Incident-stoppet.** Filen `~/Workflow/AUTO-INCIDENT.md` (med `Läge: N1 | N2 | ALL`) blockerar det läge den namnger tills en människa granskat och raderat den. Moderna får skapa filen — aldrig radera den.
+8. **Meta-tillsynsregeln (Goodhart).** I varje retro granskar människan MÅTTEN, inte bara ändringarna: stämmer eval-rubriken fortfarande med vad kvalitet betyder? Har någon N2-ändring optiskt förbättrat siffror utan att förbättra sajter? Frågan ställs uttryckligen (retrosteg 4 i `agents/nortropic-steward.md`); acken är CHECKPOINT-raden.
+
+Ändring av 07-konstitution.md själv = alltid människa, alltid HÖGRISK-märkt commit.
