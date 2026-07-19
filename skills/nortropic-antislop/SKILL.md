@@ -64,7 +64,7 @@ Forbidden AI-slop phrases, Swedish and English. Each occurrence −3 points:
 
 ## Premium-checklistan (det positiva rummet)
 
-Blocklistan och slop-checklistan är **negativytan** — vad som inte får finnas. `references/premium-checklist.md` är **positivytan**: 8 checkbara punkter (PK-1…PK-8, tre kategorier: Taste, Substans, Upplevd kvalitet) för vad som ska finnas för premium-känsla. design-reviewer går igenom den i varje granskning och taggar fynd `[PK-n]`; content-designer refererar PK-5 (bildspråk) och PK-8 (svensk microcopy); qa-launchers mobilpass (Gate 3) prickar PK-7. Ingen egen poängskala — punkterna informerar fynd som flödar in i eval-kriterierna 1, 3, 9, 10.
+Blocklistan och slop-checklistan är **negativytan** — vad som inte får finnas. `references/premium-checklist.md` är **positivytan**: 8 checkbara punkter (PK-1…PK-8, tre kategorier: Taste, Substans, Upplevd kvalitet) för vad som ska finnas för premium-känsla. design-reviewer går igenom den i varje granskning och taggar fynd `[PK-n]`; content-designer refererar PK-5 (bildspråk) och PK-8 (svensk microcopy); qa-launchers mobilpass (Gate 3) prickar PK-7. Ingen egen poängskala — punkterna informerar fynd som flödar in i eval-kriterierna 1, 3, 9 (Visuell distinktion), 10 och 11.
 
 ## Scoring Rubric (0–100)
 

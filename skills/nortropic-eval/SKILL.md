@@ -16,20 +16,21 @@ Make **one coherent judgment**, not a checklist skim. Read the actual project be
 
 The rubric is **versioned** (semver at the top of `references/eval-rubric.md`). Always record the version you used — scores are only comparable within the same rubric version.
 
-## The 10 criteria (weights — full definitions in `references/eval-rubric.md`)
+## The 11 criteria (weights — full definitions in `references/eval-rubric.md`)
 
 | # | Kriterium | Vikt |
 |---|---|---|
 | 1 | Konverteringsarkitektur (primärhandlingen enligt `content/profile.ts` omedelbart nåbar, mobilergonomisk, ≤5 formulärfält där formulär ingår) | 15 |
 | 2 | **Faktatrohet** (varje faktapåstående spårbart till research.md) | 15 |
 | 3 | Svensk copy-kvalitet (röst enligt briefens §7-register, blocklistan — bas + bransch — ren, korrekt svenska) | 10 |
-| 4 | NAP-konsistens (identisk i business.ts, schema, footer, kontaktsida) | 10 |
-| 5 | Lokal SEO (uppfyller §7:s SEO-läge — ortssidor endast där seoLage kräver dem, då unika) | 10 |
-| 6 | Schema-korrekthet (schema-typ enligt profile.ts validerar, svensk PostalAddress, öppettider) | 10 |
-| 7 | Prestanda (Lighthouse-mål från nortropic-prelaunch) | 10 |
-| 8 | Juridik komplett (integritetspolicy, org.nr, cookie-hantering) | 10 |
-| 9 | Förtroendesignaler (förtroendekvitton enligt §7.4 nära hero — omdömen, kvitton, foton) | 5 |
-| 10 | Teknisk hygien (inga döda länkar, 404-sida, sitemap) | 5 |
+| 4 | NAP-konsistens (identisk i business.ts, schema, footer, kontaktsida) | 8 |
+| 5 | Lokal SEO (uppfyller §7:s SEO-läge — ortssidor endast där seoLage kräver dem, då unika) | 8 |
+| 6 | Schema-korrekthet (schema-typ enligt profile.ts validerar, svensk PostalAddress, öppettider) | 8 |
+| 7 | Prestanda (Lighthouse-mål från nortropic-prelaunch) | 8 |
+| 8 | Juridik komplett (integritetspolicy, org.nr, cookie-hantering) | 8 |
+| 9 | **Visuell distinktion** (läses som handbyggd premium — inte som AI-genererad mall; döms mot design-blocklisten + template-testet) | 10 |
+| 10 | Förtroendesignaler (förtroendekvitton enligt §7.4 nära hero — omdömen, kvitton, foton) | 5 |
+| 11 | Teknisk hygien (inga döda länkar, 404-sida, sitemap) | 5 |
 
 ## The hard rule — Faktatrohet is a gate, not just points
 
@@ -65,4 +66,5 @@ Faktatrohet: PASS | FAIL   (FAIL överskuggar totalpoängen)
 ## Reuse, don't duplicate
 - Criterion 7 (Prestanda) targets live in the **nortropic-prelaunch** skill's `references/lighthouse-targets.md` — use those exact numbers.
 - Criterion 3 (Copy) uses the blocklist in the **nortropic-antislop** skill's `references/copy-blocklist.md` — do not restate it here.
+- Criterion 9 (Visuell distinktion) döms mot **nortropic-antislop** `references/design-blocklist.md` och design-reviewerns template-test — do not restate the pattern list here.
 - This skill scores; it never edits. To FIX what it flags, route to content-designer (copy) or stack-builder (technical); to deep-audit design, run `/nortropic-antislop` or the design-reviewer.

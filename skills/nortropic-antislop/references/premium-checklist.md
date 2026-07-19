@@ -4,7 +4,7 @@ Antislop-gaten är **negativytan** (vad som inte får finnas). Den här checklis
 
 > **Punktnumren är stabila ID:n.** Fynd taggas `[PK-n]` i granskningsrapporter. Kategorierna grupperar punkterna icke-sammanhängande (Substans = 4, 5, 7; Upplevd kvalitet = 6, 8) — **ändra aldrig numren**, historiska taggar bygger på dem.
 
-**Ingen egen poängskala.** Checklistan informerar fynd som redan flödar in i eval-kriterierna 1 (Konverteringsarkitektur), 3 (Svensk copy-kvalitet), 9 (Förtroendesignaler) och 10 (Teknisk hygien).
+**Ingen egen poängskala.** Checklistan informerar fynd som redan flödar in i eval-kriterierna 1 (Konverteringsarkitektur), 3 (Svensk copy-kvalitet), 9 (Visuell distinktion), 10 (Förtroendesignaler) och 11 (Teknisk hygien).
 
 ---
 
