@@ -112,8 +112,12 @@ const GATE = {
 }
 
 /* ─────────── ARGS ─────────── */
-// args.research = absolut sökväg till research.md (obligatoriskt); Läge läses av plannern ur research-raden.
-const researchPath = (args && args.research) || 'research.md in the current working directory'
+// Robust arg-läsning: args kan nå hit som objekt ELLER som JSON-sträng (Workflow-verktygets args-param
+// kan serialiseras vid verktygsgränsen) — hantera båda så args.research alltid når fram.
+let A = args || {}
+if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = {} } }
+// A.research = absolut sökväg till research.md (obligatoriskt); Läge läses av plannern ur research-raden.
+const researchPath = A.research || 'research.md in the current working directory'
 
 /* ─────────── helper: AUTOBYGG-LOG (agenten shellar git + date; Date.now() kastar i DSL:en) ─────────── */
 async function writeAutobyggLog(buildDir, fields) {

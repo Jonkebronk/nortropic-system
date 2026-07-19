@@ -8,7 +8,11 @@ export const meta = {
   ],
 }
 
-const clientDir = (args && args.clientDir) || 'the Nortropic site in the current working directory'
+// Robust arg-läsning: args kan nå hit som objekt (internt workflow()-anrop) ELLER som JSON-sträng
+// (Workflow-verktygets args-param kan serialiseras vid verktygsgränsen) — hantera båda.
+let A = args || {}
+if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = {} } }
+const clientDir = A.clientDir || 'the Nortropic site in the current working directory'
 
 const TODOFACTS = {
   type: 'object', required: ['hits'],
@@ -42,9 +46,9 @@ const facts = await agent(
 )
 
 let decisions
-if (args && args.openQuestions) {
+if (A.openQuestions) {
   // Från autobygg: redan klassade — behåll bara FAKTA/BESLUT (STRATEGISK stoppade redan flödet).
-  decisions = (args.openQuestions || []).filter(q => q && (q.kind === 'FAKTA' || q.kind === 'BESLUT'))
+  decisions = (A.openQuestions || []).filter(q => q && (q.kind === 'FAKTA' || q.kind === 'BESLUT'))
 } else {
   // Manuell körning efter /nortropic-launch: självinsamla ur briefen.
   const d = await agent(
@@ -54,7 +58,7 @@ if (args && args.openQuestions) {
   decisions = (d && d.openQuestions) || []
 }
 
-let legal = (args && args.legalFindings) || null
+let legal = A.legalFindings || null
 if (!legal) {
   // Manuell körning: samla Gate 6 read-only (självständig).
   const g = await agent(
