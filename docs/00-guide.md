@@ -1,6 +1,6 @@
 # Operatörsguiden
 
-Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
+Senast verifierad mot systemet: 2026-07-20 · v16 (denna commit)
 
 Det här är guiden för dig som kör Nortropic-systemet: en operatör, en sajt i taget. Den är författad ur systemfilerna själva — varje avsnitt pekar på filen där regeln faktiskt bor, och när guiden och en systemfil säger olika saker är det systemfilen som gäller. Guiden förklarar hur du använder systemet och varför det ser ut som det gör; den exakta nodkartan finns i [01-oversikt.md](01-oversikt.md), agenterna i [02-agenter.md](02-agenter.md) och de hårda reglerna med källhänvisningar i [03-regelverk.md](03-regelverk.md).
 
@@ -25,6 +25,14 @@ Du börjar med att skriva `research.md` om kunden. Fem fält är obligatoriska: 
 Granskning och launch beskrivs i egna avsnitt nedan. Efter launch återstår tre saker: **andra hårda stoppet** (juridiken — du signerar Gate 6-fynden själv), `/vercel:deploy`, och efterarbetet där du kör de klientfyllda checklistorna `gbp-checklist-klient.md` och `gsc-steg-klient.md` under de första två veckorna (`workflows/nortropic-launch.js`, Handover-fasen). Sist kör du `/nortropic-retro` och når **tredje hårda stoppet**: du läser stewardens förslag och säger "applicera förslag N" till huvudsessionen.
 
 När fixloopen i launch hittar åtgärdbara fynd routas de per kategori: seo-fynd går till `seo-optimizer`, allt annat till `stack-builder`, sekventiellt så att två agenter aldrig skriver i repot samtidigt — och juridik går aldrig in i loopen alls (`workflows/nortropic-launch.js`, Fix loop).
+
+## Obemannat läge (v16)
+
+Bär research-filen raden `Läge: obemannat` kan du köra `/nortropic-autobygg` — orkestreringen som gör plan→init→innehåll→granskning→**grind-torrkörning** utan det mänskliga nod-3-stoppet. Det primära användningsfallet är **gratis-bygge-motorn**: låt systemet bygga en färdig preview åt en låginsatskund utan att du sitter med i varje nod (rekommendationen står i research-mallen: obemannat för gratis-byggen och låginsatskunder, bemannat för betalande — briefgodkännandet är billig försäkring). Utelämnad `Läge:`-rad = `bemannat` = dagens flöde, oförändrat.
+
+Det är ett förtroende med bromsar. Körningen **överlämnar alltid till människa** vid (a) en ohanterad eller scope-nej juridikflagga i §7, (b) en kvarstående STRATEGISK öppen fråga (plannern klassar varje öppen fråga STRATEGISK/FAKTA/BESLUT — STRATEGISK påverkar riktning/arkitektur, FAKTA/BESLUT kan skjutas upp), eller (c) CRITICAL kvar efter EN autonom fixloop. Den **deployar aldrig** — nod 8 (juridik-signoff) och nod 9 (`/vercel:deploy`) förblir dina. Sista steget skriver `FINAL-TOUCHES.md` (fakta att fylla, beslut att fatta, juridik att signera, avslutsreceptet) och för en spårningsrad till `AUTOBYGG-LOG.md` i kundmappen. Samma `FINAL-TOUCHES.md` kan en bemannad ägare generera med `/nortropic-final-touches <kundmapp>` efter `/nortropic-launch`.
+
+**Obemannat är inte "autopilot".** `AUTOPILOT`/självförbättringstrappan ([07-konstitution.md](07-konstitution.md) §B) styr systemets självförbättring — aldrig kund-flödet. Obemannat kund-bygge styrs enbart av research-radens `Läge:`, en helt separat brytare. Blanda aldrig ihop dem.
 
 ## Modellmatrisen
 

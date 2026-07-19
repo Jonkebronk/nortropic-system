@@ -1,6 +1,6 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
+Senast verifierad mot systemet: 2026-07-20 · v16 (denna commit)
 
 Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara människan får trigga), de två workflowsen och två plattformskommandon; tre noder är rent mänskliga stopp. Modell och effort kommer ur respektive agents frontmatter — samma värden som MODELLKONTRAKTET i stewardens SYSTEM MAP och doctor #8 vaktar.
 
@@ -22,6 +22,10 @@ Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara män
 | 12 | Godkänn förslag | **HÅRT STOPP** — "applicera förslag N" | människa → huvudsession | systemcommits i nortropic-system |
 
 Källor: `skills/nortropic-plan/SKILL.md`, `skills/nortropic-init/SKILL.md`, `workflows/nortropic-review.js`, `workflows/nortropic-launch.js`, `skills/nortropic-retro/SKILL.md` samt agenternas frontmatter i `agents/`.
+
+## Lägesväxeln — obemannat (v16)
+
+Research-filens valfria rad `Läge: obemannat` byter körsätt. I `obemannat` orkestrerar `/nortropic-autobygg` noderna **2→7** utan att stanna vid nod 3, så länge briefen är ren — inga ohanterade/scope-nej juridikflaggor i §7 och inga STRATEGISKA öppna frågor. **Nod 8 (juridik) och nod 9 (deploy) är fortfarande hårda mänskliga stopp** — obemannat rör dem aldrig, och deployar aldrig. Faller något av de tre villkoren ut (bemannat/ohanterad-juridik-eller-STRATEGISK/CRITICAL-efter-en-fixloop) lämnas bygget över med `FINAL-TOUCHES.md` som punch-list. Utelämnad `Läge:`-rad = `bemannat` = nodkartan ovan oförändrad. Detaljer i [00-guide.md](00-guide.md) (Obemannat läge).
 
 ## De fyra hårda stoppen
 

@@ -1,6 +1,6 @@
 # Konstitutionen — det som aldrig självmodifieras, och trappans lagar
 
-Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
+Senast verifierad mot systemet: 2026-07-20 · v16 (denna commit)
 
 v15 ger stewarden en avgränsad rätt att applicera vissa ändringar själv — självförbättringstrappan: Nivå 1 **Vaktmästaren** och Nivå 2 **Nattskiftet** (MODE-definitionerna i `agents/nortropic-steward.md`). Den rätten är bara säker så länge gränsen är skriven, mekaniskt kontrollerbar och omöjlig att flytta inifrån. Den här filen ÄR gränsen: **§A** listar det som aldrig får självmodifieras — oavsett nivå, oavsett hur grön en regressionskörning ser ut; **§B** är trappans lagar. Designprincipen (ur evaluator-optimizer-mönstret och valideringsgrindad självmodifiering): det mänskliga godkännandet per ändring ersätts av mekaniska grindar, en regressionssvit, granskning i efterhand via digesten — och mänskligt ägande av måtten. Tillsynen flyttas till META-nivån; den tas inte bort.
 
@@ -21,6 +21,7 @@ Fynd i §A-områden blir förslag enligt dagens flöde (`~/Workflow/steward-prop
 ## §B — Trappans lagar
 
 1. **Nivåerna.** `off` = ingen självapplicering (default vid leverans) · `n1` = endast Vaktmästaren (mekanisk synk per uttömmande vitlista) · `on` = Vaktmästaren + Nattskiftet (fyra utpekade zoner). Vitlistan och zonerna bor i MODE-sektionerna i `agents/nortropic-steward.md`; LAGEN att de är uttömmande bor här — allt utanför dem är ett förslag, aldrig en autonom ändring.
+   > **Not (v16 — avgränsning mot obemannat läge):** `AUTOPILOT` och trappan (§B) styr ENBART systemets självförbättring — att systemet ändrar sina egna lagar. De styr ALDRIG kund-flödet. Att en kundsajt byggs obemannat avgörs enbart av research-radens `Läge: obemannat` (`workflows/nortropic-autobygg.js`, [00-guide.md](00-guide.md)) — en separat brytare som varken läser eller skriver `AUTOPILOT`, §A eller §B. Obemannat kund-bygge deployar aldrig (nod 8 + 9 mänskliga) och rör ingen §A-yta. Begreppen blandas aldrig.
 2. **Kill-switchen.** Filen `AUTOPILOT` i systemrepots rot, med exakt innehåll `off` | `n1` | `on`. Saknad eller ogiltig fil = `off`. Kontrollen körs FÖRST i båda moderna, före allt annat. Ingen mod skriver någonsin filen (§A6) — nivåbyte är alltid en mänsklig commit.
 3. **Aktiveringsgrinden.** Nattskiftet kräver en rad som INLEDS med `RETRO-1-GENOMFÖRD <datum>` i [05-beslutslogg.md](05-beslutslogg.md) — omnämnanden av token i prosa eller tabellceller räknas aldrig. Retro #1 kalibrerar zonlistorna manuellt innan självförbättringen släpps på. Saknas raden vägrar Nattskiftet med exakt: **"retro #1 måste köras manuellt först (kalibrering av zonlistorna)"** — oavsett vad `AUTOPILOT` säger.
 4. **Digest-kontraktet.** Ingen förhandsfråga; all granskning sker i efterhand. Varje självapplicerad ändring ger en rad i `~/Workflow/AUTO-DIGEST.md`: id · datum · nivå · ändring · motivering · regressionsresultat · commit (eller "ej versionerad — ingen commit"). Digesten är obligatorisk läsning i varje retro (retrosteg 4).
