@@ -1,6 +1,6 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-19 · v14 (denna commit)
+Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
 
 Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara människan får trigga), de två workflowsen och två plattformskommandon; tre noder är rent mänskliga stopp. Modell och effort kommer ur respektive agents frontmatter — samma värden som MODELLKONTRAKTET i stewardens SYSTEM MAP och doctor #8 vaktar.
 
@@ -31,7 +31,7 @@ Tre stopp ligger i pipelinen och ett i systemunderhållet. De är systemets styr
 
 **Nod 8 — juridiken.** Gate 6-fynd auto-fixas aldrig: prelaunch-skillen är "REPORT ONLY, human decides" (`skills/nortropic-prelaunch/SKILL.md`, Gate 6), qa-launcher får aldrig sätta PASS på juridik på egen auktoritet (`agents/qa-launcher.md`), och launch-workflowen filtrerar mekaniskt bort kategorin `legal` ur fixloopen och rapporterar alltid `⚠️ HUMAN REVIEW`/`HUMAN SIGN-OFF` (`workflows/nortropic-launch.js`).
 
-**Nod 12 — förslagsgodkännandet.** Stewarden har en hård skrivpolicy: den får bara skriva i sitt eget minne, i `~/Workflow/steward-proposals/` och i STEWARD-REPORT.md — aldrig i agents/, skills/, workflows/ eller settings, inte ens för en bekräftad bugg (`agents/nortropic-steward.md`, HARD WRITE POLICY). Du läser förslagen och säger vilka som ska appliceras; huvudsessionen applicerar och committar.
+**Nod 12 — förslagsgodkännandet.** Stewarden har en hård skrivpolicy med en grundregel och en villkorad utvidgning (v15): grundregeln är propose-only — eget minne, `~/Workflow/steward-proposals/` och STEWARD-REPORT.md, aldrig workflows/, skill-regeltext, eval-rubriken eller settings; utvidgningen gäller ENDAST trappmoderna (vaktmastare/nattskift), endast deras uttömmande vitlistor/zoner, och endast när `AUTOPILOT` tillåter nivån ([07-konstitution.md](07-konstitution.md) §B). Du läser förslagen och säger vilka som ska appliceras; huvudsessionen applicerar och committar. Trappans självapplicerade ändringar granskar du i efterhand via `~/Workflow/AUTO-DIGEST.md` och ackar med en `CHECKPOINT`-rad i beslutsloggen — max 3 N2-ändringar mellan ackningar.
 
 **Bibliotekariens engångsgodkännanden.** Retrons bibliotekarie-steg inventerar installerade skills och MCP:er mot refererade och lämnar placerings- eller strykningsförslag (`agents/nortropic-steward.md`, Obligatoriska retrosteg 1). Besluten godkänns av användaren i session — som när `threejs-build` togs bort efter engångsinventeringen ("anvandaren godkande i session", commit `b68252e`).
 

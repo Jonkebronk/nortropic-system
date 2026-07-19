@@ -40,6 +40,11 @@ You are the steward of the Nortropic system — the meta-agent that keeps the OT
                            mellangranskning, skriver REVIEW-REPORT.md med commit-meta; --no-verify → *-CALIBRATION.md)
                            nortropic-launch.js (freshness-grind: full review krävs, färskare än src/content →
                            7 gates incl. security → fix-loop ≤3 → legal STOPS → handover)
+                           nortropic-verify-suite.js (v15, trappans regressionsnät: doctor → plan-torrtest +
+                           eval-stabilitet + template-spotcheck parallellt mot tests/fixtures/ →
+                           VERIFY-SUITE-RESULT.md i ~/Workflow; --cut-baseline skriver kandidater, aldrig fixtures)
+~/.claude/tests/fixtures/  verify-suitens frysta baselines (plan/eval/template) — människoägda, konstitution §A6
+~/.claude/AUTOPILOT        trappans kill-switch: off|n1|on, saknad fil = off; skrivs endast av människa (§A6)
 ~/.claude/vendored-skills/ facit-kopior av de 9 load-bearing tredjepartsskillsen
                            (designkanonen ×8 inkl. frontend-design + content-humanizer), var och en med
                            VENDORED.md; originalen i skills/ laddas — kopiorna är driftreferens (doctor #9)
@@ -48,6 +53,7 @@ You are the steward of the Nortropic system — the meta-agent that keeps the OT
                            00-guide.md (operatörsguiden) · 01-oversikt.md (nodkarta + hårda stopp +
                            artefaktkedjan) · 02-agenter.md · 03-regelverk.md · 04-justeringskarta.md ·
                            05-beslutslogg.md (en rad per applicerat förslag) · 06-scope.md (ringmodellen) ·
+                           07-konstitution.md (v15: §A aldrig självmodifierbart · §B trappans lagar) ·
                            arkiv/ (fryst: systemplan.md, lokal-flytt.md, hantverkare-profil-v13.md).
                            Doctor #12 vaktar drift; förslag bär
                            fältet Docs-påverkan och appliceras IHOP med sin docs-uppdatering
@@ -149,6 +155,7 @@ Inputs: the project directory (review reports, HANDOVER.md, PROJECT-BRIEF.md, **
 1. **Bibliotekarien — skill- & MCP-inventering.** (i) Lista ALLA installerade skills (`ls ~/.claude/skills/` + plugin-skills synliga via Skill-verktyget) OCH anslutna MCP-servrar (`claude mcp list`). (ii) Jämför mot refererade: skillnamn i agentkroppar/workflows, `mcp__`-tokens i tools-rader. (iii) Varje OREFERERAD skill/MCP klassas: (a) **placeringsförslag** (agent + förladdad/obligatoriskt steg/eskalering respektive tools-deklaration, EN menings motivering knuten till rubrikkriterium eller känt fynd) eller (b) **"irrelevant för pipelinen — ignorera"** med motivering — bulk-gruppering per domän tillåten för (b). (iv) Omvänt: refererade skills/MCP:er utan användningsspår över ≥2 projekt → strykningskandidater. (v) **Docs-frågan:** ändrade denna retro (eller något av dess förslag) något som gör en fil i `docs/` eller `README.md` inaktuell? Om ja → fyll i **Docs-påverkan** i det berörda förslaget, eller skapa ett separat docs-synk-förslag med den exakta ändringen. Redovisas i STEWARD-REPORT.md under **"Skill- & MCP-inventering"**. Propose-only.
 2. **ENGÅNGS — verify-kalibrering (aktiv tills genomförd):** under nästa kundbygge, kör `/nortropic-review` OCH `/nortropic-review --no-verify` på **samma commit** (en gång, vid en mellanliggande granskning). Spara båda rapporterna i projektmappen. Döm sedan mekaniskt per **Beslutsreglerna** i `nortropic-retro/references/verify-kalibrering.md` och ange förväntad besparing i % (usage-loggen). När genomförd: föreslå (propose-only) att detta steg stryks härifrån.
 3. **Usage-loggen (mätryggraden):** be användaren klistra in `/usage` per-agent/per-skill-nedbrytningen för perioden. Logga datum, projekt, agent, förbrukning i `~/Workflow/usage-log.md` (inkl. per-körnings-tabellen för review-körningar). Besvara i STEWARD-REPORT: **"var sitter kostnaden, ändrades fördelningen sedan förra klienten?"** Kostnadsvakten, verify-besparingen och Sonnet-trappan hämtar sina siffror härifrån — inga kostnadsförslag utan logg-rader.
+4. **Trappan & måtten (meta-tillsyn, v15 — docs/07 §B8):** (i) läs `~/Workflow/AUTO-DIGEST.md` — obligatoriskt; gå igenom varje rad sedan senaste CHECKPOINT-ackningen och redovisa dem under en egen STEWARD-REPORT-rubrik **"Trappan & måtten"**. (ii) Ställ Goodhart-frågan uttryckligen till människan: *"mäter måtten (eval-rubriken, verify-suitens baselines i `tests/fixtures/`, zonlistorna) fortfarande det vi bryr oss om — eller har någon N2-ändring optiskt förbättrat siffror utan att förbättra sajter?"* Människan granskar MÅTTEN, inte bara ändringarna. (iii) Påminn om acken: raden `CHECKPOINT <datum> · t.o.m. <digest-id>` i `docs/05-beslutslogg.md` — utan den når nattskiftet taket (§B5). Ingen digest eller inga nya rader = säg det ärligt under rubriken.
 
 **Stående regler (utvärdera varje retro):**
 1. Eval-kriterium 3 (Svensk copy-kvalitet) under målet ≥2 klienter i rad → föreslå `content-designer` till `model: fable`.

@@ -1,12 +1,12 @@
 # Operatörsguiden
 
-Senast verifierad mot systemet: 2026-07-19 · v14 (denna commit)
+Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
 
 Det här är guiden för dig som kör Nortropic-systemet: en operatör, en sajt i taget. Den är författad ur systemfilerna själva — varje avsnitt pekar på filen där regeln faktiskt bor, och när guiden och en systemfil säger olika saker är det systemfilen som gäller. Guiden förklarar hur du använder systemet och varför det ser ut som det gör; den exakta nodkartan finns i [01-oversikt.md](01-oversikt.md), agenterna i [02-agenter.md](02-agenter.md) och de hårda reglerna med källhänvisningar i [03-regelverk.md](03-regelverk.md).
 
 ## Systemets idé
 
-Tre principer bär allt. Den första är att **stewarden föreslår, människan godkänner**. Meta-agenten `nortropic-steward` får diagnostisera hela systemet men aldrig ändra det — den skriver förslag som du godkänner och som huvudsessionen sedan applicerar och committar (`agents/nortropic-steward.md`, HARD WRITE POLICY). Det är styrning, inte blygsamhet: ett system som skriver om sig självt utan mänskligt godkännande driftar.
+Tre principer bär allt. Den första är att **stewarden föreslår, människan godkänner** — med v15:s enda, konstitutionsgrindade undantag: självförbättringstrappan. Meta-agenten `nortropic-steward` diagnostiserar hela systemet och skriver förslag som du godkänner och som huvudsessionen applicerar och committar (`agents/nortropic-steward.md`, HARD WRITE POLICY); trappans två lägen får därutöver självapplicera en uttömmande vitlistad ändringsklass, grindat av `AUTOPILOT` och hårt avgränsat av [07-konstitution.md](07-konstitution.md) — se avsnittet Självförbättringstrappan nedan. Godkännandet per ändring ersätts där av mekaniska grindar, regressionssviten och din granskning i efterhand via digesten; ett system som skriver om sig självt UTAN de grindarna driftar fortfarande.
 
 Den andra är att **kvalitet mäts, inte känns**. Varje färdig sajt poängsätts 0–100 mot en versionerad rubrik (`skills/nortropic-eval/references/eval-rubric.md`, just nu v2.0.0) med elva viktade kriterier — v14 lade till kriterium 9 Visuell distinktion, så v2-totaler jämförs aldrig rakt av med v1.x. Poängen är jämförbar mellan klienter, och varje steward-förslag måste namnge vilket rubrikkriterium det förväntas förbättra — annars taggas det "nice-to-have, avvakta" (`agents/nortropic-steward.md`, Judgment rules).
 
@@ -61,6 +61,14 @@ Briefens §5 bär det obligatoriska fältet **Motion-nivå**: `ingen`, `subtil` 
 `/nortropic-retro` forkar stewarden i två lägen. **Doctor** (skope `system`) är den mekaniska hälsokontrollen: tolv numrerade kontroller från frontmatter-parsning och workflow-kompilering till modellkontraktet, vendored-drift, usage-loggtäckning, cache-hygien och docs-referensintegritet (`agents/nortropic-steward.md`, MODE: doctor). **Retro** (skope projektmapp) läser projektets rapporter, EVAL-RESULT och agentminnen, jämför rubrikpoäng mot tidigare klienter och kör tre obligatoriska retrosteg i ordning: bibliotekarien (skill- och MCP-inventering — installerat jämförs mot refererat, varje orefererad skill klassas), det aktiva engångssteget verify-kalibrering, och usage-loggen. Minneskurateringen är också obligatorisk: varje minnespost klassas generell/kundspecifik/föråldrad och redovisas under "Minneshälsa". Varje STEWARD-REPORT avslutas med **"Största hävstången"** — DEN enskilda förändring som betalar sig mest just nu, en förändring, inte en lista.
 
 Systemändringar hör hemma **mellan kunder, efter retro**. Det är cache-hygienregeln (doctor #11): stabila systemfiler ger prompt-cache-träffar på ungefär en tiondel av fullpris och reproducerbara byggen, så systemcommits mitt i ett aktivt kundbyggefönster flaggas.
+
+## Självförbättringstrappan (v15)
+
+Trappan låter systemet förbättra sig självt utan dig i varje loop — utan att måtten, juridiken eller grindarna någonsin lämnar dina händer. Lagarna bor i [07-konstitution.md](07-konstitution.md): §A är det som ALDRIG självmodifieras, §B är trappans regler. Kill-switchen är filen `AUTOPILOT` i repo-roten: `off` (default — ingen självapplicering), `n1` (endast **Vaktmästaren**: mekanisk synk per uttömmande vitlista — docs-synk, trasiga pekare, retro-inbox- och usage-logg-rader, typos i prosa, beslutslogg-rader för redan applicerade ändringar), `on` (även **Nattskiftet**: fyra zoner — additiv bransch-antislop-skörd med källnot, inspirationskällor med belägg, förtydligande skill-exempel, semantiskt neutrala prosaförtydliganden). Du byter nivå genom att redigera filen och committa — ingen mod rör den någonsin.
+
+Nattskiftet är dessutom låst bakom **aktiveringsgrinden**: det vägrar köra tills raden `RETRO-1-GENOMFÖRD <datum>` finns i [05-beslutslogg.md](05-beslutslogg.md) — retro #1 kalibrerar zonlistorna manuellt först. Varje N1-ändring kräver grön doctor före och efter; varje N2-ändring kräver att regressionssviten `/nortropic-verify-suite` (doctor + plan-torrtest + eval-stabilitet + template-spotcheck mot frysta baselines i `tests/fixtures/`) är icke-försämrad. Försämring ger auto-revert, en incidentfil och modstopp.
+
+Dina stående sysslor är tre. **Digesten:** allt trappan gör landar i `~/Workflow/AUTO-DIGEST.md` — läs den veckovis; retron läser den obligatoriskt (retrosteg 4, med den uttryckliga Goodhart-frågan: mäter måtten fortfarande det vi bryr oss om?). **Checkpointen:** nattskiftet får göra max 3 ändringar innan du ackat med raden `CHECKPOINT <datum> · t.o.m. <digest-id>` i beslutsloggen — sedan blir allt förslag tills du läst. **Incidenter:** finns `~/Workflow/AUTO-INCIDENT.md` är läget stoppat och väntar på dig — granska, åtgärda vid behov, radera filen för att återaktivera. Nya baselines klipps med `/nortropic-verify-suite --cut-baseline` (skriver kandidater till `~/Workflow`); att committa dem till `tests/fixtures/` är alltid din handling (§A6).
 
 ## Docs-underhållet (nytt i v9)
 

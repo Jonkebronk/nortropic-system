@@ -1,6 +1,6 @@
 # Justeringskartan — ändra med öppna ögon
 
-Senast verifierad mot systemet: 2026-07-19 · v14 (denna commit)
+Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
 
 Varje större designval i systemet kostar något och köper något. Det här dokumentet finns för att du ska kunna skruva — eller ta bort — ett val medvetet: här står vad det kostar, vad det köper, exakt var man skruvar, och vad som sannolikt händer utan det. Ändringar går som vanligt via steward-förslag och commit; historiken bakom varje val finns i [05-beslutslogg.md](05-beslutslogg.md).
 
@@ -38,6 +38,13 @@ Varje större designval i systemet kostar något och köper något. Det här dok
 **Vad det köper:** obligatoriska steg som inte kan ändras under fötterna på systemet. Kedjan är obligatorisk ⇒ bärande ⇒ vendorad: det design-reviewer och content-designer MÅSTE ladda har ett fruset facit med innehållshash, och varje uppströmsändring blir en medveten granskning i stället för tyst drift (`vendored-skills/*/VENDORED.md`, doctor #9).
 **Exakt fil att skruva i:** `vendored-skills/` (kopiorna) och `agents/nortropic-steward.md` (doctor #3-listan över vilka som är obligatoriska + doctor #9-diffen).
 **Om det tas bort:** en marketplace-uppdatering av t.ex. `content-humanizer` ändrar systemets beteende utan spår — kvalitetsskiften som inte går att härleda till någon commit i det här repot.
+
+## Självförbättringstrappan (v15 — vaktmästaren + nattskiftet under konstitutionen)
+
+**Vad det kostar:** en full verify-suite-körning per N2-ändring (doctor + plan-torrtest + eval + template-spotcheck — plan-torrtestet är den dyra proben), doctor före/efter varje N1-ändring (batchning halverar), granulära commits, och din stående digest-läsning + CHECKPOINT-ack.
+**Vad det köper:** driftfria docs och ackumulerande förbättringar utan människan som flaskhals i varje loop — med måtten, juridiken och grindarna kvar i mänsklig ägo (07-konstitution §A) och all granskning flyttad till efterhand (digesten) i stället för borttagen.
+**Exakt fil att skruva i:** `AUTOPILOT` i repo-roten (off|n1|on — nivån), `docs/07-konstitution.md` §B (lagarna — alltid människa, alltid HÖGRISK-commit), MODE-sektionerna i `agents/nortropic-steward.md` (vitlistan/zonerna — §A-ytan får aldrig in), `tests/fixtures/` (baselines — endast människa, kandidater via `--cut-baseline`).
+**Om det tas bort:** sätt `AUTOPILOT` till `off` — trappan är död utan att något annat rörs; kvar är antingen manuellt synk-slit (vaktmästarens arbetslista blir din) eller docs-drift. Tas i stället GRINDARNA bort (suiten, taket, §A) är det inte trappan som försvinner utan styrningen — det läget är aldrig ett justeringsval, det är regel 20-brott.
 
 ## En-biblioteksregeln (Motion ELLER GSAP, aldrig båda)
 

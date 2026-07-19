@@ -1,8 +1,8 @@
 # nortropic-system
 
-Senast verifierad mot systemet: 2026-07-19 · v14 (denna commit)
+Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
 
-Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som bara får föreslå — aldrig ändra.
+Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som föreslår — och som sedan v15 dessutom självapplicerar en strikt avgränsad ändringsklass under konstitutionen ([docs/07-konstitution.md](docs/07-konstitution.md)), grindat av kill-switchen `AUTOPILOT` (default `off`); allt annat kräver mänskligt godkännande.
 
 Det här repot är systemets källa till sanning: i drift är repo-roten operatörens `~/.claude`, och `.gitignore` är en vitlista som spårar enbart systemfilerna.
 
@@ -31,8 +31,10 @@ Detaljerad nodkarta med agent, modell och effort per nod finns i [docs/01-oversi
 
 - **`agents/`** — de 7 agenterna: `project-planner`, `stack-builder`, `content-designer`, `design-reviewer`, `seo-optimizer`, `qa-launcher`, `nortropic-steward`. Frontmattern bär modellkontraktet (model/effort) som doctor #8 vaktar.
 - **`skills/`** — 9 skills: tre pipeline-steg som bara människan får trigga (`nortropic-plan`, `nortropic-init`, `nortropic-retro`, alla med `disable-model-invocation: true`) och sex kunskaps-/grindskills (`nortropic-stack`, `nortropic-antislop`, `nortropic-seo-lokal`, `nortropic-prelaunch`, `nortropic-eval`, `gsap-build`).
-- **`workflows/`** — 2 workflows: `nortropic-review.js` (3 granskningslinser + adversariell verifiering) och `nortropic-launch.js` (freshness-grind → 7 granskningslinser → fixloop ≤3 → eval → handover).
+- **`workflows/`** — 3 workflows: `nortropic-review.js` (3 granskningslinser + adversariell verifiering), `nortropic-launch.js` (freshness-grind → 7 granskningslinser → fixloop ≤3 → eval → handover) och `nortropic-verify-suite.js` (v15 — trappans regressionsnät: doctor → plan-torrtest + eval-stabilitet + template-spotcheck mot frysta baselines).
 - **`vendored-skills/`** — facit-kopior av de 9 bärande tredjepartsskillsen (designkanonen ×8 inkl. `frontend-design` + `content-humanizer`), var och en med `VENDORED.md`. Doctor #9 diffar originalen mot kopiorna.
+- **`tests/`** — verify-suitens frysta baselines (`tests/fixtures/`). Människoägda per konstitutionen §A6; kandidater tas fram med `--cut-baseline`, committandet är en mänsklig handling.
+- **`AUTOPILOT`** — trappans kill-switch: `off` | `n1` | `on` (saknad fil = `off`). Skrivs endast av människa; nivåbyte är en commit.
 - **`docs/`** — dokumentationen (denna leverans). Beskriver det systemet ÄR; varje påstående ska gå att spåra till en fil.
 
 ## Dokumentation
@@ -44,4 +46,5 @@ Detaljerad nodkarta med agent, modell och effort per nod finns i [docs/01-oversi
 - [docs/04-justeringskarta.md](docs/04-justeringskarta.md) — vad varje större designval kostar, köper och hur det skruvas
 - [docs/05-beslutslogg.md](docs/05-beslutslogg.md) — beslutslogg (ADR-lite), seedad ur git-historiken och förd framåt vid varje applicerat förslag
 - [docs/06-scope.md](docs/06-scope.md) — ringmodellen: vad som byggs, vad som byggs vid efterfrågan, vad som är nej med hänvisning
+- [docs/07-konstitution.md](docs/07-konstitution.md) — konstitutionen: §A aldrig självmodifierbart, §B självförbättringstrappans lagar
 - [docs/arkiv/](docs/arkiv/) — fryst designhistorik (`systemplan.md`), engångschecklistan för den lokala flytten (`lokal-flytt.md`) och v13-snapshotten av hantverkarprofilen (`hantverkare-profil-v13.md`)
