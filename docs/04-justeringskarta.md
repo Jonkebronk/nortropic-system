@@ -1,6 +1,6 @@
 # Justeringskartan — ändra med öppna ögon
 
-Senast verifierad mot systemet: 2026-07-18 · b68252e
+Senast verifierad mot systemet: 2026-07-19 · v14 (denna commit)
 
 Varje större designval i systemet kostar något och köper något. Det här dokumentet finns för att du ska kunna skruva — eller ta bort — ett val medvetet: här står vad det kostar, vad det köper, exakt var man skruvar, och vad som sannolikt händer utan det. Ändringar går som vanligt via steward-förslag och commit; historiken bakom varje val finns i [05-beslutslogg.md](05-beslutslogg.md).
 
@@ -11,12 +11,12 @@ Varje större designval i systemet kostar något och köper något. Det här dok
 **Exakt fil att skruva i:** `workflows/nortropic-review.js` (Verify-steget) — och kalibreringsprotokollet med mekaniska beslutsregler i `skills/nortropic-retro/references/verify-kalibrering.md` (en skeptiker; skeptiker endast CRITICAL/HIGH; verify endast i launch). Skruva via kalibreringen, inte på känsla.
 **Om det tas bort:** fler falska fynd når rapporten, fixloopen åtgärdar saker som inte är trasiga, och förtroendet för CONFIRMED-etiketten försvinner. `--no-verify` finns redan som kontrollerad väg att mäta exakt detta.
 
-## Designkanonen (7 obligatoriska skills i design-reviewer)
+## Designkanonen (8 obligatoriska skills i design-reviewer) + byggkanonen (v14)
 
-**Vad det kostar:** sju skill-laddningar per granskning — kanonen är den enskilt största kostnadsposten i review-fasen, vilket är precis varför kanon-kostnadsvakten finns (`agents/nortropic-steward.md`, Stående regel 4).
+**Vad det kostar:** åtta skill-laddningar per granskning — kanonen är den enskilt största kostnadsposten i review-fasen, vilket är precis varför kanon-kostnadsvakten finns (`agents/nortropic-steward.md`, Stående regel 4). Byggkanonen (v14) adderar därtill 4–5 skill-laddningar per bygge hos stack-builder/content-designer; usage-loggen visar kostnaden och kostnadsvakten/steward får föreslå trimning MED DATA om en laddning inte mätbart bär sin vikt (samma mönster som verify-kalibreringen).
 **Vad det köper:** granskning mot en extern, stabil kvalitetsribba i stället för granskarens dagsform. `ui-ux-pro-max` fungerar som facit för briefens valda riktning; `find-animation-opportunities` binds till Motion-nivån.
 **Exakt fil att skruva i:** `agents/design-reviewer.md` (processteg 2 — listan över vilka som laddas). Kostnadsvaktens avsedda justering: flytta de två minst bidragande skillsen tillbaka till eskalering, med fynddata som underlag.
-**Om det tas bort:** granskningarna konvergerar mot generiskt tyckande, slop-mönster slinker igenom och eval-kriterierna 1/3/9 faller över tid. Kanonen gjordes obligatorisk för att "when depth is needed"-eskalering i praktiken aldrig triggades (v7 L3).
+**Om det tas bort:** granskningarna konvergerar mot generiskt tyckande, slop-mönster slinker igenom och eval-kriterierna 1/3/9/10 faller över tid. Kanonen gjordes obligatorisk för att "when depth is needed"-eskalering i praktiken aldrig triggades (v7 L3).
 
 ## Modellmatrisen (Fable där systemet tänker, Opus där det bygger)
 
@@ -32,9 +32,9 @@ Varje större designval i systemet kostar något och köper något. Det här dok
 **Exakt fil att skruva i:** `workflows/nortropic-review.js` (Scope-fasen + kadensregeln i `whenToUse`) och `workflows/nortropic-launch.js` (Freshness-fasen).
 **Om det tas bort:** antingen fullpris för varje mellangranskning, eller — om man tar bort freshness-grinden — launch mot en rapport som inte beskriver nuvarande commit. Det senare är dyrare: grindar som godkänner fel bygge upptäcks först av kunden.
 
-## Vendoring (facit-kopior av de 8 bärande skillsen)
+## Vendoring (facit-kopior av de 9 bärande skillsen)
 
-**Vad det kostar:** åtta kopior att hålla i repot och en diff-kontroll per doctor-körning; upprepade WARNs när marketplace auto-uppdaterar original.
+**Vad det kostar:** nio kopior att hålla i repot och en diff-kontroll per doctor-körning; upprepade WARNs när marketplace auto-uppdaterar original.
 **Vad det köper:** obligatoriska steg som inte kan ändras under fötterna på systemet. Kedjan är obligatorisk ⇒ bärande ⇒ vendorad: det design-reviewer och content-designer MÅSTE ladda har ett fruset facit med innehållshash, och varje uppströmsändring blir en medveten granskning i stället för tyst drift (`vendored-skills/*/VENDORED.md`, doctor #9).
 **Exakt fil att skruva i:** `vendored-skills/` (kopiorna) och `agents/nortropic-steward.md` (doctor #3-listan över vilka som är obligatoriska + doctor #9-diffen).
 **Om det tas bort:** en marketplace-uppdatering av t.ex. `content-humanizer` ändrar systemets beteende utan spår — kvalitetsskiften som inte går att härleda till någon commit i det här repot.

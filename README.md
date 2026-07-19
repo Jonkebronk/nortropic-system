@@ -1,6 +1,6 @@
 # nortropic-system
 
-Senast verifierad mot systemet: 2026-07-18 · v13 (denna commit)
+Senast verifierad mot systemet: 2026-07-19 · v14 (denna commit)
 
 Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som bara får föreslå — aldrig ändra.
 
@@ -32,7 +32,7 @@ Detaljerad nodkarta med agent, modell och effort per nod finns i [docs/01-oversi
 - **`agents/`** — de 7 agenterna: `project-planner`, `stack-builder`, `content-designer`, `design-reviewer`, `seo-optimizer`, `qa-launcher`, `nortropic-steward`. Frontmattern bär modellkontraktet (model/effort) som doctor #8 vaktar.
 - **`skills/`** — 9 skills: tre pipeline-steg som bara människan får trigga (`nortropic-plan`, `nortropic-init`, `nortropic-retro`, alla med `disable-model-invocation: true`) och sex kunskaps-/grindskills (`nortropic-stack`, `nortropic-antislop`, `nortropic-seo-lokal`, `nortropic-prelaunch`, `nortropic-eval`, `gsap-build`).
 - **`workflows/`** — 2 workflows: `nortropic-review.js` (3 granskningslinser + adversariell verifiering) och `nortropic-launch.js` (freshness-grind → 7 granskningslinser → fixloop ≤3 → eval → handover).
-- **`vendored-skills/`** — facit-kopior av de 8 bärande tredjepartsskillsen (designkanonen ×7 + `content-humanizer`), var och en med `VENDORED.md`. Doctor #9 diffar originalen mot kopiorna.
+- **`vendored-skills/`** — facit-kopior av de 9 bärande tredjepartsskillsen (designkanonen ×8 inkl. `frontend-design` + `content-humanizer`), var och en med `VENDORED.md`. Doctor #9 diffar originalen mot kopiorna.
 - **`docs/`** — dokumentationen (denna leverans). Beskriver det systemet ÄR; varje påstående ska gå att spåra till en fil.
 
 ## Dokumentation
