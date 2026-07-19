@@ -29,7 +29,9 @@ How every Nortropic site is built. Deviations require an explicit reason written
 gh repo create <kebab-name> --private --clone   # 1. repo FIRST
 cd <kebab-name>                                  # 2. scaffold INSIDE the clone
 pnpm create next-app@15 . --ts --tailwind --app --src-dir --use-pnpm   # pin @15 — @latest now resolves past Next 15
-vercel link                                      # 3. Vercel from day one
+cp -r <kundmapp>/referenser/ design-referenser/  # 3. referenstrohet: skärmdumparna följer med bygget (+ kopiera in briefens Referensöversättning)
+echo "design-referenser/" >> .vercelignore       #    internt arbetsmaterial — deployas ALDRIG
+vercel link                                      # 4. Vercel from day one
 git add -A && git commit -m "chore: scaffold" && git push -u origin main
 ```
 
@@ -63,6 +65,7 @@ src/
     profile.ts                    # kalibreringsfacit ur briefens §7 — SINGLE SOURCE för primärhandling/kvitton/schema/SEO-läge/juridikflaggor
     services.ts / areas.ts / testimonials.ts / faq.ts
   lib/
+design-referenser/                # repo-ROTEN: kopia av <kundmapp>/referenser/ + Referensöversättningen — INTERNT ARBETSMATERIAL, deployas ALDRIG (utanför src/app och public/, dessutom i .vercelignore). Stack-builder öppnar dessa före varje nyckelsektion; design-reviewern jämför byggt mot dem (Referenstrohet-linsen)
 ```
 
 No `(site)` route group — header/footer/phone live in the root `app/layout.tsx` so `not-found.tsx` and `error.tsx` inherit full chrome and the phone number. Matches `references/file-structure.md` and the shipped build.
