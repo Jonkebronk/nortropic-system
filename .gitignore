@@ -5,6 +5,7 @@
 !/README.md
 !/CLAUDE.md
 !/docs/
+/docs/*.db
 !/agents/
 !/workflows/
 !/tests/
