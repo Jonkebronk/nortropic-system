@@ -1,6 +1,6 @@
 # Justeringskartan — ändra med öppna ögon
 
-Senast verifierad mot systemet: 2026-07-19 · v15 (denna commit)
+Senast verifierad mot systemet: 2026-07-20 · v17 (denna commit)
 
 Varje större designval i systemet kostar något och köper något. Det här dokumentet finns för att du ska kunna skruva — eller ta bort — ett val medvetet: här står vad det kostar, vad det köper, exakt var man skruvar, och vad som sannolikt händer utan det. Ändringar går som vanligt via steward-förslag och commit; historiken bakom varje val finns i [05-beslutslogg.md](05-beslutslogg.md).
 
@@ -45,6 +45,23 @@ Varje större designval i systemet kostar något och köper något. Det här dok
 **Vad det köper:** driftfria docs och ackumulerande förbättringar utan människan som flaskhals i varje loop — med måtten, juridiken och grindarna kvar i mänsklig ägo (07-konstitution §A) och all granskning flyttad till efterhand (digesten) i stället för borttagen.
 **Exakt fil att skruva i:** `AUTOPILOT` i repo-roten (off|n1|on — nivån), `docs/07-konstitution.md` §B (lagarna — alltid människa, alltid HÖGRISK-commit), MODE-sektionerna i `agents/nortropic-steward.md` (vitlistan/zonerna — §A-ytan får aldrig in), `tests/fixtures/` (baselines — endast människa, kandidater via `--cut-baseline`).
 **Om det tas bort:** sätt `AUTOPILOT` till `off` — trappan är död utan att något annat rörs; kvar är antingen manuellt synk-slit (vaktmästarens arbetslista blir din) eller docs-drift. Tas i stället GRINDARNA bort (suiten, taket, §A) är det inte trappan som försvinner utan styrningen — det läget är aldrig ett justeringsval, det är regel 20-brott.
+
+## Obemannat läge (v16 — hela kundflödet utan människa mellan noderna)
+
+**Vad det kostar:** förlorad löpande smakkontroll vid nod 3 — ett obemannat bygge kan landa i en §5-riktning du inte godkänt och kräva omtag — och fakta/juridik måste samlas till `FINAL-TOUCHES.md` i efterhand i stället för att lösas längs vägen.
+**Vad det köper:** obemannad genomströmning (research in på kvällen → färdig preview på morgonen) — turbon för gratis-byggen och omdömesmotorn; billig precis när insatsen är låg och nod-3-försäkringen inte är värd sin tid.
+**Villkorade stopp (det som ändå pausar):** master-workflown lämnar ALLTID över till människa vid saknade obligatoriska research-fält (input-grinden), ohanterad eller scope-nej juridikflagga, eller en kvarstående STRATEGISK öppen fråga. Bara FAKTA/BESLUT deferreras till FINAL-TOUCHES — riktnings- och juridikrisk stoppar.
+**Invarianten som aldrig rörs:** deploy/launch trycks ALLTID av en människa — `nortropic-autobygg.js` saknar deploy-förmåga by design (nod 8 juridik-signoff + nod 9 `/vercel:deploy` förblir mänskliga). Obemannat läge hålls dessutom begreppsligt ÅTSKILT från självförbättringstrappan/AUTOPILOT (docs/07 §B1): `AUTOPILOT` styr systemets självförbättring, research-radens `Läge` styr kundflödet — de blandas aldrig.
+**Exakt fil att skruva i:** research-radens `Läge: obemannat` (default `bemannat`), `workflows/nortropic-autobygg.js` (orkestreringen + de tre villkorade stoppen), `workflows/nortropic-final-touches.js` (slutlistan) och frågeklassningen STRATEGISK/FAKTA/BESLUT i `agents/project-planner.md`.
+**Om det tas bort / när bemannat:** utelämna `Läge`-raden helt → alltid bemannat, dagens nod-3/nod-8-flöde oförändrat. Välj obemannat för gratis-byggen och låginsatskunder, bemannat för betalande — nod-3-godkännandet är billig försäkring mot en sajt i fel riktning.
+
+## Tvålagers-dokumentation (v17 — enkelt nybörjarlager + avancerat)
+
+**Vad det kostar:** ett extra dokumentationslager att hålla vid liv; doctor-delkontroll #12(e) + regel 22 som löpande börda; disciplinen att synka båda lagren i SAMMA commit när teknisk dokumentation ändras.
+**Vad det köper:** bus-factor-1-mildring — systemet blir förståeligt och överlämningsbart utan att ägaren sitter bredvid; en enda ingång ([00-borja-har.md](00-borja-har.md), fabriks-metafor) som vem som helst begriper på ett svep.
+**Regeln som håller det:** enkla lagret läses FÖRE och uppdateras i samma commit som teknisk dokumentation ändras (regel 22); doctor #12(e) WARN:ar om det avancerade lagret drivit ifrån det enkla; `CLAUDE.md` pekar mot ingången (aldrig förklarar — den laddas varje tur och kostar kontextbudget).
+**Exakt fil att skruva i:** `docs/00-borja-har.md` (enkla lagret), `CLAUDE.md` (pekaren), regel 22 i `docs/03-regelverk.md`, och doctor #12(e) i `agents/nortropic-steward.md`.
+**Gränsen:** regel 22 är en dokumentationsregel, INTE en konstitutionsinvariant — den skyddar inte kundlöften eller kvalitet, bara begriplighet. Därför ligger den bland de vanliga reglerna, aldrig i konstitutionens §A.
 
 ## En-biblioteksregeln (Motion ELLER GSAP, aldrig båda)
 
