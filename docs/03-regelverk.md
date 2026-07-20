@@ -1,6 +1,6 @@
 # Regelverket — systemets hårda regler
 
-Senast verifierad mot systemet: 2026-07-20 · v16 (denna commit)
+Senast verifierad mot systemet: 2026-07-20 · v17 (denna commit)
 
 Det här är reglerna som aldrig är förhandlingsbara i det dagliga arbetet — de ändras bara genom ett applicerat steward-förslag. Kolumnen "Exakt fil" pekar på filen där regeln bor; varje sökväg ska existera i repot. Motiven är komprimerade ur källfilerna och beslutsloggen ([05-beslutslogg.md](05-beslutslogg.md)).
 
@@ -28,6 +28,8 @@ Det här är reglerna som aldrig är förhandlingsbara i det dagliga arbetet —
 | 20 | **Konstitutionen (v15)**: docs/07 §A är aldrig självmodifierbart (invarianterna, eval-rubriken, grindarnas kravnivåer/severity, juridiken, affären, styrningen själv, profilernas kvittolistor/juridikflaggor); trappan lyder §B (kill-switch `AUTOPILOT` default `off`, aktiveringsgrind, digest, checkpoint-tak 3, regressionslagen, incident-stopp, meta-tillsyn); verify-suiten och dess baselines är människoägda, och `[AUTO-N1]`/`[AUTO-N2]`-commits på §A-yta fälls mekaniskt av doctor #5 | Självförbättring är bara säker när gränsen är skriven, mekaniskt kontrollerbar och omöjlig att flytta inifrån — ett regressionsnät som kan redigeras av det som ska fångas är inget nät | `docs/07-konstitution.md` + `agents/nortropic-steward.md` (doctor #5 + trappmoderna) + `workflows/nortropic-verify-suite.js` |
 
 | 21 | **Obemannat läge klassar öppna frågor och stoppar på riktnings-/juridikrisk (v16)**: varje öppen fråga taggas STRATEGISK/FAKTA/BESLUT (ohanterad/scope-nej juridik = alltid STRATEGISK); `/nortropic-autobygg` kör kund-flödet utan mänskligt nod-3-stopp ENDAST i `Läge: obemannat` OCH när §7 saknar ohanterad/scope-nej juridikflagga OCH ingen STRATEGISK fråga kvarstår — annars överlämnas till människa. FAKTA/BESLUT skjuts till FINAL-TOUCHES. Deployar aldrig (nod 8+9 mänskliga); Läge rör aldrig profile.ts | Autonomi utan riktnings-/juridikstopp bygger fel sajt tyst; klassningen gör stoppet mekaniskt och testbart, och juridik/deploy förblir mänskligt | `agents/project-planner.md` (Rules: frågeklassning + §6 Läge) + `workflows/nortropic-autobygg.js` + `workflows/nortropic-final-touches.js` + `skills/nortropic-plan/SKILL.md` |
+
+| 22 | **Dokumentationen har två lager (v17)**: enkelt (`docs/00-borja-har.md`) · avancerat (`docs/01`–`07` + `README.md`). Det enkla lagret läses FÖRE och uppdateras i SAMMA commit som teknisk dokumentation ändras — lagren får aldrig glida isär | Bus factor 1: en nybörjare måste kunna förstå systemet utan ägaren; ett enkelt lager som driver ifrån blir en lögn med självförtroende | `docs/00-borja-har.md` + `CLAUDE.md` + `agents/nortropic-steward.md` (doctor #12e) |
 
 ## Invarianterna (v13 — flyttas ALDRIG till kalibreringsprofilen)
 

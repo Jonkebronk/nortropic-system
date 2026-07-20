@@ -1,0 +1,1 @@
+Detta system har två dokumentationslager. Läs docs/00-borja-har.md för överblicken innan du ändrar dokumentation, och uppdatera den filen i samma veva som du ändrar teknisk dokumentation så lagren aldrig glider isär.
