@@ -1,0 +1,64 @@
+# Börja här — Nortropic från noll
+
+Senast verifierad mot systemet: 2026-07-20 · v17 (denna commit)
+
+Det här är ingången för dig som aldrig sett systemet förut. Läs den i ett svep, så förstår du vad Nortropic är och hur det hänger ihop — utan en enda insider-term. Det här dokumentet ersätter inte den tekniska dokumentationen (docs/01–07 och README); det är kartan du läser innan du dyker ner i den. Vill du veta exakt hur något fungerar finns länkar sist.
+
+## Fabriken
+
+Tänk dig en liten fabrik som bygger färdiga hemsidor åt svenska småföretag — rörmokare, frisörer, hunddagis, elektriker. Du matar in ett papper med fakta om kunden i ena änden, och ut kommer en färdig, granskad hemsida i andra änden. Fabriken sköter det mesta av arbetet själv; du (ägaren) fattar de viktiga besluten vid några få kontrollpunkter. Det är byggt för en person som kör en kund i taget.
+
+## De 7 robotarna
+
+Fabriken har sju robotar. Var och en är riktigt bra på EN sak och gör bara den:
+
+- **Planeraren** (project-planner) — läser kundpappret och gör upp strategin: vilka sidor sajten ska ha, vad den ska få besökaren att göra, och hur den ska se ut.
+- **Byggaren** (stack-builder) — snickrar ihop själva sajten enligt planen: skapar kodförrådet, bygger sidorna, kopplar in kontaktformuläret.
+- **Textförfattaren** (content-designer) — skriver all svensk text i kundens ton, så den låter mänsklig och inte som en robot.
+- **Design-granskaren** (design-reviewer) — tittar kritiskt på utseendet och säger till om något ser generiskt, billigt eller "AI-gjort" ut.
+- **SEO-roboten** (seo-optimizer) — ser till att kunden går att hitta på Google när någon söker "[tjänst] i [stad]".
+- **Kontrollanten** (qa-launcher) — den sista besiktningen före lansering: funkar telefonknappen, kommer offertmejlet fram, är sajten snabb och trygg?
+- **Förmannen** (nortropic-steward) — robotarnas egen chef. Bygger inga kundsajter, utan håller de andra sex robotarna skarpa och föreslår förbättringar av själva fabriken.
+
+## Stafettloppet
+
+En kund går genom fabriken som ett stafettlopp — pinnen skickas från steg till steg. De tre ställen där **DU** måste kliva in är fetmarkerade:
+
+```
+Kundpapper (research)  →  Planeraren gör strategi  →  DU GODKÄNNER STRATEGIN (kontrollpunkt/nod 3)
+   →  Byggaren bygger sajten  →  Textförfattaren skriver texterna
+   →  Granskning (design + SEO + kod)  →  De 7 portarna/grindarna
+   →  DU SIGNERAR JURIDIKEN (nod 8)  →  Lansering  →  DU trycker publicera
+```
+
+Robotarna gör allt däremellan. Du behövs bara vid strategigodkännandet, juridiksigneringen och den slutliga publiceringen — de besluten får en maskin aldrig ta åt dig.
+
+## Vakterna vid portarna
+
+Innan en sajt får lanseras måste den passera sju portar — som vakter som säger **STOPP tills det är bra nog**. De kontrollerar sådant som: att telefonknappen faktiskt ringer, att offertformuläret verkligen skickar ett mejl som kommer fram, att sajten laddar snabbt, att den funkar på mobilen, att den följer lagen. En sajt som inte klarar en port släpps inte vidare. Grindarna sänks aldrig för att få igenom något — de är själva kvalitetsgarantin.
+
+## Grundlagen
+
+Överst står en grundlag (konstitutionen) — regler som robotarna **ALDRIG får ändra själva**, hur smarta de än blir. Till exempel: aldrig ljuga om en kund, aldrig hitta på betyg eller certifikat som inte finns, och juridiska bedömningar får bara en människa göra. Grundlagen skyddar kundernas förtroende. Bara du, ägaren, får ändra den — och bara medvetet, aldrig i förbifarten.
+
+## Fabriken städar på natten (v15)
+
+Fabriken kan förbättra sig själv lite i taget — den "städar på natten": rättar små fel i sin egen dokumentation, putsar formuleringar, lär sig av gårdagens jobb. Men bara **småsaker**, aldrig grundlagen och aldrig kvalitetskraven. Allt den ändrar skrivs upp på en lapp (digesten) som du läser efteråt, så du alltid ser vad som hänt. Och det finns en strömbrytare: självstädningen är avstängd tills du själv slår på den.
+
+## Fabriken kan bygga själv (v16)
+
+För enkla eller gratis-jobb kan fabriken köra hela vägen på egen hand — från kundpapper till en färdig förhandsversion — utan att stanna och fråga dig vid varje steg. Den samlar i stället ihop alla frågor och saknade fakta till EN slutlista som du betar av. Men den **publicerar aldrig själv**: juridiksigneringen och den sista publicera-knappen trycker alltid en människa. Och stöter den på något som påverkar riktningen eller kräver ett juridiskt beslut, stannar den och lämnar över till dig.
+
+## Vill du djupare?
+
+Det här var översikten. Vill du förstå exakt hur något fungerar, fortsätt till det tekniska lagret:
+
+- [docs/00-guide.md](00-guide.md) — operatörsguiden: hur du kör systemet steg för steg, och varför det ser ut som det gör.
+- [docs/01-oversikt.md](01-oversikt.md) — nodkartan (alla tolv steg), de hårda stoppen och artefaktkedjan.
+- [docs/02-agenter.md](02-agenter.md) — de 7 robotarna i detalj: roll, modell, obligatoriska steg.
+- [docs/03-regelverk.md](03-regelverk.md) — systemets hårda regler, var och en med motiv och källa.
+- [docs/04-justeringskarta.md](04-justeringskarta.md) — vad varje större val kostar och köper, om du vill skruva.
+- [docs/05-beslutslogg.md](05-beslutslogg.md) — beslutsloggen: varför systemet blev som det blev.
+- [docs/06-scope.md](06-scope.md) — vad fabriken bygger, vad den bygger på begäran, och vad den säger nej till.
+- [docs/07-konstitution.md](07-konstitution.md) — grundlagen i sin helhet: vad som aldrig får självmodifieras.
+- [README.md](../README.md) — repots ingång med hela nodflödet i en tabell.
