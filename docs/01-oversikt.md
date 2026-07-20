@@ -4,7 +4,7 @@ Senast verifierad mot systemet: 2026-07-20 · v17 (denna commit)
 
 > **Ny här?** Läs [00-borja-har.md](00-borja-har.md) först — hela systemet förklarat från noll utan interna termer. Den här filen och 02–07 är det djupare, tekniska lagret.
 
-Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara människan får trigga), de två workflowsen och två plattformskommandon; tre noder är rent mänskliga stopp. Modell och effort kommer ur respektive agents frontmatter — samma värden som MODELLKONTRAKTET i stewardens SYSTEM MAP och doctor #8 vaktar.
+Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara människan får trigga), de två workflowsen och ett plattformskommando; tre noder är rent mänskliga stopp. Modell och effort kommer ur respektive agents frontmatter — samma värden som MODELLKONTRAKTET i stewardens SYSTEM MAP och doctor #8 vaktar.
 
 ## Nodkartan
 
