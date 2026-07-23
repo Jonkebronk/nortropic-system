@@ -22,6 +22,7 @@ Click = primary conversion event (fire `phone_click` to analytics in a client wr
 **2. `<QuoteForm>`** — client component, posts to the server action:
 - Fields: namn, telefon, epost (optional), tjanst (select from `services`), meddelande + hidden honeypot
 - `useActionState` for pending/success/error states
+- **React 19 `<form action>` auto-reset (KRITISK — annars nollställs fälten vid submit):** en okontrollerad `<form action={formAction}>` nollställer varje okontrollerat fält efter submit. Två sanktionerade motmedel: **(A) enstegsformulär** → returnera de inskickade värdena i felläget + rehydrera fälten via `defaultValue` (rorjour/emiljoh-mönstret); **(B) fler-stegs eller okontrollerade formulär** → styr submit själv: `e.preventDefault()` + `new FormData(form)` + `startTransition(() => formAction(fd))` så React inte auto-resettar (kund noll-mönstret). Utan endera föds sajten med en lead-dödande bugg där ifyllda fält försvinner.
 - Error state ALWAYS renders: "Det gick inte att skicka — ring oss direkt på {PhoneLink}" 
 - Success: "Tack {namn}! Vi ringer dig inom {promise}." + `quote_submit` event
 
