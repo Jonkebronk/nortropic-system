@@ -110,6 +110,7 @@ phase('Fix loop')
 let round = 0
 let freshUrl = (args && args.url) ? args.url : null   // repointed to each round's redeploy
 const fixLog = []
+// Bemannat: upp till 3 autonoma fixrundor med en människa som övervakar. Obemannat (nortropic-autobygg.js) gör MEDVETET bara EN runda och lämnar sedan över — ingen vaktar där, så det är försiktigare. 1-vs-3 är avsiktligt; harmonisera aldrig. Gränsen 3 är §A-skyddad (docs/07 §A3) — ändras bara av människa.
 while (round < 3) {
   const failing = GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL')
   if (!failing.length) break
