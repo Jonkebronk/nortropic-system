@@ -1,6 +1,6 @@
 # Konstitutionen — det som aldrig självmodifieras, och trappans lagar
 
-Senast verifierad mot systemet: 2026-07-20 · v16 (denna commit)
+Senast verifierad mot systemet: 2026-07-23 · v17 (denna commit)
 
 v15 ger stewarden en avgränsad rätt att applicera vissa ändringar själv — självförbättringstrappan: Nivå 1 **Vaktmästaren** och Nivå 2 **Nattskiftet** (MODE-definitionerna i `agents/nortropic-steward.md`). Den rätten är bara säker så länge gränsen är skriven, mekaniskt kontrollerbar och omöjlig att flytta inifrån. Den här filen ÄR gränsen: **§A** listar det som aldrig får självmodifieras — oavsett nivå, oavsett hur grön en regressionskörning ser ut; **§B** är trappans lagar. Designprincipen (ur evaluator-optimizer-mönstret och valideringsgrindad självmodifiering): det mänskliga godkännandet per ändring ersätts av mekaniska grindar, en regressionssvit, granskning i efterhand via digesten — och mänskligt ägande av måtten. Tillsynen flyttas till META-nivån; den tas inte bort.
 
@@ -17,6 +17,7 @@ Fynd i §A-områden blir förslag enligt dagens flöde (`~/Workflow/steward-prop
 5. **Affären** — priser, paketinnehåll, kundlöften och all kundvänd affärscopy på nortropic.se.
 6. **Styrningen själv** — stewardens HARD WRITE POLICY (inklusive den villkorade utvidgningen), trappans regler (§B + MODE-definitionerna), kill-switch-filen `AUTOPILOT` — samt regressionssviten `workflows/nortropic-verify-suite.js` och dess baselines i `tests/fixtures/`. Ett regressionsnät som kan redigeras av det som ska fångas är inget nät; baselines uppdateras endast av människa (kandidater via `--cut-baseline`, se §B6).
 7. **Profilernas kvittolistor och juridikflaggor** — `~/Workflow/profiler/*` §7.4 (Kvittolista & attribution) och §7.7 (Juridikflaggor): kalibrering som bär kundlöften. Gränsdragningen mot trappan: §7.3 Bransch-antislop får ADDERAS av Nattskiftet (zon 1, alltid med källnot) men aldrig strykas eller omformuleras — kvitton och flaggor rörs aldrig.
+8. **Denna fil själv** — `docs/07-konstitution.md` i sin helhet (§A/§B med deras numrering och ordalydelse, samt filens inledande och avslutande prosa). Grundlagen hör i sin egen skyddslista så listan är komplett och självrefererande — okränkbarheten vilar då inte bara på löptexten ovan, slutraden och doctor #5:s grep (som redan täcker hela filen), utan är en numrerad invariant som allt annat. Ändras endast av människa, alltid HÖGRISK-märkt commit (enligt raden överst).
 
 ## §B — Trappans lagar
 
