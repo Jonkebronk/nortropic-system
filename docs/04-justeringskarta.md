@@ -55,6 +55,13 @@ Varje större designval i systemet kostar något och köper något. Det här dok
 **Exakt fil att skruva i:** research-radens `Läge: obemannat` (default `bemannat`), `workflows/nortropic-autobygg.js` (orkestreringen + de tre villkorade stoppen), `workflows/nortropic-final-touches.js` (slutlistan) och frågeklassningen STRATEGISK/FAKTA/BESLUT i `agents/project-planner.md`.
 **Om det tas bort / när bemannat:** utelämna `Läge`-raden helt → alltid bemannat, dagens nod-3/nod-8-flöde oförändrat. Välj obemannat för gratis-byggen och låginsatskunder, bemannat för betalande — nod-3-godkännandet är billig försäkring mot en sajt i fel riktning.
 
+## Fixloop-djup: 3 rundor bemannat vs 1 obemannat
+
+**Vad det kostar:** två workflows som ser lika ut men skiljer sig i rundantal — någon som "harmoniserar" dem kan tro att obemannats enda runda är en ofärdig kopia av launchens tre.
+**Vad det köper:** obemannat saknar mänsklig blick UNDER körningen → en fixloop-runda + överlämning håller autonomin kort och lägger beslutet hos människan tidigt; bemannat har en människa vid ratten och får iterera upp till 3 rundor innan stopp. Asymmetrin är en avsiktlig säkerhetsegenskap, inte en inkonsekvens.
+**Exakt fil att skruva i:** `workflows/nortropic-launch.js` (Fix loop, `while (round < 3)`) och `workflows/nortropic-autobygg.js` (Review, EXAKT EN fixloop). OBS: launch-gränsen 3 är §A-skyddad (`docs/07-konstitution.md` §A3) — höjs/sänks bara av människa, HÖGRISK-commit.
+**Om det tas bort:** höjs obemannat till 3 kör systemet längre utan mänsklig blick (mer autonom risk); sänks bemannat till 1 bränns färre rundor men fler sajter når onödig handover innan de hunnit konvergera.
+
 ## Tvålagers-dokumentation (v17 — enkelt nybörjarlager + avancerat)
 
 **Vad det kostar:** ett extra dokumentationslager att hålla vid liv; doctor-delkontroll #12(e) + regel 22 som löpande börda; disciplinen att synka båda lagren i SAMMA commit när teknisk dokumentation ändras.

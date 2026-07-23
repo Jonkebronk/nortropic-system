@@ -194,7 +194,7 @@ const full = await workflow('nortropic-review', { scope })   // FULL review (fre
 let triage = await agent(triagePrompt(full.report), { label: 'triage:full', phase: 'Review', schema: REVIEW_TRIAGE })
 
 if ((triage.criticalCount || 0) > 0 || (triage.highs || []).length) {
-  // EXAKT EN autonom fixloop, routad som launch.js D1, sekventiell så två agenter aldrig skriver samtidigt.
+  // EXAKT EN autonom fixloop (launch.js kör upp till 3): obemannat saknar mänsklig övervakning under körningen och lämnar därför MEDVETET över efter en runda. Routad som launch.js D1, sekventiell så två agenter aldrig skriver samtidigt. 1-vs-3 är avsiktligt — höj aldrig till 3 för att "matcha" launch.
   const fixes = [...(triage.criticals || []), ...(triage.highs || [])]
   for (const ag of ['stack-builder', 'seo-optimizer', 'content-designer']) {
     const mine = fixes.filter(f => f.fixAgent === ag)
