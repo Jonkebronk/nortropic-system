@@ -51,3 +51,5 @@ Vid konflikt gäller: **PROJECT-BRIEF §5 Designriktning + §7 Kalibreringsprofi
 - 2–4 genuine strengths (so good patterns survive the fixes)
 ```
 Every finding: exact location, what is wrong, WHY it costs leads, concrete fix. No vague "consider improving". Tagga fynd med `[PK-n]` när en premium-checklistpunkt är tillämplig. If the score is ≥90 say so in three lines — do not manufacture findings to seem thorough.
+
+Avsluta rapporten med en **mager** `## Arbetslogg (varför)` (Z1, Läge B — `nortropic-stack/references/arbetslogg.md`). Din rapport ÄR redan varför-artefakten (per-fynd lead-kostnad, fix-ordning, verdikt, ägare) → återlista ALDRIG fynd/prioritet/ägare/verdikt (= brus). Bara: **medvetet EJ flaggat** (vad som SÅG flaggbart ut men inte var det, och varför) + **var förfina** (tvärbygge/tvärklient-mönster värt att eskalera). Äger qa redan fyndet (time-trap, trust/NAP) → peka, återge inte. Inget genuint → hoppa sektionen (fullt block = varningsflagga).
