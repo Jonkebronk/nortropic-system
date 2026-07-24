@@ -18,7 +18,7 @@
 - **Pages report** (Indexering → Sidor) every 2–3 days:
   - "Upptäckt – för närvarande inte indexerad" → normal first days; if stuck >2 veckor on money pages → request indexing again, strengthen internal links
   - "Genomsökt – för närvarande inte indexerad" on area pages → thin content signal: deepen the local content on those pages
-  - Excluded by `noindex` → on a **skarp klient** this is a BUG (staging leftover), fix immediately. On a **TESTKLIENT** noindex is REQUIRED — leave it.
+  - Excluded by `noindex` → on a **skarp klient** this is a BUG (staging leftover), fix immediately — UNLESS `profile.ts` deklarerar `noindexCutover.avsiktlig` och `cutoverSenast` ligger i framtiden (avsiktlig pre-cutover, t.ex. Railway→DNS): väntat till cutover, men MÅSTE bort senast `cutoverSenast` (passerad deadline → åter en BUG). On a **TESTKLIENT** noindex is REQUIRED — leave it.
 - Performance report: first impressions typically day 2–7 for brand queries, weeks 2–6 for "[tjänst] [stad]"
 
 ## Monthly (retainer/handover routine)
