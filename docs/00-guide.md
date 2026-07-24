@@ -70,6 +70,8 @@ Briefens §5 bär det obligatoriska fältet **Motion-nivå**: `ingen`, `subtil` 
 
 Systemändringar hör hemma **mellan kunder, efter retro**. Det är cache-hygienregeln (doctor #11): stabila systemfiler ger prompt-cache-träffar på ungefär en tiondel av fullpris och reproducerbara byggen, så systemcommits mitt i ett aktivt kundbyggefönster flaggas.
 
+**Rollback-rutin:** visar sig en applicerad systemcommit fel → `git revert <hash>` (aldrig `git reset --hard` på delad historik, aldrig force-push — historiken ska bära spåret), kör doctorn tills 0 FAIL, och för en beslutslogg-rad om reverten (den dokumenterar fakta, precis som appliceringen gjorde). Detta är din MANUELLA rutin för människo-applicerade förslag; trappans egna auto-reverts (N1 vid röd doctor, N2 vid försämrad verify-suite) är en separat mekanism med egna incident-/digest-spår.
+
 ## Självförbättringstrappan (v15)
 
 Trappan låter systemet förbättra sig självt utan dig i varje loop — utan att måtten, juridiken eller grindarna någonsin lämnar dina händer. Lagarna bor i [07-konstitution.md](07-konstitution.md): §A är det som ALDRIG självmodifieras, §B är trappans regler. Kill-switchen är filen `AUTOPILOT` i repo-roten: `off` (default — ingen självapplicering), `n1` (endast **Vaktmästaren**: mekanisk synk per uttömmande vitlista — docs-synk, trasiga pekare, retro-inbox- och usage-logg-rader, typos i prosa, beslutslogg-rader för redan applicerade ändringar), `on` (även **Nattskiftet**: fyra zoner — additiv bransch-antislop-skörd med källnot, inspirationskällor med belägg, förtydligande skill-exempel, semantiskt neutrala prosaförtydliganden). Du byter nivå genom att redigera filen och committa — ingen mod rör den någonsin.
