@@ -70,7 +70,7 @@ const REVIEWERS = [
   {
     key: 'seo',
     agentType: 'seo-optimizer',
-    prompt: `Audit ${scope} in audit mode. Check meta templates, H1s, schema validity, NAP consistency against content/business.ts, internal linking, thin area pages, sitemap/robots. Return findings as structured data only — severity CRITICAL for NAP divergence, missing/broken schema on money pages, or noindex accidents; HIGH for template violations; MEDIUM for improvements.\n\nINGÅR (ditt ansvar): meta/titles/H1, schema-validitet, NAP-konsistens mot business.ts, intern länkning, tunna ortssidor, sitemap/robots/canonicals.\nINGÅR INTE (rapportera INTE — annan lens äger): copy-röst och slop-fraser → design-lensen; visuell layout/typografi → design-lensen; kod-buggar → code-lensen.`,
+    prompt: `Audit ${scope} in audit mode. Check meta templates, H1s, schema validity, NAP consistency against content/business.ts, internal linking, thin area pages, sitemap/robots. Return findings as structured data only — severity CRITICAL for NAP divergence, missing/broken schema on money pages, or noindex accidents (a skarp-klient noindex that profile.ts noindexCutover declares is downgraded per the cutover state machine — see seo-optimizer); HIGH for template violations; MEDIUM for improvements.\n\nINGÅR (ditt ansvar): meta/titles/H1, schema-validitet, NAP-konsistens mot business.ts, intern länkning, tunna ortssidor, sitemap/robots/canonicals.\nINGÅR INTE (rapportera INTE — annan lens äger): copy-röst och slop-fraser → design-lensen; visuell layout/typografi → design-lensen; kod-buggar → code-lensen.`,
   },
   {
     key: 'code',
