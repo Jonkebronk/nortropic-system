@@ -8,10 +8,18 @@ Systemets enda sanning om var designinspiration hämtas och hur källorna viktas
 - **Land-book** (land-book.com) — riktiga landningssidor, kategoriserat. Småföretagssajter ÄR landningssidor med undersidor.
 - **One Page Love** (onepagelove.com) — enkelsidiga sajter; använd när kundens omfång är litet — visar hur en sida känns komplett.
 - **Httpster** (httpster.net) — typografidrivna riktiga sajter; använd när §5 behöver en modig men byggbar rubrikriktning.
+- **Haien** (haien.se) — svensk webbyrå renodlad för hantverkare (elektriker, rörmokare, snickare, målare); modern redaktionell design med stark serif-typografi och tydliga tjänste-/ortssido-/kontaktflöden. Direkt peer — studera STRUKTUREN och den mobila lead-ergonomin, inte case-siffrorna (självrapporterade claims).
+- **Siiimple** (siiimple.com) — handkurerat minimalistgalleri sedan 2008 (970+ sajter), filtrerbart på BRANSCH + stil samtidigt (t.ex. restaurang + very minimal) → landa direkt i målsegmentet. Den branschfiltrering SiteInspire/Land-book saknar; vald för ren typografi, whitespace och återhållen design (= PK-checklistan).
 
 ## Komponentnivå
 
 - **Mobbin** (mobbin.com) — verkliga UI-mönster ur skarpa produkter, sökbart per flöde/komponent. Använd för mobilergonomin (PK-7): sticky-CTA, formulär och navigering på 390 px.
+
+## Konverterings-evidens (forskning, inte estetik — informerar §3-strategin och grindarnas dom)
+
+- **GoodUI** (goodui.org) — evidensbaserade konverteringsmönster (formulär, CTA, social proof) med vinnare/förlorare; ger RESONEMANGET bakom färre formulärfält och sticky-CTA. Plocka de förtroendehöjande mönstren, hoppa över urgency/scarcity (antislop).
+- **Baymard Institute** (baymard.com/learn) — empirisk formulär-UX-guldstandard: fältreducering, enkolumnslayout, touch-targets, mobil input-ergonomi — direkt på offert-/kontaktformuläret och 390 px-kravet (PK-7). 450+ gratis learn-artiklar, read-only.
+- **Base UI** (base-ui.com) + **Origin UI** (originui.com) — huvudlösa/tillgängliga komponent-primitiver (Radix/React Aria, shadcn-registerformat) för BYGGET: garanterat korrekt beteende + a11y under den foto-först-design ni själva sätter, kan per konstruktion inte injicera SaaS-slop. *Bygg-resurs, ej estetikreferens — stack-builders domän; noterade här så planner och builder delar en källa.*
 
 ## Varningsflagg
 
