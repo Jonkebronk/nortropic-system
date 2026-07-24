@@ -3,7 +3,7 @@
 Varje skrivande agent (planner, stack-builder, content-designer, seo-optimizer) lägger EN post i `AGENT-LOG.md` i kund-repots rot. Loggen svarar på **en** fråga: *varför gjorde agenten det den gjorde?* Den är inte en statusrapport — sex sådana finns redan (AUTO-DIGEST, usage-log, STEWARD-REPORT, VERIFY-SUITE-RESULT, AUTOBYGG-LOG, FINAL-TOUCHES).
 
 ## Lag 0 — anti-brus (styr allt annat)
-Kan raden härledas ur agentens output — koden, sajten, eller den rapport agenten redan skriver? → Den är **BRUS**. Ta bort den. En rad som bara upprepar vad som syns i resultatet hör inte hemma här.
+Kan raden härledas ur agentens output — koden, sajten, eller den rapport agenten redan skriver? → Den är **BRUS**. Ta bort den. En rad som bara upprepar vad som syns i resultatet hör inte hemma här. **"Output" omfattar också din commit-message och dina kodkommentarer** — de bär ofta redan både vad OCH varför. Står beslutet i commiten: peka på hashen, återge det inte.
 
 ## Asymmetri
 - `utfall=success` → logga BARA det essentiella: de icke-uppenbara valen, ev. en `var förfina`-rad. Några rader, inte fler.
