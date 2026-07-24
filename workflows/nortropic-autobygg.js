@@ -158,7 +158,7 @@ if (planStop.stop) {
 phase('Init')
 const init = await agent(
   `Execute your FULL nortropic-init/stack-builder build from the approved brief at ${plan.briefPath}. ` +
-  `gh repo create <repo-name-from-§6> --private --clone into ~/Workflow/, scaffold Next.js 15 + TS strict + Tailwind 4 + shadcn/ui, ` +
+  `VERIFY you are already inside a cloned PRIVATE kund-<slug> repo (the Verkstadsgolvet onboarding created it with research.md): cwd is a git repo with a remote, the remote name matches kund-<slug>, gh repo view visibility is PRIVATE, and research.md exists. If any check fails, STOP with a precise error naming the failed check and telling the operator to run the Verkstadsgolvet onboarding first — the build NEVER creates the customer repo and never appends -se. Then scaffold Next.js 15 + TS strict + Tailwind 4 + shadcn/ui, ` +
   `write content/ (incl. business.ts + profile.ts from §7), all pages, app/actions/lead.ts, schema, sitemap/robots, Swedish 404/error, vercel link + deploy a preview. ` +
   `Return per schema: repoDir (ABSOLUTE path to the clone), repoUrl, previewUrl, buildPassed, envPending, todoFacts (file:line).`,
   { label: 'init', phase: 'Init', agentType: 'stack-builder', schema: INIT_OUTCOME }
