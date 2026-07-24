@@ -5,6 +5,8 @@ Varje skrivande agent (planner, stack-builder, content-designer, seo-optimizer) 
 ## Lag 0 — anti-brus (styr allt annat)
 Kan raden härledas ur agentens output — koden, sajten, eller den rapport agenten redan skriver? → Den är **BRUS**. Ta bort den. En rad som bara upprepar vad som syns i resultatet hör inte hemma här. **"Output" omfattar också din commit-message och dina kodkommentarer** — de bär ofta redan både vad OCH varför. Står beslutet i commiten: peka på hashen, återge det inte.
 
+**Konsekvens (bevisad mot sex verkliga block):** för de flesta agenter faller `beslut` och `källa→beslut` — de står redan i dina commits, din brief eller din rapport. **Ett block som fyller alla fält är en varningsflagga, inte ett mål.** Loggen förtjänar sin plats bara på residun din output inte kan bära: en ogissad tröskel, en medveten icke-handling, ett återkommande eget mönster, en olöst osäkerhet.
+
 ## Asymmetri
 - `utfall=success` → logga BARA det essentiella: de icke-uppenbara valen, ev. en `var förfina`-rad. Några rader, inte fler.
 - `utfall=friktion` (agenten fastnade, gissade, tvingades avvika, en grind small) → logga FULLSTÄNDIGT. Det är här spåret behövs.
@@ -14,6 +16,7 @@ Kan raden härledas ur agentens output — koden, sajten, eller den rapport agen
 Finns tracen redan i en artefakt agenten producerar? → PEKA dit, återge den inte. Två kopior = två sanningar om samma bygge, och omstrukturering riskerar frysta baslinjer.
 - planner `källa→beslut` = pekare till `PROJECT-BRIEF §Referensöversättning`.
 - stack-builder `friktion` = pekare till byggrapportens §7-read-back-sektion + endast netto-nytt.
+- **Tväragent:** äger en ANNAN agent redan fyndet (t.ex. granskare + qa på samma sak)? Peka eller hoppa — återge inte. Den som loggar sist skapar inte, den återger.
 
 ## Läge A — fil-block (de fyra byggarna)
 Append till `AGENT-LOG.md`. Meta-block för Z2-aggregering (samma HTML-kommentar-konvention som AUTOBYGG-LOG.md):
@@ -32,4 +35,4 @@ De fyra fälten ovan är dashboardens kontrakt (`Verkstadsgolvet/components/Agen
 Skriv blocket **i agentkroppen** (orkestratorn ser aldrig ditt VARFÖR, och det bemannade flödet går inte via autobygg.js). Committa + pusha till `kund-<slug>`-repot — dashboarden läser via GitHub-API, endast `kund-*`-repon.
 
 ## Läge B — rapportsektion (granskarna, read-only)
-*(Finaliseras med proposals 05/06 — design-reviewer + qa-launcher.)* Ingen fil, inga skrivrättigheter: en mager `## Arbetslogg (varför)`-sektion sist i den rapport de redan producerar. Får ALDRIG återlista fynd (= output = brus): bara vad granskningen prioriterade & varför, var granskaren var osäker, och `var förfina`.
+*(Finaliseras med proposals 04 + 06 — design-reviewer + qa-launcher.)* Ingen fil, inga skrivrättigheter: en mager `## Arbetslogg (varför)`-sektion sist i den rapport de redan producerar. Får ALDRIG återlista fynd (= output = brus): bara vad granskningen prioriterade & varför, var granskaren var osäker, och `var förfina`.
