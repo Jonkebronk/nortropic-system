@@ -1,6 +1,6 @@
 # Beslutsloggen (ADR-lite)
 
-Senast verifierad mot systemet: 2026-07-23 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-24 · v17 (denna commit)
 
 En rad per beslut: när, vad, varför, vilken commit. Loggen är seedad bakåt ur git-historiken (motiven är komprimerade ur commit-meddelandena — `git show -s <hash>` ger hela texten) och förs framåt med en ny rad för varje applicerat steward-förslag.
 
