@@ -1,6 +1,6 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-24 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
 
 > **Ny här?** Läs [00-borja-har.md](00-borja-har.md) först — hela systemet förklarat från noll utan interna termer. Den här filen och 02–07 är det djupare, tekniska lagret.
 
@@ -48,3 +48,5 @@ Allt börjar med `research.md` — kundens faktakälla och det enda dokument som
 Granskningarna producerar `REVIEW-REPORT.md`, vars meta-block (commit, datum, scope, mode) är det freshness-grinden i launch läser; kalibreringskörningar skriver i stället `REVIEW-REPORT-CALIBRATION.md` och rör aldrig metan (`workflows/nortropic-review.js`). Launchen producerar fyra saker: `EVAL-RESULT.md` (poängkortet — informativt, aldrig blockerande; grindarna blockerar, evalen mäter), den svenska kundöverlämningen `HANDOVER.md`, samt de klientfyllda `gbp-checklist-klient.md` och `gsc-steg-klient.md` (`workflows/nortropic-launch.js`).
 
 Retron sluter cirkeln: `STEWARD-REPORT.md` med förslag i `~/Workflow/steward-proposals/<datum>/`, där varje applicerat förslag blir en commit i det här repot. EVAL-RESULT-filerna är kedjans minne — retron jämför varje ny klients kriteriepoäng mot tidigare klienter på samma rubrikversion (`agents/nortropic-steward.md`, MODE: retro).
+
+Parallellt med output-kedjan skriver de fyra byggande agenterna en **arbetslogg** i `AGENT-LOG.md` i kund-repots rot, och granskarna en mager `## Arbetslogg (varför)` sist i sin egen rapport (Z1, 2026-07-25). Det är inte en åttonde statusrapport utan residun output inte kan bära — beslut, källa→beslut, friktion, var-förfina — filtrerad vid källan (anti-brus: kan raden härledas ur agentens output är den brus och utesluts). Den matar fabriks-dashboardens agent-inblick, inte pipelinen; formatet + fälten bor i `skills/nortropic-stack/references/arbetslogg.md`.

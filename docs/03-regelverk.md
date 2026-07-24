@@ -1,6 +1,6 @@
 # Regelverket — systemets hårda regler
 
-Senast verifierad mot systemet: 2026-07-24 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
 
 Det här är reglerna som aldrig är förhandlingsbara i det dagliga arbetet — de ändras bara genom ett applicerat steward-förslag. Kolumnen "Exakt fil" pekar på filen där regeln bor; varje sökväg ska existera i repot. Motiven är komprimerade ur källfilerna och beslutsloggen ([05-beslutslogg.md](05-beslutslogg.md)).
 

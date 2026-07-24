@@ -1,6 +1,6 @@
 # nortropic-system
 
-Senast verifierad mot systemet: 2026-07-24 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
 
 Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som föreslår — och som sedan v15 dessutom självapplicerar en strikt avgränsad ändringsklass under konstitutionen ([docs/07-konstitution.md](docs/07-konstitution.md)), grindat av kill-switchen `AUTOPILOT` (default `off`); allt annat kräver mänskligt godkännande.
 

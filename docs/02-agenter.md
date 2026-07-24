@@ -1,6 +1,6 @@
 # Agenterna
 
-Senast verifierad mot systemet: 2026-07-24 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
 
 Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna.
 
