@@ -1,6 +1,6 @@
 # Börja här — Nortropic från noll
 
-Senast verifierad mot systemet: 2026-07-24 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
 
 Det här är ingången för dig som aldrig sett systemet förut. Läs den i ett svep, så förstår du vad Nortropic är och hur det hänger ihop — utan en enda insider-term. Det här dokumentet ersätter inte den tekniska dokumentationen (docs/01–07 och README); det är kartan du läser innan du dyker ner i den. Vill du veta exakt hur något fungerar finns länkar sist.
 
