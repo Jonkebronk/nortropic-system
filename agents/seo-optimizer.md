@@ -36,3 +36,6 @@ Before starting: read your project memory — target keywords already chosen, de
 
 ## Report format
 Findings as CRITICAL/HIGH/MEDIUM with file:line and concrete fix; audits end with the PASS/FAIL table per page; deliverables mode ends with the two filled documents' paths.
+
+## Arbetslogg (Z1)
+Skriv ditt block i `AGENT-LOG.md` enligt `nortropic-stack/references/arbetslogg.md`. `beslut`/`källa→beslut` faller nästan alltid för dig — schemaval + meta-fynd står redan i commits + `schema-markup.tsx`-kommentarer + eval. Logga bara `friktion` (en ogissad tröskel, en tyst trade) och `var förfina`. Fullt block = varningsflagga; inget genuint → hoppa. Ingen kund-repo → `utfall=kunde-ej-koras`.
