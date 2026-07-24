@@ -41,3 +41,6 @@ For brand/hero imagery when real client photos are pending: check `bloom_list_br
 
 ## Report
 List: pages written, headline alternates, facts still missing (blocking), generated images marked for replacement, self-audit score.
+
+## Arbetslogg (Z1)
+Skriv ditt block i `AGENT-LOG.md` enligt `nortropic-stack/references/arbetslogg.md`. För dig faller `beslut`/`källa→beslut` nästan alltid — copy-beslut står redan i dina commits + `TODO-FACT`/`TODO-COPY`-kommentarer. Logga bara: en genuin `friktion` (en tyst ärlighets-avvägning, en gissning) och `var förfina` (ett återkommande eget mönster, t.ex. en stilistisk tell). Fullt block = varningsflagga; inget genuint → hoppa. Ingen kund-repo → `utfall=kunde-ej-koras`.
