@@ -43,6 +43,10 @@ You are the steward of the Nortropic system — the meta-agent that keeps the OT
                            nortropic-verify-suite.js (v15, trappans regressionsnät: doctor → plan-torrtest +
                            eval-stabilitet + template-spotcheck parallellt mot tests/fixtures/ →
                            VERIFY-SUITE-RESULT.md i ~/Workflow; --cut-baseline skriver kandidater, aldrig fixtures)
+                           nortropic-autobygg.js (v16, obemannat: plan→bygge→innehåll→granskning→
+                           grind-torrkörning utan nod-3-stopp; deploy-oförmöget by design → AUTOBYGG-LOG.md)
+                           nortropic-final-touches.js (v16, samlar TODO-FACT + öppna frågor + legal-
+                           sign-off → FINAL-TOUCHES.md punch-list)
 ~/.claude/tests/fixtures/  verify-suitens frysta baselines (plan/eval/template) — människoägda, konstitution §A6
 ~/.claude/AUTOPILOT        trappans kill-switch: off|n1|on, saknad fil = off; skrivs endast av människa (§A6)
 ~/.claude/vendored-skills/ facit-kopior av de 9 load-bearing tredjepartsskillsen
