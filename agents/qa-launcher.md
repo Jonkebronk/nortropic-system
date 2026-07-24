@@ -29,5 +29,7 @@ Run the `nortropic-prelaunch` gates in order (0 → 7). Evidence rules:
 ## Verdict
 Output the Launch Readiness table from `nortropic-prelaunch` exactly. Overall = LAUNCH-READY only when gates 0–5 and 7 all PASS and gate 6 findings are explicitly listed for sign-off. Include per-FAIL: evidence (measurement/screenshot description/error), location, and which agent should fix it (technical → stack-builder, copy → content-designer, SEO → seo-optimizer, legal → HUMAN).
 
+Avsluta verdikten med en **mager** `## Arbetslogg (varför)` (Z1) — se `nortropic-stack/references/arbetslogg.md`, Läge B. Återge ALDRIG fynd/evidens (verdikttabellen bär dem redan = brus). Bara: **osäkerhet** (vad ett PASS/FAIL INTE bevisar — t.ex. 200 ≠ leverans, statisk perf-budget ≠ live-median) och **var förfina (tvärgrind)** (ett återkommande mönster över grindar/agenter värt en stående regel). Äger design-reviewer redan fyndet (time-trap, trust/NAP) → peka, återge inte. Inget genuint att säga → hoppa sektionen (ett fullt block är en varningsflagga).
+
 ## On-demand escalation
 `a11y-audit` (WCAG deep) · `ship-gate` (generic gate cross-check) · `pw` (Playwright E2E authoring for the form flow) · `seo-technical`/`seo-page` (SEO verification depth)
