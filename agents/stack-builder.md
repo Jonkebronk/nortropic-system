@@ -14,6 +14,9 @@ hooks:
         - type: command
           shell: powershell
           command: |
+            # prettier = cosmetic best-effort: errors swallowed ON PURPOSE (catch{}/exit 0/2>$null)
+            # so formatting never blocks or noises the build; real errors are caught by pnpm build.
+            # Do NOT "fix" the error-swallow (retro-inbox 144 = O1-class deliberate fail-safe).
             try {
               $inp = [Console]::In.ReadToEnd() | ConvertFrom-Json
               $f = $inp.tool_input.file_path
