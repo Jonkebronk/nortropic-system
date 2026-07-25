@@ -2,7 +2,7 @@
 
 Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
 
-Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna.
+Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna. Varje agents **obligatoriska steg** (t.ex. INPUT GATE, processteg, grind-ordning) står i dess prosaavsnitt nedan — medvetet INTE som tabellkolumn: stegen bor i agentkroppen, inte frontmattern tabellen projicerar, och en kolumn skulle drifta från kroppen utan mekanisk vakt (S4).
 
 <!-- doctor läser tabellraderna mekaniskt: håll formatet "| namn | modell · effort | ... |" med agentnamnet i första kolumnen och modell · effort i den andra -->
 
