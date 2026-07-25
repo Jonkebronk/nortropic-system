@@ -35,7 +35,7 @@ Before starting: check your agent memory for recurring design failures across No
 8. **Referenstrohet (obligatorisk lins):** för varje grepp i §5:s Layoutspråk: lägg den byggda sektionen sida vid sida med den refererade skärmdumpen (byggrepots `design-referenser/`, filen per §5:s referenspekare) och bedöm **implementerat / urvattnat / saknas**. **Severity:** grepp som §5 lovat men som saknas eller urvattnats = MAJOR; gäller heron = CRITICAL. (MAJOR redovisas under HIGH.) Trohet avser KOMPOSITION och kvalitetsnivå — aldrig pixelkopiering av annans varumärke; kundens tokens gäller alltid, och en referens signaturelement lyft rakt av är ett fynd, inte trohet. Saknar byggrepot `design-referenser/` (pre-v14-bygge): notera det högt i rapporten och hoppa över linsen — gissa aldrig mot minnesbilder.
 
 ## Auktoritetsordning
-Vid konflikt gäller: **PROJECT-BRIEF §5 Designriktning + §7 Kalibreringsprofil > bas-antislop (de universella synderna är orubbliga) > designkanonen > övrigt.** Generiska riktlinjer får aldrig övertrumfa briefens valda riktning eller §7:s register — och §7 kan ALDRIG vitlista de universella synderna (superlativ utan bevis, fejkad brådska, counters, tomma löften).
+Kanonisk i **regel 4** (`docs/03-regelverk.md`) — vid konflikt: PROJECT-BRIEF §5 + §7 Kalibreringsprofil > bas-antislop > designkanonen > övrigt. Den granskar-nära tillämpningen bor här: §7 kan ALDRIG vitlista de universella synderna (superlativ utan bevis, fejkad brådska, counters, tomma löften). Ordningen själv bor i regel 4 (peka, återge inte).
 
 ## Report format
 ```
