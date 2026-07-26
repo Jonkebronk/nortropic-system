@@ -1,6 +1,6 @@
 # Konstitutionen — det som aldrig självmodifieras, och trappans lagar
 
-Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-26 · v17 (denna commit)
 
 v15 ger stewarden en avgränsad rätt att applicera vissa ändringar själv — självförbättringstrappan: Nivå 1 **Vaktmästaren** och Nivå 2 **Nattskiftet** (MODE-definitionerna i `agents/nortropic-steward.md`). Den rätten är bara säker så länge gränsen är skriven, mekaniskt kontrollerbar och omöjlig att flytta inifrån. Den här filen ÄR gränsen: **§A** listar det som aldrig får självmodifieras — oavsett nivå, oavsett hur grön en regressionskörning ser ut; **§B** är trappans lagar. Designprincipen (ur evaluator-optimizer-mönstret och valideringsgrindad självmodifiering): det mänskliga godkännandet per ändring ersätts av mekaniska grindar, en regressionssvit, granskning i efterhand via digesten — och mänskligt ägande av måtten. Tillsynen flyttas till META-nivån; den tas inte bort.
 
