@@ -1,6 +1,6 @@
 # Scope — ringmodellen
 
-Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-26 · v17 (denna commit)
 
 Vad Nortropic bygger, vad som byggs vid efterfrågan, och vad som är nej. Principen bakom gränsen: **pipelinen levererar stateless sajter som aldrig kräver jour — det är vallgraven, inte en teknisk brist.** En sajt utan databas, inloggning eller eget tillstånd kan inte läcka persondata den inte har, går inte ner av en migrering och väcker ingen klockan tre. Kalibreringen per kund sker i briefens §7 (`agents/project-planner.md`), aldrig genom att systemet kopieras per bransch.
 

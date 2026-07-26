@@ -1,6 +1,6 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-26 · v17 (denna commit)
 
 > **Ny här?** Läs [00-borja-har.md](00-borja-har.md) först — hela systemet förklarat från noll utan interna termer. Den här filen och 02–07 är det djupare, tekniska lagret.
 
@@ -29,9 +29,9 @@ Källor: `skills/nortropic-plan/SKILL.md`, `skills/nortropic-init/SKILL.md`, `wo
 
 Research-filens valfria rad `Läge: obemannat` byter körsätt. I `obemannat` orkestrerar `/nortropic-autobygg` noderna **2→7** utan att stanna vid nod 3, så länge briefen är ren — inga ohanterade/scope-nej juridikflaggor i §7 och inga STRATEGISKA öppna frågor. **Nod 8 (juridik) och nod 9 (deploy) är fortfarande hårda mänskliga stopp** — obemannat rör dem aldrig, och deployar aldrig. Faller något av de tre villkoren ut (bemannat/ohanterad-juridik-eller-STRATEGISK/CRITICAL-efter-en-fixloop) lämnas bygget över med `FINAL-TOUCHES.md` som punch-list. Utelämnad `Läge:`-rad = `bemannat` = nodkartan ovan oförändrad. Detaljer i [00-guide.md](00-guide.md) (Obemannat läge).
 
-## De fyra hårda stoppen
+## De tre hårda stoppen
 
-Tre stopp ligger i pipelinen och ett i systemunderhållet. De är systemets styrningspunkter — allt annat får automatiseras, dessa får det inte.
+Två ligger i pipelinen, ett i systemunderhållet. De är systemets **beslutsgrindar** — noderna där ett mänskligt OMDÖME måste fällas: godkänna briefen (3), signera juridiken (8), godkänna förslagen (12). Avgörande är beslutet, inte bara den mänskliga handen: rent utförande av ett redan fattat beslut är inget stopp (deploy, nod 9, är alltid mänsklig men verkställer bara nod 8:s signoff), och ren mänsklig inmatning utan godkännande-moment är det inte heller (research, nod 1). Allt annat får automatiseras.
 
 **Nod 3 — briefgodkännandet.** `/nortropic-plan` slutar alltid med en exekutiv summering och en lista öppna frågor, och nästa steg körs först "once the brief is approved" (`skills/nortropic-plan/SKILL.md`, steg 4). Briefen är auktoritetsordningens topp; det som godkänns här styr bygge, copy och granskning.
 

@@ -1,6 +1,6 @@
 # nortropic-system
 
-Senast verifierad mot systemet: 2026-07-25 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-26 · v17 (denna commit)
 
 Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som föreslår — och som sedan v15 dessutom självapplicerar en strikt avgränsad ändringsklass under konstitutionen ([docs/07-konstitution.md](docs/07-konstitution.md)), grindat av kill-switchen `AUTOPILOT` (default `off`); allt annat kräver mänskligt godkännande.
 
@@ -44,7 +44,7 @@ Dokumentationen har sedan **v17** två lager: börja i det enkla, gå vidare til
 
 - [docs/00-borja-har.md](docs/00-borja-har.md) — **börja här**: hela systemet förklarat från noll för en nybörjare (det enkla lagret)
 - [docs/00-guide.md](docs/00-guide.md) — operatörsguiden: hur systemet används och varför det ser ut som det gör
-- [docs/01-oversikt.md](docs/01-oversikt.md) — nodkartan, de fyra hårda stoppen och artefaktkedjan
+- [docs/01-oversikt.md](docs/01-oversikt.md) — nodkartan, de tre hårda stoppen och artefaktkedjan
 - [docs/02-agenter.md](docs/02-agenter.md) — de 7 agenterna: roll, modell/effort, obligatoriska steg, eskaleringar, minne
 - [docs/03-regelverk.md](docs/03-regelverk.md) — systemets hårda regler med motiv och exakt källfil
 - [docs/04-justeringskarta.md](docs/04-justeringskarta.md) — vad varje större designval kostar, köper och hur det skruvas
