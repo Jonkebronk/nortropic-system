@@ -18,6 +18,7 @@
   3. Broadsheet-stil med hairlines, noll radius och täta tidningskolumner.
 
   **Differentieringsregeln (5c, skärpt):** två på varandra följande ANDRA kunder får aldrig båda landa i samma kluster.
+- **Modell-default-genrer/typsnitt** (namngivna konvergens-vektorer bortom paletten — endast som dokumenterat val med referensbevis i §5, ALDRIG som default): **(a) serif-display + sans SOM GENRE** — arkitektonisk/editorial serif-display-rubrik + neutral sans-brödtext är modellens reflexmässiga premium-grepp; det konvergerar mot sig själv OCH mot tidigare kunder OBEROENDE av palett. Differentieringen gäller GENREN, inte typsnittsnamnet: byta serif-typsnitt (t.ex. Libre Caslon → Newsreader) eller justera hex flyr inte genren. **(b) Space Grotesk** som rubrik-default — modellens signatur-grotesk; välj rubriktypsnitt medvetet, aldrig Space Grotesk på autopilot. **Hävning (som paletterna):** ett referensbevisat §5-val i en av dessa riktningar tillåts — en kund KAN förtjäna serif-display-genren med belägg; reflexdefault utan belägg är förbjuden. Skyddar mot att ANDRA kunder tyst konvergerar mot KLASSEN (och därmed mot varandra + mot tidigare kunder som förtjänat greppet), aldrig mot en enskild kunds palett.
 - **shadcn/ui-gränsen:** shadcn används för formulär och interaktiva kontroller — **ALDRIG som sektions-/layoutspråk på marknadssidor.** Sektioner byggs custom enligt §5-layoutspråket.
 
 ## B. Token-regler (de-templating)
