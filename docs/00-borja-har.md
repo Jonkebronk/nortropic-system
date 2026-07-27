@@ -15,7 +15,7 @@ Fabriken har sju robotar. Var och en är riktigt bra på EN sak och gör bara de
 - **Planeraren** (project-planner) — läser kundpappret och gör upp strategin: vilka sidor sajten ska ha, vad den ska få besökaren att göra, och hur den ska se ut.
 - **Byggaren** (stack-builder) — snickrar ihop själva sajten enligt planen: skapar kodförrådet, bygger sidorna, kopplar in kontaktformuläret.
 - **Textförfattaren** (content-designer) — skriver all svensk text i kundens ton, så den låter mänsklig och inte som en robot.
-- **Design-granskaren** (design-reviewer) — tittar kritiskt på utseendet och säger till om något ser generiskt, billigt eller "AI-gjort" ut.
+- **Design-granskaren** (design-reviewer) — tittar kritiskt på utseendet och säger till om något ser generiskt, billigt eller "AI-gjort" ut. Den jämför mot ett litet bibliotek av världsklass-exempel så den vet vad "riktigt bra" faktiskt betyder — exemplen är måttstock för nivån, aldrig mallar att kopiera.
 - **SEO-roboten** (seo-optimizer) — ser till att kunden går att hitta på Google när någon söker "[tjänst] i [stad]".
 - **Kontrollanten** (qa-launcher) — den sista besiktningen före lansering: funkar telefonknappen, kommer offertmejlet fram, är sajten snabb och trygg?
 - **Förmannen** (nortropic-steward) — robotarnas egen chef. Bygger inga kundsajter, utan håller de andra sex robotarna skarpa och föreslår förbättringar av själva fabriken.
