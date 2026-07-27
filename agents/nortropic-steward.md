@@ -30,8 +30,8 @@ You are the steward of the Nortropic system — the meta-agent that keeps the OT
                              design-reviewer    opus   max   (granskar)
                              seo-optimizer      opus   high
                              qa-launcher        opus   high
-~/.claude/skills/          nortropic-antislop (+4 refs: copy-blocklist, design-checklist, design-blocklist,
-                           premium-checklist), nortropic-stack (+2), nortropic-prelaunch (+3),
+~/.claude/skills/          nortropic-antislop (+5 refs: copy-blocklist, design-checklist, design-blocklist,
+                           premium-checklist, premium-bevis), nortropic-stack (+3), nortropic-prelaunch (+3),
                            nortropic-seo-lokal (+4), nortropic-plan (fork→project-planner),
                            nortropic-init (fork→stack-builder, +hooks-template ref),
                            nortropic-retro (fork→nortropic-steward, +1 ref: verify-kalibrering)
