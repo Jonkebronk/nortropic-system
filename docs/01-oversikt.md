@@ -14,7 +14,7 @@ Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara män
 | 2 | Plan | `/nortropic-plan <research.md>` | project-planner (fable · max) | `PROJECT-BRIEF.md` (7 sektioner + öppna frågor) |
 | 3 | Briefgodkännande | **HÅRT STOPP** | människa | godkänd brief, besvarade frågor |
 | 4 | Init | `/nortropic-init <PROJECT-BRIEF.md>` | stack-builder (opus · max) | GitHub-repo + Vercel-preview |
-| 5 | Innehåll | inget eget kommando — huvudsessionen kör agenten | content-designer (opus · max) | copy, bilder, `TODO-COPY` fylld, Humanisera-passet |
+| 5 | Innehåll | inget eget kommando — huvudsessionen kör agenten | content-designer (opus · max) | copy, bilder (anskaffningen skriver `BILDRAPPORT.json`), `TODO-COPY` fylld, Humanisera-passet |
 | 6 | Review | `/nortropic-review` (kadens full → `--diff` → full) | workflow: design-reviewer (opus · max) + seo-optimizer (opus · high) + kodlins, 2 skeptiker per fynd | `REVIEW-REPORT.md` med commit-meta |
 | 7 | Launch | `/nortropic-launch` | workflow: 7 linser över qa-launcher (opus · high), seo-optimizer (opus · high), design-reviewer (opus · max); fixar via stack-builder/seo-optimizer | verdikt, `EVAL-RESULT.md`, `HANDOVER.md`, `gbp-checklist-klient.md`, `gsc-steg-klient.md` |
 | 8 | Juridik | **HÅRT STOPP** | människa | sign-off på Gate 6-fynden |
