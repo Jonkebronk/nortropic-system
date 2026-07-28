@@ -28,7 +28,7 @@ The rubric is **versioned** (semver at the top of `references/eval-rubric.md`). 
 | 6 | Schema-korrekthet (schema-typ enligt profile.ts validerar, svensk PostalAddress, öppettider) | 8 |
 | 7 | Prestanda (Lighthouse-mål från nortropic-prelaunch) | 8 |
 | 8 | Juridik komplett (integritetspolicy, org.nr, cookie-hantering) | 8 |
-| 9 | **Visuell distinktion** (läses som handbyggd premium — inte som AI-genererad mall; döms mot design-blocklisten + template-testet) | 10 |
+| 9 | **Visuell distinktion** (läses som handbyggd premium — inte som AI-genererad mall; döms mot design-blocklisten + template-testet; premium kalibreras mot PK-1…PK-8 med premium-bevis som tak-bevis) | 10 |
 | 10 | Förtroendesignaler (förtroendekvitton enligt §7.4 nära hero — omdömen, kvitton, foton) | 5 |
 | 11 | Teknisk hygien (inga döda länkar, 404-sida, sitemap) | 5 |
 
@@ -66,5 +66,5 @@ Faktatrohet: PASS | FAIL   (FAIL överskuggar totalpoängen)
 ## Reuse, don't duplicate
 - Criterion 7 (Prestanda) targets live in the **nortropic-prelaunch** skill's `references/lighthouse-targets.md` — use those exact numbers.
 - Criterion 3 (Copy) uses the blocklist in the **nortropic-antislop** skill's `references/copy-blocklist.md` — do not restate it here.
-- Criterion 9 (Visuell distinktion) döms mot **nortropic-antislop** `references/design-blocklist.md` och design-reviewerns template-test — do not restate the pattern list here.
+- Criterion 9 (Visuell distinktion) döms mot **nortropic-antislop** `references/design-blocklist.md` och design-reviewerns template-test; premium-nivån kalibreras mot **nortropic-antislop** `references/premium-checklist.md` (PK-1…PK-8) med `references/premium-bevis.md` som tak-bevis — do not restate the pattern list or the PK principles here.
 - This skill scores; it never edits. To FIX what it flags, route to content-designer (copy) or stack-builder (technical); to deep-audit design, run `/nortropic-antislop` or the design-reviewer.

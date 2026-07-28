@@ -1,6 +1,6 @@
 # Nortropic Eval Rubric
 
-**Rubrikversion: v2.0.0**
+**Rubrikversion: v3.0.0**
 
 > Semver. Bump on **any** change to criteria, weights, or thresholds so scores stay comparable over time: PATCH = wording/clarification, MINOR = threshold/guidance change, MAJOR = criteria or weights change. Record the version used in every `EVAL-RESULT.md`. Never compare totals across different MAJOR/MINOR versions without noting it.
 
@@ -73,8 +73,8 @@ Om live-mätning inte går: bedöm mot viktbudgetarna (total < 1 MB, JS < 200 kB
 **PASS ≥ 6.**
 
 ## 9. Visuell distinktion — 10 p
-Sajten ska läsas som **handbyggd premium**, aldrig som AI-genererad mall. Döms mot design-blocklisten (**nortropic-antislop** `references/design-blocklist.md`) och design-reviewerns template-test; §5:s Layoutspråk + Signaturelement är facit för vad som skulle byggas.
-- **10 = kan förväxlas med handbyggd premium i nivå med benchmarkreferenserna** (§5:s Referensöversättning).
+Sajten ska läsas som **handbyggd premium**, aldrig som AI-genererad mall. Döms mot design-blocklisten (**nortropic-antislop** `references/design-blocklist.md`) och design-reviewerns template-test; §5:s Layoutspråk + Signaturelement är facit för vad som skulle byggas. Vad **premium** BETYDER kalibreras mot premium-checklistan (**nortropic-antislop** `references/premium-checklist.md`, PK-1…PK-8) med `references/premium-bevis.md` som tak-bevis — Read båda vid dömningen av detta kriterium; exemplaren KALIBRERAR vad världsklass betyder per drag, aldrig jämförelsemängd eller mall; döm bygget mot PK-DRAGET, aldrig mot exemplar-sajten.
+- **10 = kan förväxlas med handbyggd premium på tak-bevisens nivå** — samtliga PK-drag hållna på den nivå `premium-bevis.md` belägger att de kan hållas (PK-7/PK-8 döms mot principtexten — bevis-exemplar saknas ännu, never-invent), i §5:s valda riktning (Referensöversättningen).
 - **≤5 om heron följer ett blocklistat mallmönster (sektion A) eller ≥2 sektioner fälls av template-testet.**
 - **Ikonkortsrader och zebra-rytm drar alltid ner.**
 - Saknat eller urvattnat Signaturelement (mot §5) drar; en hävning som §5 dokumenterat med referensbevis är INTE avdrag (blocklistens sektion C).
@@ -108,6 +108,7 @@ Gaterade platshållare (fiktiva omdömen med `placeholder:true`, grå SVG) = kor
 En **Faktatrohet-FAIL** rapporteras som **FAIL** i EVAL-RESULT-headern oavsett band.
 
 ## Changelog
+- **v3.0.0** — Q2b drag-kalibrering (MAJOR — kriterium 9:s kravnivå/10-definition ändrad; totaler EJ bakåtjämförbara mot v2.x utan notering): premium-definitionen i kriterium 9 ankras mot premium-checklistan PK-1…PK-8 (tak-princip) med `premium-bevis.md` som tak-bevis — kalibrering av vad världsklass betyder, aldrig jämförelsemängd eller mall; döm bygget mot PK-DRAGET, aldrig mot exemplar-sajten. PK-7/PK-8 döms mot princip (bevis-exemplar saknas, never-invent). Vikter, kriterieantal, delpoäng och PASS-trösklar orörda (summa 100 intakt); kriterierna 1–8, 10–11 oförändrade. Eval-baselinen måste klippas om (mänsklig §A6-handling).
 - **v2.0.0** — v14 design-antislop (MAJOR — vikter och kriterieantal ändrade; totaler EJ bakåtjämförbara mot v1.x utan notering): nytt kriterium 9 **Visuell distinktion** (10 p; ankare mot design-blocklisten + template-testet; ≤5 vid blocklistad hero eller ≥2 fällda sektioner) finansierat med kriterierna 4–8 10→8 p (delpoäng ombalanserade, PASS-trösklar 70 %-regeln → ≥6); gamla 9/10 (Förtroendesignaler/Teknisk hygien) omnumrerade till 10/11 oförändrade. Faktatrohet förblir kriterium 2.
 - **v1.2.1** — Förtydligande (PATCH): kriterium 3:s datakälla i byggrepot är `content/profile.ts` (`rostregister`/`branschAntislop`) — transportfälten fanns inte i v1.2.0-texten, vilket gjorde kriteriet odömbart utan brief. Inga trösklar/vikter ändrade.
 - **v1.2.0** — v13 kalibreringsprofilen: kriterierna 1/3/5/6/9 neutraliserade från hantverkar-antaganden till §7/`content/profile.ts` med OFÖRÄNDRAD kravnivå (offert/samtal-fallet ger exakt v1.1.0:s delkrav — poäng bakåtjämförbara för hantverkarklienter; andra arketyper får härledda delkrav på samma nivå).
