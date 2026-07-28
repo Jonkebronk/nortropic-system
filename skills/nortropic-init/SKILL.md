@@ -13,7 +13,7 @@ Initialize a new Nortropic client site from the approved brief: **$ARGUMENTS**
 2. Execute your full build process from the brief:
    - **Repo-GRIND (verifiera, skapa ALDRIG):** du ska redan stå i en klon av ett PRIVAT `kund-<slug>`-repo (Verkstadsgolvet-onboardingen skapade det med research.md). Verifiera: cwd är git-repo med remote, namnet matchar `kund-<slug>`, `gh repo view --json visibility` = `PRIVATE`, `research.md` finns. Avvikelse → **STOPP** med exakt fel + att man kör Verkstadsgolvet-onboardingen först (init skapar aldrig kund-repot, aldrig `-se`-suffix; se retro Y1)
    - Scaffold Next.js 15 + TS strict + Tailwind 4 + shadcn/ui per `nortropic-stack`
-   - All content files (`business.ts` with the brief's exact NAP, `profile.ts` from the brief's §7 Kalibreringsprofil, services, areas, testimonials, faq)
+   - All content files (`business.ts` with the brief's exact NAP, `profile.ts` from the brief's §7 Kalibreringsprofil, services, areas, testimonials, faq). `business.ts` → `address.publik`: default `false` (serviceområdesföretag — adressen utelämnas ur schemat och döljs i GBP); `true` ENDAST när briefen anger en verklig besöksadress. Äldre repon utan fältet backfillas med `publik: false`
    - Every page in the brief's architecture with the conversion trio (PhoneLink, CtaBanner, floating call button)
    - Lead pipeline: `app/actions/lead.ts` with Zod + honeypot + Resend. If `RESEND_API_KEY` is not available, wire everything and mark the env var as pending in your report — do not invent keys
    - Schema markup, sitemap, robots, Swedish 404/error pages, analytics per brief

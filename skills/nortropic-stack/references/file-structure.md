@@ -86,7 +86,9 @@ export const business = {
   phone: "",           // E.164: +46...
   phoneDisplay: "",    // "08-123 45 67"
   email: "",
-  address: { street: "", postalCode: "", city: "" },
+  address: { street: "", postalCode: "", city: "", publik: false },
+  //   publik: false = serviceområdesföretag — adressen UTELÄMNAS ur JSON-LD (areaServed bär geografin)
+  //   och döljs i GBP; footer visar ort/serviceområde, aldrig gatuadress. true kräver besöksadress i briefen.
   hours: [ /* { days: "Mån–Fre", open: "07:00", close: "17:00" } */ ],
   emergency: false,     // jour dygnet runt?
   serviceAreas: [],     // slugs into areas.ts
