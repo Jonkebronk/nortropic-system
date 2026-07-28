@@ -13,6 +13,11 @@ description: >-
 
 # Bildlagret
 
+> **OFULLSTÄNDIG.** Anskaffningskedjan (fetch-images.mjs, score.mjs, models.json)
+> är specificerad men inte implementerad — landar i förslag 07. Checklistans steg
+> 3–4 och regel R4:s gallring går inte att följa förrän dess. Kör bildanskaffning
+> manuellt tills denna rad är borttagen.
+
 Fyra regler bär skillen.
 
 **R1 — Anspråk avgör, inte medium.** Frågan är aldrig "är bilden genererad?" utan
