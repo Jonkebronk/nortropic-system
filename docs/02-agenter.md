@@ -1,6 +1,6 @@
 # Agenterna
 
-Senast verifierad mot systemet: 2026-07-27 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-28 · v17 (denna commit)
 
 Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna. Varje agents **obligatoriska steg** (t.ex. INPUT GATE, processteg, grind-ordning) står i dess prosaavsnitt nedan — medvetet INTE som tabellkolumn: stegen bor i agentkroppen, inte frontmattern tabellen projicerar, och en kolumn skulle drifta från kroppen utan mekanisk vakt (S4).
 
@@ -10,7 +10,7 @@ Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatte
 |---|---|---|---|---|
 | project-planner | fable · max | nortropic-stack | user | chrome-devtools |
 | stack-builder | opus · max | nortropic-stack | inget | shadcn-ui, plugin_context7_context7, 21st, reactbits, magicuidesign, motion-dev, gsap |
-| content-designer | opus · max | nortropic-antislop | user | claude_ai_Trybloom, 21st, higgsfield |
+| content-designer | opus · max | nortropic-antislop | user | claude_ai_Trybloom, 21st |
 | design-reviewer | opus · max | nortropic-antislop | user | chrome-devtools |
 | seo-optimizer | opus · high | nortropic-seo-lokal | project | — |
 | qa-launcher | opus · high | nortropic-prelaunch | project | chrome-devtools, plugin_playwright_playwright |
