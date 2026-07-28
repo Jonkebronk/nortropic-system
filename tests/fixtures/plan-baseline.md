@@ -1,8 +1,8 @@
-# Plan-baseline-KANDIDAT — §5+§7 ur torrtestkörning 2026-07-28 (CUT-BASELINE-LÄGE)
+# Plan-baseline — §5+§7 ur torrtestkörning 2026-07-28 (v16-kontraktet)
 
 > **HÅLET SOM DETTA SNITT STÄNGER:** verify-körningen 2026-07-28 (commit `a3fb91a`) var GRÖN **delvis för att kriterierna inte täckte de nya bildfälten — inte för att fälten verifierades**. §5:s Bildinventering/Bildspår/Bildbehandling/Slot-tabell och §7.9 passerade ODÖMDA mot v15-baselinen ("utanför Ekvivalenskriterierna"). Grönt den dagen betydde: det gamla kontraktet höll; det nya var oskyddat. Kriterierna 7–10 (§5) och 9 (§7) nedan stänger hålet.
 
-> **KANDIDAT — EJ COMMITTAD.** Skriven av plan-torrtestets cut-baseline-körning 2026-07-28. Committande till `tests/fixtures/plan-baseline.md` är en mänsklig handling (docs/07 §A6). Jämför mot nuvarande fixtur (fryst 2026-07-19, v15-läget) innan beslut — kriterieändringarna nedan speglar kontraktslyftet till v16-läget.
+> **FRYST 2026-07-28 (§A6, ägarhandlingar):** v16-omklipp `6727508` · og-enum krympt `eeff356` · AG6-tredje-utfallet tillagt i denna commit. Skriven av plan-torrtestets cut-baseline-körning 2026-07-28; uppdateras ENDAST av människa (docs/07 §A6).
 
 Klippt ur torrtestkörning 2026-07-28 · Planner-kontrakt v16-läget (7 sektioner; §5 med v14-fälten Vald riktning/Layoutspråk/Signaturelement/Motion-nivå/Referensöversättning PLUS bildkontraktets fält Bildinventering/Bildspår/Bildbehandling/Slot-tabell + `SLOTS.json`; §6 med Klienttyp + Läge; §7 Kalibreringsprofil punkt 1–9 med bevisregeln) · Input: `~/Workflow/test-rorjour/research.md` + appendad rad `hoppa över inspirationsjakt` · Ingen webbaktivitet (torrtestläge) · Profilbiblioteket (5e) hoppat per torrtestdirektiv · Ingen agent-memory skriven
 
@@ -14,7 +14,7 @@ Klippt ur torrtestkörning 2026-07-28 · Planner-kontrakt v16-läget (7 sektione
 1. Primärhandling = `ring nu` (akutbransch), sekundär = `offert` — båda med research-belägg.
 2. Gate 1-testet är en klartext-kedja som omfattar: klickbar tel-länk på samtliga sidor, offertformulär end-to-end med **verifierad mejlleverans till `LEAD_TO_EMAIL`** (inte bara HTTP 200), och konverteringsevents. Testklient-notisen (test-inbox, aldrig den fiktiva adressen) ska finnas.
 3. Röstregistret: rak/konkret/lugn-familjen + legitimt VVS-vernacular vitlistat ENDAST för kunden + 2 ordagranna exempelmeningar ur research; universella synder aldrig vitlistade.
-4. §7.3 bransch-antislop: lämnad som ÖPPEN FRÅGA (skörd kräver 5d-jakt som torrtestet stänger av) — fabricerade fraser = materiell avvikelse; en tom/öppen §7.3 är korrekt.
+4. §7.3 bransch-antislop — TRE giltiga utfall (AG6): (i) tom/ÖPPEN FRÅGA är korrekt (skörd kräver 5d-jakt som torrtestet stänger av; denna fixtures körning hoppade även 5e per torrtestdirektiv → utfall i); (ii) PROFIL-ÄRVD lista via 5e (profilbiblioteket, t.ex. `~/Workflow/profiler/hantverkare.md`) med käll-citerade fraser är korrekt — profil-citerade fraser är inte fabricerade; (iii) fabricerade fraser utan research-/profilkälla = materiell avvikelse.
 5. Kvittolistan innehåller research-familjen (F-skatt, ansvarsförsäkring, Säker Vatten, betyg UTAN review-URL och UTAN schema-inmatning, grundat 2011, inställelsetid ALLTID geografiskt avgränsad till Stockholms stad, försäkringsintyg attribuerat som intyg — aldrig ersättningslöfte) och inget uppfunnet.
 6. Schema-typ = `Plumber`; `aggregateRating` utelämnad med motivering.
 7. SEO-läge = `lokal` (ortsjakt) med research-belägg.
