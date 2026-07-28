@@ -46,9 +46,9 @@ prebuild i kundrepot och måste finnas där — sajten ska gå att bygga om utan
 systemrepot. `fetch-images.mjs`, `score.mjs` och `models.json` körs en gång, av en
 agent som redan har systemrepot laddat, och bor kvar i skillen: doctor #13 vaktar EN
 `models.json`, och kopior i kundrepon gör vakten verkningslös för de exemplar som
-faktiskt används. Anskaffningsskripten kräver `sharp` upplöst från skillens träd —
-installeras en gång i systemrepots rot (`npm install sharp` i `~/.claude`,
-ospårat av vitliste-gitignoren), aldrig i kundrepon för anskaffningens skull.
+faktiskt används. Anskaffningsskripten kräver `sharp` upplösbart från skillens träd
+(Nodes uppåtvandring — installerat en gång i systemrepots rot eller operatörens
+hemkatalog), aldrig i kundrepon för anskaffningens skull.
 
 Alla CLI-skript använder `pathToFileURL` för main-detektering:
 
