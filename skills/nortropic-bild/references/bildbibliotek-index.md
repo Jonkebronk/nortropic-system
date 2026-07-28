@@ -27,7 +27,7 @@ Första kunden i en klass betalar genereringen. Alla efterföljande får cachetr
 |---|---|---|
 | `yta` | Betong, plåt, rost, snöasfalt, trä i motljus, ritningsrutnät | hero, env, detail |
 | `miljo` | Anläggning i skymning, kraftledningsgata, hamn, kran mot mörk himmel | hero, env |
-| `grafisk` | Ritningsutsnitt, kurvor, rutnät, stiliserad karta | detail, og |
+| `grafisk` | Ritningsutsnitt, kurvor, rutnät, stiliserad karta | detail |
 
 `yta` är mest återanvändbar och billigast — och den enda klass preset `ljus` får
 generera utöver `grafisk`.

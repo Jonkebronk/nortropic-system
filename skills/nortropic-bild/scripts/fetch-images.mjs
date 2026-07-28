@@ -44,9 +44,9 @@ const SLOT_KLASS = {
   hero:   { klasser: ['miljo', 'yta'],    roll: 'hero',    genererbar: true  },
   env:    { klasser: ['miljo', 'yta'],    roll: 'stod',    genererbar: true  },
   detail: { klasser: ['yta', 'grafisk'],  roll: 'textur',  genererbar: true  },
-  og:     { klasser: ['grafisk', 'yta'],  roll: 'textur',  genererbar: true  },
   proof:  { klasser: [],                  roll: null,      genererbar: false },
   people: { klasser: [],                  roll: null,      genererbar: false },
+  // og finns inte längre som slot — app/opengraph-image.tsx (Next-konventionen) äger OG-bilden.
 }
 
 /** Preset → tillåtna motivklasser. `ljus` får aldrig generera produkten. */

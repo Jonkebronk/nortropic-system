@@ -82,7 +82,7 @@ det säkert genererbara. En genererad bukett på en blomsterhandels sajt läser 
 
 | `claim` | Betydelse | Slot-prefix |
 |---|---|---|
-| `none` | Stämning, kategorisignal, dekor | `hero-*`, `env-*`, `og-*` |
+| `none` | Stämning, kategorisignal, dekor | `hero-*`, `env-*` |
 | `illustrative` | Generisk situation, inte ett specifikt uppdrag | `detail-*` |
 | `depicts_client_work` | Påstår att kunden utfört detta | `proof-*` |
 | `depicts_client_people` | Påstår att detta är kundens personal | `people-*` |
@@ -137,6 +137,22 @@ samtycke · inga tredjepartsvarumärken i förgrunden utan tillstånd.
 | Personer med ansikte | Nej |
 | Allt i `proof-*` och `people-*` | Nej — mekaniskt spärrat |
 | Produkten under preset `ljus` (bukett, frisyr, tårta, djur) | Nej — motivet ÄR påståendet |
+
+## Varumärkeslagret
+
+Logotyp, favicon och manifest-ikoner ägs av `scripts/brand.mjs` — körs av
+content-designer i nod 5, EFTER `fetch-images.mjs`, med byggrepots rot som cwd
+(kopieras aldrig — anskaffningstid). Indata: `public/images/raw/brand__*` —
+**går ALDRIG genom treatment.mjs** (fotobehandling är aktivt skadlig på en
+logotyp; stageNormalise hoppar prefixet explicit). Kedjan, utdatauppsättningen
+(exakt åtta filer via Next 15:s filkonventioner — aldrig handskrivna
+ikon-`<link>`), favicon-märkets dokumenterade beslut (symbol/monogram —
+agentens ögon avgör, skriptet verkställer och journalför via `--marke`),
+degraderingarna (rembg/vtracer saknas → rastern behålls + fotouppdragsflagga;
+ingen logotyp → monogramvägen, som kräver noll binärer) och gatesen (i
+rapporten, aldrig launch.js) bor i skriptets huvudkommentar. OG-bilden är inte
+en slot: `app/opengraph-image.tsx` komponerar ref-versionens hero + logotyp +
+företagsnamn — se `behandling.md`.
 
 ## Checklista — bildanskaffning
 

@@ -145,7 +145,8 @@ export const CROPS = {
   proof:  [1600, 1067],
   detail: [1600, 1067],
   people: [1080, 1350],  // 4:5
-  og:     [1200,  630],
+  // og finns inte längre som slot — OG-bilden genereras av app/opengraph-image.tsx
+  // (Next-konventionen) ur REF-versionen; se behandling.md "OG-bilden läser ref/".
 }
 
 function flat(w, h, hex, alpha) {
@@ -221,6 +222,9 @@ export async function stageNormalise(RAW, REF) {
   mkdirSync(REF, { recursive: true })
   let n = 0
   for (const f of readdirSync(RAW).filter(f => IMG_RE.test(f))) {
+    // Varumärkesmaterial går ALDRIG genom behandlingen — brand.mjs äger det.
+    // (Känt-men-inte-behandlings; okända prefix kastar fortfarande högt i look-steget.)
+    if (/^brand__/i.test(f)) { console.log(`  ${f}  →  hoppas (varumärkesmaterial — brand.mjs äger det)`); continue }
     const src = join(RAW, f)
     const ref = join(REF, basename(f, extname(f)) + '.jpg')
     if (existsSync(ref) && statSync(ref).mtimeMs > statSync(src).mtimeMs) {
@@ -253,6 +257,7 @@ export async function stageLook(REF, OUT, presetName, tokens) {
   let n = 0
   const budgetWarns = []
   for (const f of readdirSync(REF).filter(f => IMG_RE.test(f))) {
+    if (/^brand__/i.test(f)) { console.log(`  ${f}  →  hoppas (varumärkesmaterial i ref/ — städa bort, brand.mjs äger det)`); continue }
     const { id, prefix } = parseSlot(f)
     // Okänt prefix får ALDRIG falla tyst till env-beskärning — en logotyp i raw/
     // skulle förstöras utan varning. Högt fel i stället.

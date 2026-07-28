@@ -270,7 +270,8 @@ sticker ut.
 | `hero-*` | 2400 × 1350 (16:9) |
 | `env-*`, `proof-*`, `detail-*` | 1600 × 1067 (3:2) |
 | `people-*` | 1080 × 1350 (4:5) |
-| `og-*` | 1200 × 630 |
+
+(`og` är inte längre en slot — se "OG-bilden läser ref/" nedan.)
 
 `fit: cover`, `position: attention` — sharp beskär mot bildens entropitäta område i
 stället för mitten.
@@ -291,6 +292,28 @@ avif-kvaliteten sänks i steg om 5 och kodas om, golv q35. Nås golvet utan att
 budgeten hålls skrivs en WARN-rad i `BILDRAPPORT.json` (filnamn, slot, faktisk
 storlek) — bygget felar aldrig på en bildstorlek. Explicit width/height och
 `priority` endast på hero gäller oförändrat.
+
+### Varumärkesmaterial går ALDRIG genom behandlingen
+
+`brand__*` i `raw/` hoppas explicit av normaliseringssteget — fotobehandling
+(vitbalans, exponering, look, overlay) är aktivt skadlig applicerad på en logotyp.
+Varumärkeslagret ägs av `scripts/brand.mjs` (se SKILL.md, "Varumärkeslagret").
+
+### OG-bilden läser ref/ — inte public/images/
+
+`app/opengraph-image.tsx` (Next-konventionen, statisk vid byggtid) komponerar
+delningsbilden ur **ref-versionens hero** (`public/images/ref/hero-01__*.jpg`) +
+logotyp + företagsnamn — MEDVETET, inte ett förbiseende, av tre skäl: (1) en
+OG-bild har ett annat jobb än en hero — den visas som miniatyr i ett flöde bredvid
+tio andra kort, och läsbarheten avgör klicket; en tungt overlayad duotone nedskalad
+till 300 px blir en mörk fläck — normaliserat utan look är det BÄTTRE valet, inte
+en kompromiss; (2) ImageResponse/satori stöder inte avif/webp, och de behandlade
+varianterna finns bara i de formaten — ref-JPEG:en är den enda läsbara källan utan
+ett fjärde utdataformat som bara OG-bilden skulle använda; (3) varumärket bärs av
+logotypen + ordbilden komponerade ovanpå, inte av presetet. Behövs kontrast bakom
+texten: en LÄTT ton i ink-färgen läggs i ImageResponse — aldrig presetets
+overlay-alfa. Saknas ref-hero (spår utan hero-material än, tidig körning):
+degradera till ren färgplatta i tokens + ordbild — aldrig ett tomt kort.
 
 ---
 

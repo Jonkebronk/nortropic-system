@@ -36,6 +36,15 @@ meddelandeappar som komprimerar.
 Begränsa till ersättningsprioritet 1–2. `hero-*`, `env-*` och `detail-*` efterfrågas
 ALDRIG — de är designval, inte skulder.
 
+## Logotypen (när varumärkeskällan är svag)
+
+När brand-rapporten flaggat svag källa (raster under 512 px, eller vektorisering
+degraderad/binärer saknas) får uppdraget alltid denna rad — kunden tillfrågas om
+vektorfilen oavsett om verktygen finns:
+
+**"Har du logotypen som EPS, AI eller SVG? Fråga den som gjorde skylten eller
+visitkorten. En vektorfil ger skarp logotyp i alla storlekar."**
+
 ## Konsumentnära kunder (preset `ljus`)
 
 Fotouppdraget går ut **före** bygget, inte efter. En blomsterhandlare fotograferar

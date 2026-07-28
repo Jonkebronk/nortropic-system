@@ -14,7 +14,12 @@ behåller `proof-03` sin identitet och byter bara `sida`.
 | `proof-*` | Utfört arbete, före/efter | 1600×1067 | `depicts_client_work` | **1** | — |
 | `people-*` | Porträtt, team | 1080×1350 | `depicts_client_people` | **2** | — |
 | `detail-*` | Verktyg, material, närbild | 1600×1067 | `illustrative` | 3 | yta, grafisk |
-| `og-*` | Delningsbild | 1200×630 | `none` | 4 | grafisk, yta |
+
+**`og` är inte längre en slot.** Delningsbilden genereras av `app/opengraph-image.tsx`
+(Next-konventionen, statisk vid byggtid): ref-versionens hero + logotyp + företagsnamn
+via ImageResponse, med `opengraph-image.alt.txt` bredvid — se `behandling.md`
+("OG-bilden läser ref/"). Varumärkesmaterial (`brand__*`) är inte heller slots —
+det ägs av `scripts/brand.mjs` och går aldrig genom behandlingen.
 
 **Ersättningsprioriteten är det icke-uppenbara.** Sortera inte efter luckor — sortera
 efter vad som blir bättre av en riktig bild. En `proof-*`-platshållare är en textur:
