@@ -6,7 +6,7 @@
 
 1. [Varför trestegs](#varför-trestegs)
 2. [Varför looken är en parameter](#varför-looken-är-en-parameter)
-3. [Steg 1 — Normalisering](#steg-1--normalisering) (vitbalans, exponering, tak, känd begränsning: blandat ljus)
+3. [Steg 1 — Normalisering](#steg-1--normalisering) (vitbalansens tre grenar: vitpunkt · gråvärld · AVSTÅ; exponering med dödband; tak; kända begränsningar: blandat ljus + avstå-gränszonen)
 4. [Steg 2 — Referensutrymmet ref/](#steg-2--referensutrymmet-ref)
 5. [Steg 3 — De tre presetsen](#steg-3--de-tre-presetsen) (`duotone` · `dokumentar` · `ljus`)
 6. [Presetval](#presetval)
@@ -74,25 +74,35 @@ allt.** Det är det som gör PK-5:3 sann, och det gäller lika i alla tre preset
 Målet är att en mobilbild inomhus i gult ljus och en utomhusbild i skugga ska landa
 på samma vitpunkt och samma exponering innan looken läggs på.
 
-### Vitbalans — hybrid
+### Vitbalans — tre grenar
 
-Två metoder, viktade mot varandra:
+**Vitpunkt (percentil 98) — när referensen är ren.** Mäter färgsticket i de
+ljusaste pixlarna. Robust mot färgstarka motiv: ett färgstick färgar även
+högdagrarna, medan ett rött blomsterhav lämnar dem neutrala. Det här är metoden
+som gör att `ljus`-presetet inte neutraliserar bort blommorna.
 
-**Vitpunkt (percentil 98).** Mäter färgsticket i de ljusaste pixlarna. Robust mot
-färgstarka motiv: ett färgstick färgar även högdagrarna, medan ett rött blomsterhav
-lämnar dem neutrala. Det här är metoden som gör att `ljus`-presetet inte
-neutraliserar bort blommorna.
+**Gråvärld — när vitpunkten är opålitlig.** Antar att bildens genomsnitt ska vara
+neutralt. Vikten mellan metoderna styrs av två saker: andelen klippta pixlar
+(urblåsta högdagrar döljer sticket) OCH vitpunktens EGEN färgmättnad (`wpChroma`)
+— **vitpunkten får bara vägas in i den mån den faktiskt ÄR neutral.** En blå
+himmel är helt oklippt och helt opålitlig som vitpunkt: hög wpChroma betyder att
+de ljusaste pixlarna inte är vita, och då tar gråvärld över eftersom den är
+mildare och inte förstärker motivets egen färg. (Läxan från Grens-materialet:
+klippning och neutralitet är olika saker.)
 
-**Gråvärld.** Antar att bildens genomsnitt ska vara neutralt. Enkel och stabil, men
-neutraliserar färgdominerade motiv — den skulle göra rosorna grå.
-
-**Vikten** styrs av andelen klippta pixlar. Är högdagrarna urblåsta döljs sticket
-där, och vitpunkten blir opålitlig → vikten flyttas mot gråvärld. Rena högdagrar →
-full tilltro till vitpunkten.
+**AVSTÅ — när ingen neutral referens finns.** Är vitpunkten färgad
+(`wpChroma > 0.18`) OCH scenens genomsnitt färgat (`sceneChroma > 0.12`) pekar
+båda metoderna åt samma håll och hybriden hjälper inte — bilden går inte att
+vitbalansera automatiskt. Då lämnas den orörd i färg och bara
+exponeringsnormaliseras: **hellre en bild som avviker i ton än en bild med
+förvriden färg. Looken i steg två drar ändå ihop serien.** (Grens: gul maskin +
+gulgrönt gräs utan en enda neutral yta — korrigering gjorde jorden lila.)
 
 ### Exponering
 
-Efter vitbalans skalas bilden mot `TARGET_LUMA = 132` (sRGB 8-bit).
+Efter vitbalans skalas bilden mot `TARGET_LUMA = 132` (sRGB 8-bit) — men bara
+utanför dödbandet `DEADBAND = 20`: en redan välexponerad bild rörs inte alls
+(|luma − 132| < 20 → faktor 1), så dokumentära bilder inte tvättas ur i onödan.
 
 ### Tak
 
@@ -100,34 +110,33 @@ Efter vitbalans skalas bilden mot `TARGET_LUMA = 132` (sRGB 8-bit).
 hellre delvis rättad än förvriden. Det är avsiktligt: en kraftigt underexponerad
 kvällsbild ska inte lyftas till dagsljus, den ska bara flyttas närmare.
 
-### Känd begränsning — blandat ljus
+### Kända begränsningar och gränszoner
 
-Blandat ljus (två ljuskällor med olika färgtemperatur i samma bild) kan inte lösas
-av en global vitbalans — den rumsliga tudelningen består genom normaliseringen.
-Mätt utfall: helheten flyttas mot neutral, uppdelningen kvarstår. Konsekvens:
-blandljusbilder sitter aldrig helt i en serie. Åtgärd är beskärning eller
-uteslutning, inte parameterjustering.
+**Blandat ljus.** Två ljuskällor med olika färgtemperatur i samma bild kan inte
+lösas av en global vitbalans — den rumsliga tudelningen består genom
+normaliseringen. Mätt utfall: helheten flyttas mot neutral, uppdelningen kvarstår.
+Konsekvens: blandljusbilder sitter aldrig helt i en serie. Åtgärd är beskärning
+eller uteslutning, inte parameterjustering.
 
-### Uppmätt beteende
+**Avstå-tröskelns gränszon.** Blandljus-testbilden mätte wpChroma 0,173 — ett
+hårstrå under avstå-tröskeln 0,18. Bilder i det bandet korrigeras alltså
+fortfarande (rätt när delvis neutral referens finns), men ligger nära gränsen:
+känn till zonen innan trösklarna (0,18/0,12) justeras.
 
-Kontrollerad testkörning (falsifieringstestet 2026-07-27, tio ljuslägen på samma
-motiv) genom normaliseringssteget:
+### Uppmätt beteende — facitet
 
-| Bild | RGB-medel före | RGB-medel efter |
-|---|---|---|
-| Varm tungsten, underexponerad | 90 / 68 / 46 | 108 / 108 / 105 |
-| Kall skugga | 87 / 105 / 143 | 131 / 132 / 131 |
-| Hård sol, ljus | 183 / 178 / 167 | 131 / 132 / 131 |
-| Färgdominerad röd, neutralt ljus | 131 / 107 / 108 | 154 / 125 / 127 |
-| Kraftigt underexponerad | 39 / 38 / 42 | 63 / 63 / 64 |
+**Konvergensfacitet är DOKUMENTÄRT material** (Grens-uppsättningen, 9 bilder,
+2026-07-28): **6 av 9 korrigeras, 3 avstår** (gul maskin/gulgrönt gräs — äkta
+referenslösa scener), hudton naturlig (porträttet: varm relation bevarad, himlens
+blå vitpunkt bortviktad), vintern neutral, jorden BRUN per konstruktion (avstå,
+inte korrigerad till lila).
 
-Neutrala scener konvergerar mot samma vitpunkt. Det färgstarka motivet **behåller
-sin färgrelation** — hybriden neutraliserar inte bort rödheten. Kraftigt felexponerade
-bilder landar delvis rättade, takbegränsat.
-
-Notera att detta är kontrollerat/syntetiskt material. Riktiga foton beter sig
-annorlunda, särskilt vid blandat ljus (se Känd begränsning ovan). Kör `--compare`
-på eget dokumentärt material innan parametrarna låses.
+Den syntetiska tiobildersuppsättningen (falsifieringstestet 2026-07-27) duger
+fortfarande för att verifiera att koden KÖR och att färgdominerade motiv behåller
+sin färgrelation (röd-bilden: 131/107/108 → 154/125/127 — rödheten kvar). Den
+duger INTE längre som konvergensfacit: enfärgade ytor utan någon neutral referens
+hamnar numera LEGITIMT i avstå-grenen — en scen som knappt förekommer i
+verkligheten, och korrekt beteende mot den input de utgör.
 
 ---
 
@@ -321,7 +330,10 @@ degradera till ren färgplatta i tokens + ordbild — aldrig ett tomt kort.
 
 Presetnamnen bär versionen implicit via skriptets git-historik. Vill du köra om
 äldre kunder på en senare look räcker det att uppdatera `treatment.mjs` och bygga
-om — källmaterialet i `raw/` och referensutrymmet i `ref/` är orörda.
+om — källmaterialet i `raw/` och referensutrymmet i `ref/` är orörda. **Ändras
+NORMALISERINGEN (steg 1) måste `ref/` däremot rensas före ombygget** —
+idempotens-hoppet ser bara filfärskhet (mtime), aldrig kodversion, så gamla
+ref-versioner ligger annars kvar orörda.
 
 Ändras ett preset efter att kunder byggts: notera det i `docs/05-beslutslogg.md`,
 eftersom sajternas uttryck då förändras utan att någon copy eller layout rörts.
@@ -345,9 +357,11 @@ duotone · dokumentar · ljus**. Kolumn två motsvarar exakt innehållet i `ref/
 det referensutrymme som lagras och som biblioteket bygger på.
 
 **Det som ska avgöras:** titta bara på kolumn två först. Hänger de normaliserade
-bilderna ihop *utan* look? Om ja är hela systemet bevisat för båda klustren, för
-det är normaliseringen som bär det bildrika fallet. Om nej — justera `TARGET_LUMA`
-och taken innan du bryr dig om presetsen.
+bilderna MED neutral referens ihop *utan* look? Referenslösa scener (avstå-grenen)
+får legitimt avvika i ton — looken drar ihop dem i steg två; döm dem på att färgen
+är OFÖRVRIDEN, inte på konvergens. Om referensbärande bilder inte hänger ihop —
+justera `TARGET_LUMA` och taken innan du bryr dig om presetsen.
 
-Testa på bilder med drastiskt olika ljus innan en batch körs skarpt. Det är hela
-poängen med jämförelseläget.
+Testa på DOKUMENTÄRA bilder med drastiskt olika ljus innan en batch körs skarpt —
+syntetiskt material missar både färgade vitpunkter och referenslösa scener (det
+var Grens-materialet som fångade båda, inte den syntetiska uppsättningen).

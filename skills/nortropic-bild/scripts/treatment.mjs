@@ -35,6 +35,7 @@ const WB_CAP = 0.45      // max vitbalanskorrigering per kanal
 const EXP_CAP = 0.60     // max exponeringskorrigering
 const TARGET_LUMA = 132  // målexponering, sRGB 8-bit
 const PCT = 0.98         // percentil för vitpunkt
+const DEADBAND = 20      // exponering rörs inte inom detta band
 
 const clamp = (v, cap) => Math.max(1 - cap, Math.min(1 + cap, v))
 
@@ -62,7 +63,10 @@ async function whitePoint(src) {
     if (lum[i] >= cut) { r += data[i*ch]; g += data[i*ch+1]; b += data[i*ch+2]; k++ }
     if (data[i*ch] > 250 || data[i*ch+1] > 250 || data[i*ch+2] > 250) clipped++
   }
-  return k ? { r: r/k, g: g/k, b: b/k, clipped: clipped/n } : null
+  const R = r/k, G = g/k, B = b/k
+  const mx = Math.max(R,G,B), mn = Math.min(R,G,B)
+  const wpChroma = mx > 0 ? (mx - mn) / mx : 1
+  return k ? { r: R, g: G, b: B, clipped: clipped/n, wpChroma } : null
 }
 
 export async function analyse(src) {
@@ -80,7 +84,13 @@ export async function normalise(src) {
   const wp = await whitePoint(src)
   const s = await analyse(src)
 
-  const w = wp ? Math.max(0, 1 - wp.clipped * 3) : 0   // tilltro till vitpunkten
+  // Vitpunkten får bara vägas in i den mån den FAKTISKT ÄR NEUTRAL. Hög egen
+  // färgmättnad (blå himmel, gult gräs, röd fasad) betyder att de ljusaste
+  // pixlarna inte är vita — då ska gråvärld ta över, eftersom den är mildare
+  // och inte förstärker motivets egen färg.
+  const w = wp
+    ? Math.max(0, 1 - wp.clipped * 3) * Math.max(0, 1 - wp.wpChroma * 4)
+    : 0
 
   const gGrey = (s.r + s.g + s.b) / 3
   const gw = [gGrey/s.r, gGrey/s.g, gGrey/s.b]
@@ -88,10 +98,22 @@ export async function normalise(src) {
   const wGrey = wp ? (wp.r + wp.g + wp.b) / 3 : 1
   const pw = wp ? [wGrey/wp.r, wGrey/wp.g, wGrey/wp.b] : [1, 1, 1]
 
-  const wb = [0,1,2].map(i => clamp(pw[i]*w + gw[i]*(1-w), WB_CAP))
+  // Saknas neutral referens i bilden går den inte att vitbalansera automatiskt
+  // (vitpunkten färgad OCH scenens genomsnitt färgat — båda metoderna pekar åt
+  // samma håll, hybriden hjälper inte). Då lämnas bilden orörd i färg och bara
+  // exponeringsnormaliseras — hellre en bild som avviker i ton än en bild med
+  // förvriden färg. Looken i steg två drar ändå ihop serien.
+  const sceneChroma = (Math.max(s.r,s.g,s.b) - Math.min(s.r,s.g,s.b)) / Math.max(s.r,s.g,s.b)
+  const ingenReferens = wp && wp.wpChroma > 0.18 && sceneChroma > 0.12
+
+  const wb = ingenReferens
+    ? [1, 1, 1]
+    : [0,1,2].map(i => clamp(pw[i]*w + gw[i]*(1-w), WB_CAP))
 
   const wbLuma = 0.2126*s.r*wb[0] + 0.7152*s.g*wb[1] + 0.0722*s.b*wb[2]
-  const exp = clamp(TARGET_LUMA / wbLuma, EXP_CAP)
+  const exp = Math.abs(wbLuma - TARGET_LUMA) < DEADBAND
+    ? 1
+    : clamp(TARGET_LUMA / wbLuma, EXP_CAP)
 
   return sharp(src).linear(wb.map(k => k * exp), [0, 0, 0])
 }
