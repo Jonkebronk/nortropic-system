@@ -1,6 +1,6 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-27 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-28 · v17 (denna commit)
 
 > **Ny här?** Läs [00-borja-har.md](00-borja-har.md) först — hela systemet förklarat från noll utan interna termer. Den här filen och 02–07 är det djupare, tekniska lagret.
 
@@ -43,7 +43,7 @@ Två ligger i pipelinen, ett i systemunderhållet. De är systemets **beslutsgri
 
 ## Artefaktkedjan
 
-Allt börjar med `research.md` — kundens faktakälla och det enda dokument som faktapåståenden får spåras till. `/nortropic-plan` förädlar den till `PROJECT-BRIEF.md`, som efter godkännande blir auktoritet för allt nedströms. `/nortropic-init` materialiserar briefen som ett GitHub-repo med Vercel-preview.
+Allt börjar med `research.md` — kundens faktakälla och det enda dokument som faktapåståenden får spåras till. `/nortropic-plan` förädlar den till `PROJECT-BRIEF.md`, som efter godkännande blir auktoritet för allt nedströms — tillsammans med `SLOTS.json` bredvid briefen: §5-slot-tabellens maskinläsbara spegel (bildspår, bildbehandling, en rad per bildplats), som bildanskaffningen och behandlingssteget läser. `/nortropic-init` materialiserar briefen som ett GitHub-repo med Vercel-preview.
 
 Granskningarna producerar `REVIEW-REPORT.md`, vars meta-block (commit, datum, scope, mode) är det freshness-grinden i launch läser; kalibreringskörningar skriver i stället `REVIEW-REPORT-CALIBRATION.md` och rör aldrig metan (`workflows/nortropic-review.js`). Launchen producerar fyra saker: `EVAL-RESULT.md` (poängkortet — informativt, aldrig blockerande; grindarna blockerar, evalen mäter), den svenska kundöverlämningen `HANDOVER.md`, samt de klientfyllda `gbp-checklist-klient.md` och `gsc-steg-klient.md` (`workflows/nortropic-launch.js`).
 
