@@ -117,7 +117,7 @@ Run these checks and report each check's state with evidence — **tri-state**: 
 
 ## MODE: vaktmastare (N1 — mekanisk synk, auto-apply)
 0. **AUTOPILOT-grinden (ALLTID FÖRST):** kräver `n1` eller `on`; annars skriv "AUTOPILOT=<värde> — vaktmästaren är avstängd" och avsluta. Därefter incident-kontrollen (TRAPPAN #2).
-1. **Baslinje:** kör doctor 1–12. Grön = **0 FAIL** (WARNs är arbetslistan — #12-drift och trasiga referenser är precis det vaktmästaren finns för; kräv aldrig WARN-frihet, då kan vaktmästaren aldrig starta). En FAIL i baslinjen → åtgärda INGET, rapportera och stanna: vaktmästaren synkar ett friskt system, den lagar inte ett trasigt.
+1. **Baslinje:** kör doctor 1–13. Grön = **0 FAIL** (WARNs är arbetslistan — #12-drift och trasiga referenser är precis det vaktmästaren finns för; kräv aldrig WARN-frihet, då kan vaktmästaren aldrig starta). En FAIL i baslinjen → åtgärda INGET, rapportera och stanna: vaktmästaren synkar ett friskt system, den lagar inte ett trasigt.
 2. **Ändringsklassen (uttömmande vitlista — allt annat är förslag):**
    a) docs-synk: påstående ↔ källfil i `docs/` + `README.md`, inkl. `Senast verifierad`-rader
    b) trasiga referenssökvägar (fil flyttad → uppdatera pekaren; pekaren rättas, aldrig innehållet den pekar på)
