@@ -29,7 +29,11 @@ Rules: å/ä/ö transliterate in slugs (`/omraden/taby`), keep å/ä/ö in title
 Never superlatives in meta; numbers and place names win the click.
 
 ## Schema (JSON-LD — full patterns in `references/nordic-schema-patterns.md`)
-- Root: `LocalBusiness` (use the specific subtype: `Plumber`, `Electrician`, `HousePainter`, `MovingCompany`, `HVACBusiness`...) with Swedish `PostalAddress`, `openingHoursSpecification` (incl. avvikande helgdagar), `telephone` E.164, `areaServed`, `priceRange` in SEK, `aggregateRating` ONLY from real Google data
+- Root: `LocalBusiness` (use the specific subtype: `Plumber`, `Electrician`, `HousePainter`, `MovingCompany`, `HVACBusiness`, `TreeService`...) with `openingHoursSpecification` (incl. avvikande helgdagar), `telephone` E.164, `areaServed`, `priceRange` in SEK, `aggregateRating` ONLY from real Google data
+- **Adressen styrs av `business.ts` → `address.publik`:**
+  - `true` → `PostalAddress` i schemat, adress synlig i footer och GBP
+  - `false` → **UTELÄMNA `address`**, sätt `areaServed` från orterna. Adressen döljs i GBP. Footer visar ort och serviceområde, aldrig gatuadress.
+  Skälet: Google kräver dold adress för verksamheter utan besöksadress, och en adress som finns i schemat men är dold i GBP är en NAP-avvikelse mellan två källor som båda ser korrekta ut. Strikt schema.org-läsning föreskriver `Organization` i det fallet; praxis i lokal SEO är subtyp + `areaServed`, och den fungerar. Vi kör praxis medvetet.
 - Service pages: `Service` + `FAQPage` (drives rich snippets — the FAQ block is mandatory on service pages)
 - Area pages: `Service` with `areaServed` → the specific `City`/`AdministrativeArea`
 - Validate every page in Rich Results Test before launch

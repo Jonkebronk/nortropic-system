@@ -41,6 +41,7 @@ Use the MOST specific @type: `Plumber`, `Electrician`, `HVACBusiness`, `HousePai
 ```
 
 Swedish specifics:
+- **`address` är villkorad av `business.ts` → `address.publik`**: `true` → `PostalAddress` som i exemplet ovan; `false` (serviceområdesföretag) → UTELÄMNA `address` helt — `areaServed` bär geografin och adressen döljs i GBP. En adress i schemat som är dold i GBP är en NAP-avvikelse mellan två källor som båda ser korrekta ut (regeln i SKILL.md Schema-sektionen). Exemplet ovan visar `publik: true`-fallet.
 - `telephone` in E.164 (`+46...`) — display format stays in visible HTML
 - Jour dygnet runt → single spec `"opens": "00:00", "closes": "23:59"` all seven days; avvikande helgdagar via `specialOpeningHoursSpecification` if hours genuinely differ
 - `aggregateRating` ONLY with real Google data and only if those reviews are surfaced on the page: `{ "@type": "AggregateRating", "ratingValue": 4.8, "reviewCount": 127 }` — fabricated ratings risk manual action
