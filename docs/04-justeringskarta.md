@@ -1,6 +1,6 @@
 # Justeringskartan — ändra med öppna ögon
 
-Senast verifierad mot systemet: 2026-07-27 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-28 · v17 (denna commit)
 
 Varje större designval i systemet kostar något och köper något. Det här dokumentet finns för att du ska kunna skruva — eller ta bort — ett val medvetet: här står vad det kostar, vad det köper, exakt var man skruvar, och vad som sannolikt händer utan det. Ändringar går som vanligt via steward-förslag och commit; historiken bakom varje val finns i [05-beslutslogg.md](05-beslutslogg.md).
 
