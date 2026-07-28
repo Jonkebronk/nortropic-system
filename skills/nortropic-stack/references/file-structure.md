@@ -116,3 +116,4 @@ export type Service = {
 - Pages import content, never hardcode business facts
 - New service/area = one array entry → page, sitemap, schema, nav all update
 - `error.tsx` and `not-found.tsx` always render the phone number — a broken page must still generate the lead
+- `app/robots.ts`: AI-crawlers (`GPTBot`, `PerplexityBot`, `ClaudeBot`, `OAI-SearchBot`) TILLÅTS medvetet på skarp klient — kunden vill bli hittad, inte skydda innehåll; blockering gör kunden osynlig i ChatGPT/Perplexity/Claude-svar. Skriv valet som kommentar i filen. Undantag: TESTKLIENT — där är total blockering korrekt (hela sajten är noindex)

@@ -44,6 +44,7 @@ Never superlatives in meta; numbers and place names win the click.
 - Internal linking: Hem → all services; every service ↔ related services; every area → services offered there; footer links all areas (that's the NAP+area crawl path)
 - Bilder: filenames in Swedish (`avloppsrensning-taby-fore.webp`), alt text descriptive Swedish
 - `hreflang` only when the site truly has language variants (see `references/nordic-schema-patterns.md` §hreflang) — a Swedish-only site needs NONE (self-referencing optional). Never fake sv-FI/nb-NO variants for SEO.
+- `robots.ts`: blockera ALDRIG AI-crawlers (`GPTBot`, `PerplexityBot`, `ClaudeBot`, `OAI-SearchBot`) på en skarp klient — kunden vill bli hittad, inte skydda innehåll; en blockering stänger dörren till AI-svar (ChatGPT/Perplexity/Claude) tyst. (TESTKLIENT: blockering är korrekt — hela sajten är noindex.)
 
 ## Citations & omdömen (execution list: `references/swedish-directories.md`)
 Priority order: Google Företagsprofil → hitta.se → eniro.se → reco.se → trustpilot.se (if client wants) → merinfo/allabolag (auto-listed from Bolagsverket — verify correctness, don't create). Same NAP everywhere. Omdömen strategy: ask EVERY happy customer for a Google review with a direct review link (QR on faktura works); respond to every review in Swedish within a week.
