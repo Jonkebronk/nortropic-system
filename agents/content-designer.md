@@ -30,6 +30,7 @@ Before starting: check memory for per-bransch voice patterns and phrases that wo
    - **FAQ exception to the "write around it" rule:** `schema-markup.tsx` (`FaqSchema`) drops any FAQ answer still containing `TODO-FACT`/`TODO-COPY` from FAQPage structured data. If you cannot answer a FAQ from confirmed facts, KEEP the `TODO-FACT:` marker inside that answer — do not paraphrase it away. A marker-free filler answer ships a placeholder into Google structured data; the marker is what keeps the unanswered Q&A out.
 5. **Humanisera (obligatoriskt, efter all copy — före rapport):** invoke `content-humanizer` (Skill tool) och kör HELA den skrivna copyn genom den — hero, tjänstesidor, ortssidor, FAQ, om-oss, formulär-microcopy. Åtgärda det den flaggar. Två hårda gränser: (a) antislop-blocklistan gäller fortfarande — humaniseringen får ALDRIG introducera förbjudna fraser; (b) FAKTA ändras aldrig — faktatrohet mot research.md/briefen är orubblig.
 6. Self-audit against the blocklist before finishing; kör sedan en deterministisk `Grep` av den skrivna copyn mot de LITERALA blocklist-fraserna (svenska frastabellen + engelska läckage-listan i `nortropic-antislop/references/copy-blocklist.md`) och åtgärda varje träff — ingen självpoäng. Verifiera även att humaniseringssteget inte introducerade blocklist-fraser eller ändrade fakta.
+7. **Fotouppdrag (obligatoriskt när slot-tabellen har `saknas` på ersättningsprio 1–2):** skriv `fotouppdrag-klient.md` i projektroten enligt `nortropic-bild/references/fotouppdrag-mall.md`. **Bädda in den behandlade platshållaren för varje efterfrågad slot** — kunden ska se bilden och läsa "ta en sån här, fast din". Begränsa till prioritet 1–2: fyra tydliga krav kommer in, tolv gör att inget kommer in. Efterfråga aldrig `hero-*`, `env-*` eller `detail-*` — de är designval, inte skulder. **Vid preset `ljus`: skriv fotouppdraget FÖRE copy-arbetet och flagga det i rapporten som blockerande** — produkten kan aldrig genereras, så bilderna är en förutsättning.
 
 ## Images
 
@@ -60,7 +61,7 @@ Trybloom MCP används för sådant genereringen inte gör: `vectorize_image` (lo
 `copywriting` (conversion copy frameworks) · `image` (image handling) · 21st MCP (layout inspiration — content structure only, never SaaS voice) · `nortropic-seo-lokal` (load before writing the step-3 meta titles/descriptions — not preloaded here; use the same templates seo-optimizer uses so the two never diverge)
 
 ## Report
-List: pages written, headline alternates, facts still missing (blocking), generated images marked for replacement, blocklist-grep: fraser funna/åtgärdade (eller 0 träffar).
+List: pages written, headline alternates, facts still missing (blocking), generated images marked for replacement, blocklist-grep: fraser funna/åtgärdade (eller 0 träffar), fotouppdrag-klient.md skrivet (ja/nej) + antal efterfrågade slots.
 
 ## Arbetslogg (Z1)
 Skriv ditt block i `AGENT-LOG.md` enligt `nortropic-stack/references/arbetslogg.md`. För dig faller `beslut`/`källa→beslut` nästan alltid — copy-beslut står redan i dina commits + `TODO-FACT`/`TODO-COPY`-kommentarer. Logga bara: en genuin `friktion` (en tyst ärlighets-avvägning, en gissning) och `var förfina` (ett återkommande eget mönster, t.ex. en stilistisk tell). Fullt block = varningsflagga; inget genuint → hoppa. Ingen kund-repo → `utfall=kunde-ej-koras`.
