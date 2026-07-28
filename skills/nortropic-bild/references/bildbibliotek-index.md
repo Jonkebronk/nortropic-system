@@ -49,6 +49,11 @@ framtida format åt. `luft` och `orientering` gör slot-matchningen till ett urv
 stället för slumpdragning. `anvandningar` viktas negativt så samma bild inte
 återkommer på var tredje kundsajt.
 
+**Ankarbildens payload-gräns:** när ankaret skickas till genereringen kodas det som
+data-URI, nedskalat till max 1024 px längsta sidan + JPEG q80 före base64. Ankaret
+styr STIL, inte upplösning — full storlek tillför inget men skickas i VARJE
+genereringsanrop, så en okomprimerad ankarbild vore ren payload-vikt per anrop.
+
 ## Fotografering som komplement
 
 Miljöklassen bör fotograferas när tillfälle ges — riktigt fotografi är starkare och

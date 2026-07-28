@@ -25,6 +25,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from
 import { join, dirname } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { homedir, tmpdir } from 'os'
+import sharp from 'sharp'
 import { score } from './score.mjs'
 import { normalise } from './treatment.mjs'
 
@@ -95,9 +96,15 @@ function slaIBibliotek(manifest, slot, anvanda) {
 // ── Generering ───────────────────────────────────────────────
 
 /** fal:s image_urls kan inte läsa lokala sökvägar — ankarbilden (lokal ref-fil)
- *  skickas som data-URI. Utan detta bryter ankringsmekaniken tyst. */
-function tillDataUri(fil) {
-  const bin = readFileSync(fil)
+ *  skickas som data-URI. Utan detta bryter ankringsmekaniken tyst.
+ *  GRÄNS: skalas till max 1024 px längsta sidan + JPEG q80 före base64 —
+ *  ankaret styr STIL, inte upplösning; full storlek är bara payload-vikt,
+ *  och den skickas PER ANROP, inte per körning. */
+async function tillDataUri(fil) {
+  const bin = await sharp(fil)
+    .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+    .jpeg({ quality: 80 })
+    .toBuffer()
   return `data:image/jpeg;base64,${bin.toString('base64')}`
 }
 
@@ -109,7 +116,7 @@ async function generera(roll, prompt, ankarbild, n = KANDIDATER) {
   const body = {
     prompt,
     num_images: n,
-    ...(ankarbild && existsSync(ankarbild) ? { image_urls: [tillDataUri(ankarbild)] } : {}),
+    ...(ankarbild && existsSync(ankarbild) ? { image_urls: [await tillDataUri(ankarbild)] } : {}),
   }
 
   const res = await fetch(`${models.endpoint}${r.modell}`, {
