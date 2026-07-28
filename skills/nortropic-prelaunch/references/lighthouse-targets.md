@@ -20,9 +20,25 @@ Run: chrome-devtools MCP `lighthouse_audit`, or `npx lighthouse <url> --preset=m
 ## Weight budgets (Hem, mobile)
 - Total transfer < 1 MB · JS < 200 kB gzipped · Hero image < 150 kB (AVIF) · Fonts ≤ 2 families / 4 weights, self-hosted via `next/font`
 
+### Bildbudget per slot-prefix (enforced av treatment.mjs budgetloop)
+| Slot-prefix | Budget (avif) |
+|---|---|
+| `hero-*` | 150 kB |
+| `people-*` | 100 kB |
+| övriga (`env`/`proof`/`detail`/`og`) | 120 kB |
+
+Behandlingen kodar avif q55 och sänker i steg om 5 (golv q35) tills budgeten hålls;
+golv nått utan budget → WARN-rad i `BILDRAPPORT.json`, aldrig byggfel. **q55 är ett
+TAK av kompressionsskäl, inte en smakinställning** — uppmätt klippa q55→q60
+(dokumentar 59→206 kB, ljus 71→278 kB, 2400×1350 högentropisk källa); q60+ sätts
+aldrig utan ny mätning. Preset-kostnaden är inte intuitiv (duotone dyrast vid q55 —
+tint återinför kroma), därför mäts storleken per bild, aldrig antas per preset.
+**Spår A + preset `ljus` är kundprofilen närmast LCP-gränsen** (flest foton, minst
+overlay) — extra uppmärksamhet på hero-storleken där.
+
 ## Common Nortropic failure patterns
 1. **Map embed loaded eagerly on Kontakt** → lazy-load below fold, `loading="lazy"`, or facade pattern (static image → iframe on click)
-2. **Team photos straight from phone camera (4MB JPEG)** → run through Next image pipeline, cap at display size ×2
+2. **Team photos straight from phone camera (4MB JPEG)** → mekaniskt löst av behandlingssteget: filen läggs i `public/images/raw/` med slot-id-prefix och prebuild (`scripts/treatment.mjs`) normaliserar, beskär och budgetkodar den — aldrig manuell nedskalning
 3. **shadcn accordion/sheet pulling client JS into every page** → import only where used
 4. **Google Fonts CDN** → forbidden anyway (GDPR practice) — `next/font` self-hosted fixes both
 5. **Testimonial/logo carousels** → replace with static grid; carousels hurt LCP and nobody swipes them

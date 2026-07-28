@@ -49,6 +49,7 @@ Click = primary conversion event (fire `phone_click` to analytics in a client wr
 ## shadcn/ui usage
 - Install per component: `button`, `card`, `input`, `label`, `select`, `textarea`, `accordion`, `sheet` (mobile nav) — nothing speculative
 - Theme via Tailwind 4 `@theme` tokens: `--color-primary` = trade anchor color, `--color-accent` = CTA only
+- Därtill de två kanoniska palett-aliasen i `:root`: `--nortropic-ink` (mörkaste ytan i paletten) + `--nortropic-accent` (trade-anchored accent ur §5) — alias till befintliga tokenvärden, aldrig nya färger; läses av `scripts/treatment.mjs` (bildbehandlingen), som degraderar med WARNING om de saknas — paletten gissas aldrig
 - Never restyle shadcn internals per-usage; extend via `cn()` + variants (cva)
 - shadcn now scaffolds **Base UI** primitives (`@base-ui/react`), **not Radix**. The Base UI `Button` has **no `asChild` prop** — to render a link that looks like a button, put `buttonVariants({ variant, size })` on the `<Link>`/`<a>` (import `buttonVariants` from `@/components/ui/button`), never `<Button asChild>`.
 
