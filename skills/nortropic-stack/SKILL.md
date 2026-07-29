@@ -70,7 +70,7 @@ design-referenser/                # repo-ROTEN: kopia av <kundmapp>/referenser/ 
 
 No `(site)` route group — header/footer/phone live in the root `app/layout.tsx` so `not-found.tsx` and `error.tsx` inherit full chrome and the phone number. Matches `references/file-structure.md` and the shipped build.
 
-**`content/business.ts` is sacred**: name, address, phone, org.nr, öppettider live ONLY here and must exactly match the client's Google Företagsprofil (NAP consistency). Header, footer, schema, and copy all import from it. **Fältkontraktet är NORMATIVT och bor i `references/file-structure.md` (Content type contracts) — Read det INNAN contentfilerna skrivs.** Fältnamn är ENGELSKA (`address.street`/`postalCode`/`city` + `publik`), innehållet svenskt; `postalCode` alltid `"NNN NN"` med mellanslag ("971 87"), identiskt i schema, footer och GBP-underlag. Hitta ALDRIG på egna fältnamn eller interfaces — schema.org-mappningen är engelsk, och ett översättningssteg per bygge är en tyst felkälla (Fanérverket-läxan AH17: pekar-kontraktet lästes aldrig medan det INLINADE profile.ts-kontraktet nedan följdes — därav Read-kravet).
+**`content/business.ts` is sacred**: name, address, phone, org.nr, öppettider live ONLY here and must exactly match the client's Google Företagsprofil (NAP consistency). Header, footer, schema, and copy all import from it. **`references/file-structure.md` är NORMATIV I SIN HELHET — Read HELA filen INNAN du skriver filer under `app/` eller `content/`.** Två sektioner bär regler: `Content type contracts` (fältnamn och former) och `Rules` (bl.a. AI-crawler-policyn i `app/robots.ts`, som annars bara finns hos granskaren). Fältnamn är ENGELSKA (`address.street`/`postalCode`/`city` + `publik`), innehållet svenskt; `postalCode` alltid `"NNN NN"` med mellanslag ("971 87"), identiskt i schema, footer och GBP-underlag. Hitta ALDRIG på egna fältnamn eller interfaces — schema.org-mappningen är engelsk, och ett översättningssteg per bygge är en tyst felkälla (Fanérverket-läxan AH17: pekar-kontraktet lästes aldrig medan det INLINADE profile.ts-kontraktet nedan följdes — därav Read-kravet).
 
 `content/business.ts` also carries `testklient: boolean` (from the brief's Klienttyp). When `true`, the site is built non-indexable: `robots.ts` reads a `noindex` flag (driven by `NEXT_PUBLIC_NOINDEX=1` in Vercel) and disallows all crawling, and page metadata sets `robots: { index: false, follow: false }`. A fictional/demo business must never be indexable or claimable. This flag + env var are the canonical way any agent detects a TESTKLIENT.
 
@@ -81,7 +81,12 @@ No `(site)` route group — header/footer/phone live in the root `app/layout.tsx
 - Service pages: `/tjanster/<tjänst>` · Area pages: `/omraden/<ort>`
 - No trailing slashes, no uppercase, no dates in URLs
 
-## Component Patterns (full version in `references/component-patterns.md`)
+## Component Patterns
+
+**Read `references/component-patterns.md` INNAN du skriver komponenter.** Den bär tre fel som INTE fångas av grindarna, eftersom de sitter i vägar en lyckad genomkörning aldrig tar:
+- **React 19 `<form action>` auto-reset** — okontrollerade fält nollställs efter submit, alltså i FELLÄGET där besökaren behöver dem kvar. Gate 1 testar den lyckade vägen och ser inget. Två sanktionerade motmedel i filen; utan endera föds sajten med en lead-dödande bugg.
+- **Samtyckesgrindad kartfasad**
+- **JSON-LD-escape**
 - Server Components by default; `"use client"` only for the quote form, mobile nav, and anything with handlers
 - Every page composes: `<Hero>` → content sections → `<CtaBanner>` (closing CTA is a shared component, phone from `business.ts`)
 - `<PhoneLink>` component wraps every phone number occurrence (renders `tel:` + tracks click as conversion)
