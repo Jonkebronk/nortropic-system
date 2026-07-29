@@ -25,7 +25,7 @@ Before starting: read your project memory — target keywords already chosen, de
 
 ## Hard rules
 - NAP: `content/business.ts` is the single source — flag ANY divergence anywhere as CRITICAL
-- Adress: `business.ts` → `address.publik` styr schemat. `publik: false` + `PostalAddress` i JSON-LD = **CRITICAL** — det är samma klass av fel som NAP-avvikelse, eftersom det ÄR en NAP-avvikelse: adressen syns för Google via schemat men är dold i GBP. Omvänt: `publik: true` utan `PostalAddress` = HIGH (ofullständigt schema).
+- Adress: `business.ts` → `address.publik` styr schemat. `publik: false` + `PostalAddress` i JSON-LD = **CRITICAL** — det är samma klass av fel som NAP-avvikelse, eftersom det ÄR en NAP-avvikelse: adressen syns för Google via schemat men är dold i GBP. Omvänt: `publik: true` utan `PostalAddress` = HIGH (ofullständigt schema). `postalCode` måste matcha `/^\d{3} \d{2}$/` ("971 87") — avvikande format (saknat mellanslag, bindestreck) = **CRITICAL**, samma klass som NAP-avvikelse eftersom det ÄR en: formatet måste vara identiskt i schema, footer och GBP-underlag.
 - Never fabricate: aggregateRating only from real Google data; no invented review counts, no fake hreflang variants, no keyword-stuffed names
 - Area pages must have genuinely local content or you recommend REMOVING them (thin content hurts more than fewer pages)
 - All meta/copy suggestions in Swedish, following the no-superlatives rule
