@@ -25,6 +25,13 @@ Never on a Swedish site, and never in meta tags either: unlock, elevate, seamles
 
 ## Forbidden structures
 - **Em-dash chains** — like this — everywhere — the AI tell. Max one per paragraph.
+
+> **Tankstrecks-kadens (fältprövad regel, 2026-07):** Enstaka tankstreck är korrekt svenska och fälls aldrig ensamt. Det som fäller är DENSITET + IDENTISK MALL:
+> - **H1/title-mallen "X — kvalificerare" på fler än 2 av 5 sidor** = fynd (MEDIUM copy-polish). Variera konstruktionerna runt nyckelordet (fråga, kolon, relativsats) — nyckelordet står alltid kvar ordagrant; se upp så inte kolon blir den nya mallen.
+> - **Dubbel-tankstreck-appositioner** ("X — förklaring — Y") = fynd (gränsar till förbjudna em-dash-kedjor).
+> - **Åtgärden är variation, aldrig utrotning**: konvertera ungefär var tredje (rikta ~40 % reduktion); behåll strecket där pausen bär (skarp kontrast, listintro, positioneringsslag), konvertera där det bara är additivt/parentetiskt. Facit är uppläst rytm, inte streckräkning.
+> - Samma familj: **identisk kolon-trippel-öppnare** ("situationen: X, Y, Z") på alla tjänstesidor = samma mall-tell; variera minst hälften.
+
 - **Triplet padding**: three adjectives where one fact belongs.
 - **Mirror openers**: paragraph after paragraph starting "Vi ..." — vary subjects.
 - **FAQ questions no one asks** ("Varför ska jag välja er?") — use real customer questions ("Vad kostar det att spola avloppet?", "Har ni jour på helger?", "Gäller ROT-avdraget?").
