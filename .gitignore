@@ -8,6 +8,7 @@
 /docs/*.db
 !/agents/
 !/workflows/
+!/scripts/
 !/tests/
 !/AUTOPILOT
 !/vendored-skills/
