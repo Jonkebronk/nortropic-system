@@ -1,6 +1,6 @@
 # nortropic-system
 
-Senast verifierad mot systemet: 2026-07-28 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
 
 Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som föreslår — och som sedan v15 dessutom självapplicerar en strikt avgränsad ändringsklass under konstitutionen ([docs/07-konstitution.md](docs/07-konstitution.md)), grindat av kill-switchen `AUTOPILOT` (default `off`); allt annat kräver mänskligt godkännande.
 
@@ -21,7 +21,7 @@ En kundsajt går genom tolv noder. Tre av dem är hårda stopp där en människa
 | 7 | Launch | `/nortropic-launch` | verdikt, `EVAL-RESULT.md`, `HANDOVER.md` |
 | 8 | Juridik | **HÅRT STOPP** — människan signerar Gate 6-fynden | juridiskt sign-off |
 | 9 | Deploy | `/vercel:deploy` (efter sign-off) | produktionssajt |
-| 10 | Efterarbete | inget kommando — kör `gbp-checklist-klient.md` + `gsc-steg-klient.md` | GBP live, GSC verifierad |
+| 10 | Efterarbete | `/nortropic-cutover` (fas 1–3: förkontroll → noindex → GSC-preflight; fas 4–7 — GBP, citations m.m. — fortsatt manuella via `gbp-checklist-klient.md` + `gsc-steg-klient.md`) | GBP live, GSC verifierad |
 | 11 | Retro | `/nortropic-retro <projektmapp \| system>` | `STEWARD-REPORT.md` + förslag |
 | 12 | Godkänn förslag | **HÅRT STOPP** — "applicera förslag N" till huvudsessionen | systemcommits |
 
@@ -31,7 +31,8 @@ Detaljerad nodkarta med agent, modell och effort per nod finns i [docs/01-oversi
 
 - **`agents/`** — de 7 agenterna: `project-planner`, `stack-builder`, `content-designer`, `design-reviewer`, `seo-optimizer`, `qa-launcher`, `nortropic-steward`. Frontmattern bär modellkontraktet (model/effort) som doctor #8 vaktar.
 - **`skills/`** — 10 skills: tre pipeline-steg som bara människan får trigga (`nortropic-plan`, `nortropic-init`, `nortropic-retro`, alla med `disable-model-invocation: true`) och sju kunskaps-/grindskills (`nortropic-stack`, `nortropic-antislop`, `nortropic-bild`, `nortropic-seo-lokal`, `nortropic-prelaunch`, `nortropic-eval`, `gsap-build`).
-- **`workflows/`** — 5 workflows: `nortropic-review.js` (3 granskningslinser + adversariell verifiering), `nortropic-launch.js` (freshness-grind → 7 granskningslinser → fixloop ≤3 → eval → handover), `nortropic-verify-suite.js` (v15 — trappans regressionsnät: doctor → plan-torrtest + eval-stabilitet + template-spotcheck mot frysta baselines), `nortropic-autobygg.js` (v16 — obemannat kund-flöde: plan→init→content→review→grind-torrkörning med tre villkorade stopp; deployar aldrig) och `nortropic-final-touches.js` (v16 — genererar `FINAL-TOUCHES.md`, delad av autobygg + manuell efter launch).
+- **`workflows/`** — 6 workflows: `nortropic-review.js` (3 granskningslinser + adversariell verifiering), `nortropic-launch.js` (freshness-grind → 7 granskningslinser → fixloop ≤3 → eval → handover), `nortropic-verify-suite.js` (v15 — trappans regressionsnät: doctor → plan-torrtest + eval-stabilitet + template-spotcheck mot frysta baselines), `nortropic-autobygg.js` (v16 — obemannat kund-flöde: plan→init→content→review→grind-torrkörning med tre villkorade stopp; deployar aldrig), `nortropic-final-touches.js` (v16 — genererar `FINAL-TOUCHES.md`, delad av autobygg + manuell efter launch) och `nortropic-cutover.js` (nod 10 fas 1–3: förkontroll → noindex-verifiering → GSC-preflight; människotriggat, aldrig obemannat — fas 4–7 medvetet manuella).
+- **`scripts/`** — operatörskörda hjälpskript: `gsc-setup.mjs` (GSC META-verifiering med vaktarna TESTKLIENT/.vercel.app/kanonisk kontroll före varje skarp handling; anropas fristående eller ur `nortropic-cutover.js` fas 3 — den irreversibla GSC-skrivningen är alltid operatörens hand).
 - **`vendored-skills/`** — facit-kopior av de 9 bärande tredjepartsskillsen (designkanonen ×8 inkl. `frontend-design` + `content-humanizer`), var och en med `VENDORED.md`. Doctor #9 diffar originalen mot kopiorna.
 - **`tests/`** — verify-suitens frysta baselines (`tests/fixtures/`). Människoägda per konstitutionen §A6; kandidater tas fram med `--cut-baseline`, committandet är en mänsklig handling.
 - **`AUTOPILOT`** — trappans kill-switch: `off` | `n1` | `on` (saknad fil = `off`). Skrivs endast av människa; nivåbyte är en commit.
