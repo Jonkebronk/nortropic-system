@@ -8,6 +8,8 @@ argument-hint: "[url-or-path]"
 
 Run against `$ARGUMENTS` (preview URL preferred, else local build). **Every gate is PASS/FAIL — no "mostly done".** A site that loses one lead per week because of a broken form costs the client more than a week's delay. Legal findings are NEVER auto-fixed — report them and stop for human judgment.
 
+> **Deployment Protection & bypass (Gate 7-relaterat, gäller alla URL-kontroller):** om preview-deployen har Vercel Deployment Protection på — vilket Gate 7 nedan KRÄVER — svarar en naken `.vercel.app`-förfrågan `401`. Varje URL-baserad kontroll i grindarna nedan (Lighthouse, header-`curl`, responsiv rendering, end-to-end-lead) UTOM Gate 7:s egen protection-assertion måste därför autentisera via **Protection Bypass for Automation**: skicka hemligheten `VERCEL_AUTOMATION_BYPASS_SECRET` som headern `x-vercel-protection-bypass` (curl/fetch) eller som query `?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true` (webbläsare/Lighthouse/Playwright — cookien håller bypassen genom hela sessionen). Ett `401` på någon ANNAN kontroll = saknad/fel bypass-hemlighet i verktyget, inte ett sajtfel: fixa verktyget, rapportera inget sajtfynd.
+
 ## Gate 0 — Build Integrity
 - [ ] `pnpm build` completes: zero TS errors, zero ESLint errors
 - [ ] No `console.log`, lorem ipsum, or placeholder images in shipped code
@@ -28,6 +30,8 @@ Läs `content/profile.ts` FÖRST: `primaraktion` + `gate1Test` definierar vad so
 
 **Annan primärhandling** (boka tid / platsförfrågan / besök): motsvarande kedja per `gate1Test` — t.ex. boka-flödet når den externa bokningstjänsten och fungerar, bokningsevent spåras, felväg visar telefon/alternativ kontaktväg; 404/error visar alltid en kontaktväg. Kravnivån är identisk: leveransen/genomförandet är testet, aldrig ett 200.
 
+> **Täckningsnot (deskriptiv arkitekturfakta):** puls-routen (`/api/puls`, förslag 07) övervakar löpande att sändinfrastrukturen levererar — den kör INTE server action-vägen i `lead.ts`. Den vägen täcks av Gate 1:s end-to-end-leveranstest ovan (orört, alltid till skarpa `LEAD_TO_EMAIL`); ett fel isolerat DIT fångas inte av pulsen mellan lanseringar utan först vid nästa körning av denna grind. (Dygnlig Playwright mot det riktiga formuläret skulle täcka glappet men skicka testmejl till kunden — därför pulsen i stället.) Detta beskriver vad övervakningen täcker; det är INGEN förhandsfriskrivning för fynd på server action-vägen — varje sådant fynd bedöms på egna meriter.
+
 ## Gate 2 — Performance (details: `references/lighthouse-targets.md`)
 - [ ] Lighthouse mobile: **Performance ≥90, Accessibility ≥95, Best Practices ≥95, SEO ≥95**
 - [ ] **LCP < 2.5s · CLS < 0.1 · INP < 200ms** on 4G-throttled mobile
@@ -45,12 +49,18 @@ Läs `content/profile.ts` FÖRST: `primaraktion` + `gate1Test` definierar vad so
 - [ ] Keyboard-only pass: nav, accordion, form all operable; focus visible; skip-link works
 - [ ] Contrast ≥4.5:1 body, ≥3:1 large text; `prefers-reduced-motion` respected
 - [ ] `<html lang="sv">`; heading order sane (one `h1`/page)
+- [ ] **Klickytor ≥24×24 px** (WCAG 2.2 Target Size), helst 44×44 på mobil — för hantverkstjänster köpta av äldre är detta en konverteringsfråga, inte en formalitet
+- [ ] **axe-core: noll violations** (`wcag2a`/`wcag2aa`/`wcag21aa`/`wcag22aa`) — mekanisk komplettering; axe täcker ~1/3 av kriterierna och ersätter inte de manuella punkterna ovan
 
 ## Gate 5 — SEO Launch Readiness (deep pass via `nortropic-seo-lokal`)
 - [ ] Unique Swedish title + meta description on every page (`[Tjänst] i [Stad] | Företag` pattern)
 - [ ] `sitemap.xml` + `robots.txt` served and correct; canonical URLs set
 - [ ] `LocalBusiness` JSON-LD validates (Rich Results Test), NAP matches `content/business.ts` = Google Företagsprofil
 - [ ] GSC: domain verified via DNS TXT **before** launch; sitemap ready to submit at cutover
+- [ ] **`robots.txt` blockerar inte AI-crawlers** på skarp klient (`GPTBot`/`PerplexityBot`/`ClaudeBot`/`OAI-SearchBot` under `Disallow` = HIGH; på TESTKLIENT är total blockering korrekt = inget fynd) — speglar seo-optimizerns hårda regel, samma källa
+- [ ] **`address.publik` styr `PostalAddress` i JSON-LD** — severity per seo-optimizerns hårda regel (EN källa, får inte divergera): `false` + `PostalAddress` i schemat = **CRITICAL** (adressen syns för Google men är dold i GBP = NAP-avvikelse); `true` UTAN `PostalAddress` = **HIGH** (ofullständigt schema); vid `false` ska `areaServed` vara satt. `postalCode` matchar `/^\d{3} \d{2}$/` ("971 87") identiskt i schema/footer/GBP-underlag — avvikande format = **CRITICAL**
+- [ ] **Bing Webmaster Tools** (skarp klient): property importerad från GSC, sitemap inskickad
+- [ ] **IndexNow** (skarp klient): nyckelfil svarar `200` i webbroten, deploy-hook aktiv
 
 ## Gate 6 — Swedish/EU Legal (details: `references/legal-requirements-se.md`) — REPORT ONLY, human decides
 - [ ] **Integritetspolicy** page: what data the quote form collects, purpose, legal basis, retention, rights, contact — in Swedish
@@ -65,6 +75,8 @@ Läs `content/profile.ts` FÖRST: `primaraktion` + `gate1Test` definierar vad so
 - [ ] **Säkerhetsheaders servas** (verify what is ACTUALLY served: `curl -sI` against the preview URL): Content-Security-Policy (baseline in the reference — copy-paste `headers()` facit for `next.config.ts`), `Strict-Transport-Security`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `frame-ancestors 'none'` (or `X-Frame-Options: DENY`). Fix: `headers()` in `next.config.ts` — not `vercel.json` when next.config already owns config
 - [ ] **Formulärmissbruk** (the quote endpoint): honeypot → silent 200 without email · time-trap rejects an implausibly fast submit — elapsed time measured on ONE clock (client mount→submit, submitted as an `elapsedMs` duration; NEVER a raw timestamp the server compares to its own `Date.now()`, whose client/server skew silently drops real leads — see H1), missing/0 fails open · server-side validation of every field (length caps, email format) · **recipient hardcoded from env `LEAD_TO_EMAIL` — NEVER read from request body** (otherwise the endpoint is an open spam relay) · client-facing errors are generic — no env names, stacks, or Resend responses leak. Rate limiting: platform-level (Vercel WAF/challenge) as optional note — **no DB-based limiter** (breaks static-first)
 - [ ] **Hemligheter**: no keys in the client bundle — `grep -r "re_" .next/static` and grep the env var names; `.env*` git-ignored and absent from git history; all API keys only in server code/route handlers
+- [ ] **Deployment Protection på preview**: en naken `.vercel.app`-URL (utan inloggning/bypass) ger `401`. `noindex` räcker inte — en indexerad preview-URL kan hinna rankas innan Google läser om sidan och konkurrerar då med kundens riktiga domän. Denna check gör medvetet en NAKEN förfrågan och förväntar `401`; grindarnas övriga URL-kontroller autentiserar via bypass-hemligheten (se noten överst)
+- [ ] **`/api/puls`-kontraktet**: mottagare `LEAD_TEST_TO` ur env (aldrig request body), token `PULS_TOKEN` ur env, saknad/fel token → `404`. Samma öppna-spamrelä-krav som lead-endpointen (regel 10) — en ny endpoint ärver inte immunitet
 
 ## Verdict Format
 
