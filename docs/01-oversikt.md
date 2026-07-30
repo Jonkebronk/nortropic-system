@@ -1,6 +1,6 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-28 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
 
 > **Ny här?** Läs [00-borja-har.md](00-borja-har.md) först — hela systemet förklarat från noll utan interna termer. Den här filen och 02–07 är det djupare, tekniska lagret.
 
@@ -19,7 +19,7 @@ Pipelinen är tolv noder. Kommandona är de tre pipeline-skillsen (som bara män
 | 7 | Launch | `/nortropic-launch` | workflow: 7 linser över qa-launcher (opus · high), seo-optimizer (opus · high), design-reviewer (opus · max); fixar via stack-builder/seo-optimizer | verdikt, `EVAL-RESULT.md`, `HANDOVER.md`, `gbp-checklist-klient.md`, `gsc-steg-klient.md` |
 | 8 | Juridik | **HÅRT STOPP** | människa | sign-off på Gate 6-fynden |
 | 9 | Deploy | `/vercel:deploy` | människa/huvudsession | produktionssajt |
-| 10 | Efterarbete | inget kommando — kör checklistorna | människa (+ klient) | GBP live, GSC verifierad, citations |
+| 10 | Efterarbete | `/nortropic-cutover` (fas 1–3: förkontroll → noindex → GSC; fas 4–7 — Bing/IndexNow, uppetid, GBP, citations — fortsatt manuella ur checklistorna) | människa (+ klient) | GBP live, GSC verifierad, citations |
 | 11 | Retro | `/nortropic-retro <projektmapp \| system>` | nortropic-steward (fable · max) | `STEWARD-REPORT.md` + förslag i `~/Workflow/steward-proposals/` |
 | 12 | Godkänn förslag | **HÅRT STOPP** — "applicera förslag N" | människa → huvudsession | systemcommits i nortropic-system |
 
