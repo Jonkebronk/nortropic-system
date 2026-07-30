@@ -1,6 +1,6 @@
 # Agenterna
 
-Senast verifierad mot systemet: 2026-07-29 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
 
 Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna. Varje agents **obligatoriska steg** (t.ex. INPUT GATE, processteg, grind-ordning) står i dess prosaavsnitt nedan — medvetet INTE som tabellkolumn: stegen bor i agentkroppen, inte frontmattern tabellen projicerar, och en kolumn skulle drifta från kroppen utan mekanisk vakt (S4).
 
