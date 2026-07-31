@@ -32,7 +32,11 @@ pnpm create next-app@15 . --ts --tailwind --app --src-dir --use-pnpm   # pin @15
 cp -r <kundmapp>/referenser/ design-referenser/  # 3. referenstrohet: skärmdumparna följer med bygget (+ kopiera in briefens Referensöversättning)
 echo "design-referenser/" >> .vercelignore       #    internt arbetsmaterial — deployas ALDRIG
 vercel link                                      # 4. Vercel from day one
-git add -A && git commit -m "chore: scaffold" && git push -u origin main
+# SECRET-VAKT — deterministisk OCH KEDJAD: git add -A körs bara om vakten passerar (&&), så en fälld vakt gör
+# stageningen OMÖJLIG (inte bara olämplig — även en agent som kör raden kan aldrig nå git add -A förbi ett secret).
+# Litar INTE på create-next-apps .gitignore: prövar den FAKTISKA stageningsmängden (git status, EXKL gitignorerat)
+# mot .env/.vercel/node_modules; .env*.example undantas (mall). Skydd fallit → hela kedjan avbryts före commit.
+! git status --porcelain | grep -E '\.env|\.vercel|node_modules' | grep -vqE '\.example' && git add -A && git commit -m "chore: scaffold" && git push -u origin main || { echo "SECRET-VAKT: hemlighet/credential pa vag in ELLER git-steg misslyckades — scaffold EJ committad"; exit 1; }
 ```
 
 **Pin `create-next-app@15`.** `@latest` now resolves to a newer major than the Next 15 the stack targets (`package.json` pins `next` 15.x; App Router config, Tailwind 4 tokens and shadcn/Base UI are written for 15). `@latest` scaffolds an unsupported version.

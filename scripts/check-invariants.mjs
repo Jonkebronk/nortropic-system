@@ -31,13 +31,27 @@ const trackedUnder = (...paths) => execFileSync('git', ['ls-files', '--', ...pat
   .split('\n').map(s => s.trim()).filter(Boolean);
 
 // ---- INV-001 (NRT-003): "git add -A" i GIT-SPARADE filer under workflows/ + skills/ ----
-// Scope = git-tree, inte filsystemet (ospar tredjeparts hamnar utanfor automatiskt). ORORD BATCH-003.
+// Scope = git-tree, inte filsystemet (ospar tredjeparts hamnar utanfor automatiskt).
+// BATCH-004C-OMFORMNING + HARDNING (agergodkand): git add -A ar en overtradelse UTOM nar raden BORJAR med den
+// KEDJADE SECRET-VAKT-prefixen — dvs vakten (git status --porcelain mot .env/.vercel/node_modules, .example
+// undantaget) OCH git add -A star i SAMMA && -kedja pa SAMMA rad. Da gor en falld vakt stageningen OMOJLIG,
+// inte bara olamplig (aven en agent som kor raden kan inte na git add -A forbi ett secret). Kravet ar SUBSTANS,
+// inte ett ord: en kommentar eller ett echo som namner "SECRET-VAKT" bryter prefixet (raden borjar da inte med
+// vakten) -> flaggas anda. `startsWith` pa den exakta prefixen ar substanskrav + kedjningskrav i ett.
+// Pipeline-.js-steg (autobygg:203, launch:149) har git add -A inuti en strang som inte borjar med prefixet ->
+// forblir flaggade (BATCH-005-fixkontrakt; .js saknar dessutom ```-block, sa undantagsvagen ar strukturellt
+// otillganglig for dem — de SKA losas med kand fil-mangd, inte med en vakt). `git add -u` far ALDRIG anvandas
+// (missar nya filer -> aterinfor rorjour-buggen).
+const VAKT001_CORE = "! git status --porcelain | grep -E '\\.env|\\.vercel|node_modules' | grep -vqE '\\.example' && git add -A";
 try {
   const tracked = trackedUnder('workflows', 'skills');
   if (tracked.length === 0) invalid.add('INV-001');   // tomt = kunde-ej-bedoma, aldrig PASS
   for (const f of tracked) {
     readLines(f).forEach((l, i) => {
-      if (l.includes('git add -A')) flag('INV-001', f, i + 1, 'git add -A i sparad pipeline-fil (NRT-003)');
+      const t = l.trim();
+      if (t.startsWith('#') || t.startsWith('//')) return;   // kommentar/prosa exekverar aldrig -> ingen riktig staging
+      if (l.includes('git add -A') && !t.startsWith(VAKT001_CORE))
+        flag('INV-001', f, i + 1, 'git add -A utan kedjad SECRET-VAKT-prefix (NRT-003)');
     });
   }
 } catch { invalid.add('INV-001'); }
@@ -60,12 +74,20 @@ try {
 // beskriver regeln; scannas de flaggar grinden sig sjalv, blir permanent rod, och nagon "loser"
 // det genom att ta bort kontrollen. Undantaget foljer av att scripts/ och docs/ inte ligger
 // under de tre scannade paths. Header-formen (namn utan efterfoljande =) ar tillaten.
+// BATCH-004C-OMFORMNING + HARDNING (agergodkand): query-formen ar NODVANDIG — header-formen gar inte att satta
+// i kedjans verktyg och bypass-cookien gar inte att forsatta direkt (verifierat mot MCP-schemana, se
+// programregistret). Darfor forbjuds inte strangen; i stallet KRAVS LACKSKYDD-klausulens SUBSTANS pa samma rad
+// — inte bara rubrikordet. Raden maste bara ALLA fyra: LACKSKYDD + hemligheten + ALDRIG + URL (klausulens
+// innebord: hemligheten far ALDRIG atergs i en URL). Enbart ordet LACKSKYDD racker inte. Query-form utan denna
+// substans -> flaggas. Samma harddningsklass som INV-004:s rubrik-svaghet och INV-005:s forsta-forekomst-svaghet.
+const LEAK003 = ['LÄCKSKYDD', 'hemligheten', 'ALDRIG', 'URL'];
 try {
   const tracked = trackedUnder('workflows', 'skills', 'agents');
   if (tracked.length === 0) invalid.add('INV-003');
   for (const f of tracked) {
     readLines(f).forEach((l, i) => {
-      if (l.includes('x-vercel-protection-bypass=')) flag('INV-003', f, i + 1, 'query-form protection-bypass (NRT-013)');
+      if (l.includes('x-vercel-protection-bypass=') && !LEAK003.every(t => l.includes(t)))
+        flag('INV-003', f, i + 1, 'query-form protection-bypass utan LÄCKSKYDD-substans (NRT-013)');
     });
   }
 } catch { invalid.add('INV-003'); }

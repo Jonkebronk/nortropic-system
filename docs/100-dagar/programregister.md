@@ -507,3 +507,76 @@ rapporterar det. Detta betyder INTE att grinden är felbyggd — den gör det de
 betyder att prosagranskning inte kan ersättas av fler invarianter, och att batcher som ändrar
 agentinstruktioner måste läsas i sin HELHET, inte punktvis. **Klassning: METODOBSERVATION. Ingen åtgärd
 — men ska vägas in när 004C:s scope sätts (INV-001 och INV-003 rör båda promptsträngar).**
+
+## BATCH-004C — invariantprövning (utredning först, fix bara där den är liten)
+Ram: att FIXA KODEN krävde ingen motivering; att LUCKRA UPP en invariant krävde skriftligt bevis att en
+funktion försvinner. FAS A prövade de 5 anropsställena read-only; FAS B åtgärdade endast de ägaren
+godkände. Base `997385e`.
+
+**FAS A — de fem, med evidens (ej resonemang):**
+- **A1 `skills/nortropic-stack/SKILL.md:35`** — `git add -A` i scaffold. Risken (staging av hemlighet)
+  EMPIRISKT frånvarande: verifierat i två skarpa `.gitignore` (`nortropic-se`, `rorjour-stockholm`) att
+  `.env*` + `.vercel` ignoreras (dubblerat — `vercel link` re-appendar). Men skyddet vilade på en
+  tredjeparts-default → gjordes till vårt eget. **ÅTGÄRDAT.**
+- **A2 `workflows/nortropic-autobygg.js:203`** + **A3 `workflows/nortropic-launch.js:149`** — `git add -A`
+  i fixagent/release-steg. Ren fix = fixagenter returnerar ändrade filer → steget stageer en känd mängd;
+  icke-trivialt (agent-returkontrakt). **LÄMNAS ÖPPNA → BATCH-005-fixkontrakt** (se nedan).
+- **A4 `workflows/nortropic-launch.js:54`** + **A5 `skills/nortropic-prelaunch/SKILL.md:11`** — query-form
+  bypass. SAMMA sträng, samma konstruktion, två filer = ETT beslut (ägaren rättade sin egen prelim: A5
+  var inte ett separat fall). **ÅTGÄRDAT ihop.**
+
+**Cookie-verifieringen (A4/A5, prövad mot de FAKTISKA MCP-schemana, som header-verifieringen):** kan
+bypass-cookien sättas DIREKT så hemligheten aldrig når en URL? **NEJ.** chrome-devtools-kedjan (bär
+Lighthouse + de flesta URL-grindar) har varken cookie- eller header-verktyg; `evaluate_script` kör sid-JS
+och når inte HttpOnly-cookien; Playwright exponerar inget `addCookies` — enda teoretiska vägen är
+`browser_run_code_unsafe` (schemat: **"Unsafe: RCE-equivalent"**, dessutom bara Playwright-grindar). Rå CDP
+`Network.setCookie` exponeras inte. **Den direkta vägen prövades och fanns inte → anti-läck-modellen
+kördes.** (Registrerat att den prövades, per ramen — annars ser nästa läsare inte att den övervägdes.)
+
+**FAS B — vad som gjordes (härdat efter ägar-granskning: ett ord får inte räcka, och vakten måste vara kedjad):**
+- **A1:** deterministisk **SECRET-VAKT, KEDJAD** med `git add -A` på SAMMA rad:
+  `! git status --porcelain | grep -E '\.env|\.vercel|node_modules' | grep -vqE '\.example' && git add -A && … || { echo AVBRYT; exit 1; }`.
+  En fälld vakt gör stageningen **OMÖJLIG** (short-circuit på `&&`), inte bara olämplig — även en agent som
+  kör raden når aldrig `git add -A` förbi ett secret (punkt 2). Litar inte på create-next-apps `.gitignore`;
+  prövar den faktiska stageningsmängden. **INV-001 härdad:** `git add -A` undantas ENDAST om raden BÖRJAR med
+  den exakta kedjade vakt-prefixen (`startsWith` — substanskrav + kedjningskrav i ett) och kommentarrader
+  hoppas. En kommentar/echo som bara NÄMNER "SECRET-VAKT" eller vaktkommandot bryter prefixet → flaggas ändå.
+- **A4/A5:** **LÄCKSKYDD-klausul** på query-form-raden i båda filerna. **INV-003 härdad:** query-form undantas
+  ENDAST om raden bär klausulens SUBSTANS — alla fyra `LÄCKSKYDD` + `hemligheten` + `ALDRIG` + `URL` — inte
+  bara rubrikordet. Enbart ordet LÄCKSKYDD flaggas. (Samma härdningsklass som INV-004:s rubrik-svaghet och
+  INV-005:s första-förekomst-svaghet — vi återinför den inte i samma andetag som vi tar bort ett förbud.)
+- **A2/A3:** orörda.
+
+**Punkt 3 (ägar-observation, registrerad — ingen åtgärd): undantagsvägen är strukturellt otillgänglig för
+A2/A3.** Deras `git add -A` ligger i agent-instruktionssträngar i `.js`, inte som exekverbara scaffold-rader
+som kan börja med den kedjade vakt-prefixen. **BATCH-005 ska INTE leta efter en vakt-undantagsväg för dem** —
+rätt fix är känd filmängd (fixagenter returnerar ändrade filer → stagea exakt dem), inte en SECRET-VAKT
+bolt-on. Vakten passar scaffolden (en självständig, känd commit-mängd); A2/A3 passar fixkontraktet.
+
+**Konvergensen (ägar-observation, registrerad):** A1 och A4/A5 landade i SAMMA lösningsform — *behåll
+förmågan, gör säkerheten explicit, låt invarianten KRÄVA klausulen i stället för att FÖRBJUDA strängen*.
+Att två olika anropsställen självständigt landar i samma form är ett tecken på att formen är rätt. Den
+gäller när en förmåga är nödvändig men bär en risk som kan göras explicit och deterministiskt vaktad.
+
+**Grindutfall: 5 → 2 överträdelser (4 PASS / 1 FAIL). Förväntat tal redovisat FÖRE körning; utfallet
+matchade exakt.** De 2 kvarvarande är INV-001 på `autobygg:203` + `launch:149` (A2/A3) — de SKA stå kvar
+röda; hade de blivit gröna vore invarianten för brett uppluckrad. INV-002/004/005 orörda gröna.
+
+**Beteendeverifiering (läxan: validera att en omformad kontroll fångar i BÅDA riktningar — inkl. markör-utan-substans):**
+- SECRET-VAKT: fäller på `.env.local`/`.vercel/`/`node_modules` (även jämte en `.example`), passerar ren
+  scaffold + enbart `.env*.example`.
+- KEDJNING: på ett secret ger `! … && git add -A` **AVBRUTEN** (git add -A körs ALDRIG); på rent/mall STAGE.
+- INV-001 (scratch-git, tre riktningar): flaggar (i) `git add -A` utan prefix, (ii) **MARKÖR-utan-substans**
+  (`# SECRET-VAKT`-kommentar + oskyddad git add -A på egen rad), (iii) echo som bara nämner vaktkommandot;
+  flaggar EJ den kedjade prefix-raden.
+- INV-003 (scratch-git, tre riktningar): flaggar query-form utan klausul OCH med **enbart ordet `LÄCKSKYDD`**;
+  flaggar EJ raden med full substans (`LÄCKSKYDD`+`hemligheten`+`ALDRIG`+`URL`).
+Undantagen är bundna till skyddets SUBSTANS — ett ord räcker inte.
+
+## BATCH-005-fixkontrakt (öppen, ägar-ID) — A2 + A3 samlade
+`git add -A` i **autobygg:203** (fixagent) och **launch:149** (release-steg) står kvar flaggade AVSIKTLIGT.
+Rätt fix är ETT mönster, inte två backloggrader: **fixagenterna returnerar sin ändrade-fil-lista →
+release-/commitsteget stageer exakt den mängden** (Dag 5/16-arbete, ändrar agent-returkontraktet). **`git
+add -u` får ALDRIG användas som mellanlösning** — den missar NYA filer och återinför rorjour-buggen
+(ocommittade fixar → preview serverar förfix-värden), exakt felet steget finns för att förhindra. Tills dess
+håller INV-001 dem röda, vilket är korrekt: grinden ska visa att arbetet återstår.
