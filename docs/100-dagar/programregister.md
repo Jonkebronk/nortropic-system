@@ -155,3 +155,17 @@ Under BATCH-002 blockerade **security-guidance-pluginens PreToolUse-hook** ett `
 
 **Klassning: STYRNINGSFYND.** BATCH-004-frågan är inte om hooken ska bort, utan om systemet ska
 ha en EGEN motsvarighet det äger. Ingen åtgärd i denna batch.
+
+## Stående regel — minnesskriv-bokföring (från och med BATCH-002)
+Varje slutrapport ska innehålla en egen rad **"Minnesskrivningar denna batch"** som listar
+**fil, radantal och tidpunkt** för VARJE skrivning till `agent-memory/` eller `MEMORY.md` —
+även när de sker EFTER att exitkriterierna deklarerats. Skäl: minnesskrivning har nu skett efter
+exit i två batchar i rad. Innehållet är nyttigt och ska inte upphöra — problemet är bokföringen:
+varje oskriven skrivning ökar avståndet mellan Dag 1-arkivet och verkligheten, och NRT-011:s
+canary (Dag 72/93) kan subtrahera två deltan men inte sjuttio. Deltat ska vara
+SJÄLVDOKUMENTERANDE, inte rekonstruerat i efterhand.
+
+**Retroaktiv registrering — BATCH-002:s egen minnesskrivning:**
+- `projects/.../memory/nortropic_100dagar_program.md` — uppdaterad (BATCH-002-sektion tillagd
+  → 20 rader), mtime 2026-07-31T08:02:46Z. Ligger utanför arkivets `agent-memory`-scope.
+- `MEMORY.md` — orörd i BATCH-002 (senaste ändring i BATCH-001, mtime 2026-07-31T06:14Z).
