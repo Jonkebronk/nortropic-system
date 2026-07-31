@@ -3,7 +3,7 @@ export const meta = {
   description: 'Regressionsnätet för självförbättringstrappan: doctor + plan-torrtest + eval-stabilitet + template-spotcheck mot frysta baselines i tests/fixtures/',
   whenToUse: 'Körs av nattskiftet efter VARJE N2-ändring (docs/07-konstitution.md §B6), av människan före/efter riskabla systemändringar, eller med --cut-baseline för att skriva nya baseline-KANDIDATER till ~/Workflow (aldrig direkt till tests/fixtures — konstitutionen §A6; committandet är en mänsklig handling).',
   phases: [
-    { title: 'Doctor', detail: 'stewardens mekaniska kontroller 1–12; 0 FAIL krävs innan proberna körs' },
+    { title: 'Doctor', detail: 'stewardens mekaniska kontroller 1–13; 0 FAIL krävs innan proberna körs' },
     { title: 'Probes', detail: 'plan-torrtest + eval-stabilitet + template-spotcheck parallellt mot frysta baselines' },
     { title: 'Verdict', detail: 'GRÖN|RÖD|OGILTIG med diff mot baseline → ~/Workflow/VERIFY-SUITE-RESULT.md' },
   ],
@@ -83,7 +83,7 @@ const TEMPLATE = {
 
 phase('Doctor')
 const doctor = await agent(
-  `Read ~/.claude/agents/nortropic-steward.md, section "MODE: doctor", and execute checks 1–12 mechanically EXACTLY as written there (shell out to the embedded commands; judge nothing beyond what a check specifies). This is a verify-suite gate run: write NO files, propose nothing — return structured data only. status=FAIL if any check FAILs. Grön = 0 FAIL; WARNs are reported but do not fail the gate.`,
+  `Read ~/.claude/agents/nortropic-steward.md, section "MODE: doctor", and execute checks 1–13 mechanically EXACTLY as written there (shell out to the embedded commands; judge nothing beyond what a check specifies). This is a verify-suite gate run: write NO files, propose nothing — return structured data only. status=FAIL if any check FAILs. Grön = 0 FAIL; WARNs are reported but do not fail the gate.`,
   { label: 'doctor', phase: 'Doctor', schema: DOCTOR }
 )
 const doctorFailed = !doctor || doctor.status === 'FAIL'

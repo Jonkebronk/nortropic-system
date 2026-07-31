@@ -62,7 +62,7 @@ repotillstånd; körbar kod på verifierad commit vinner (källhierarki 1).
 ## Uppskjutet (ägarbeslut Dag 1)
 - **Verify-suite uppskjuten:** ingen FUNKTIONELL baslinje finns — Dag 1 fryser STRUKTUR
   (filhashar), inte BETEENDE. Första funktionella ändringen ska köra verify-suite **TVÅ gånger**
-  — före OCH efter den ändringen — i stället för att jämföra mot Dag 1. Doctor-grinden (1–12)
+  — före OCH efter den ändringen — i stället för att jämföra mot Dag 1. Doctor-grinden (1–13)
   är dess fas 1 och är redan grön mot baslinjen ovan.
 
 ## Minnesdelta efter baslinjen (Dag 1)
@@ -171,19 +171,19 @@ SJÄLVDOKUMENTERANDE, inte rekonstruerat i efterhand.
 - `MEMORY.md` — orörd i BATCH-002 (senaste ändring i BATCH-001, mtime 2026-07-31T06:14Z).
 
 ## Reservation — INV-005 är deklarationskonsistens, inte täckning (ägar-granskning)
-INV-005 läser i nuvarande form **FÖRSTA** förekomsten av mönstret `checks|kontroller 1–N` i
-`workflows/nortropic-verify-suite.js` och breakar. Första träffen är en `detail:`-sträng inuti
-`meta.phases` (loggmetadata, rad 6), INTE den verkliga instruktionen till stewarden (rad 86:
-"execute checks 1–12 mechanically EXACTLY as written there"). Båda säger `1–12` i dag → grinden
-ger rätt svar NU. Men rättar man i BATCH-003 bara loggmetadata-strängen blir INV-005 grön medan
-stewarden fortfarande instrueras köra tolv kontroller — grinden skulle då **intyga att NRT-009
-är löst utan att beteendet ändrats**.
+**Historik (dåtid, daterad).** Före BATCH-003 läste INV-005 endast **FÖRSTA** förekomsten av
+mönstret `checks|kontroller 1–N` i `workflows/nortropic-verify-suite.js` och breakade. Första
+träffen var en `detail:`-sträng inuti `meta.phases` (loggmetadata, rad 6), INTE den verkliga
+instruktionen till stewarden (rad 86). Båda sade då `1–12`, så grinden gav rätt svar men av fel
+skäl: hade man rättat enbart loggmetadata-strängen hade INV-005 blivit grön medan stewarden
+fortfarande instruerades köra tolv kontroller — grinden hade då intygat att NRT-009 var löst utan
+att beteendet ändrats. **BATCH-003** tog bort `break` och flaggar sedan per förekomst
+(deklarationskonsistens: risken att ljuga grön strukturellt borttagen). **BATCH-004A** rättade
+båda strängarna till `1–13` och stängde driften mot stewardens tretton kontroller.
 
-**Uppdatering efter BATCH-003 (ersätter reservationen ovan — den var för hård):** INV-005 kan
-efter BATCH-003 inte greenas utan att den faktiska stewardinstruktionen (rad 86) ändras. Risken
-att kontrollen ljuger grön är strukturellt borttagen. **Kvarstående begränsning:** grinden kan
-inte SKILJA PÅ vilken förekomst som gjorde jobbet, så BATCH-004 ska ändå verifiera
-beteendemässigt att stewarden faktiskt kör tretton kontroller.
+**Kvarstående begränsning (levande).** Grinden skiljer inte på VILKEN förekomst som gjorde jobbet
+— deklarationskonsistens är inte beteendetäckning. Därför krävs beteendeverifiering att stewarden
+faktiskt kör tretton kontroller inklusive #13 (BATCH-004A C2 — resultat i NRT-009-avsnittet nedan).
 
 ## Ytterligare härdningspunkter → BATCH-003 (registrera, åtgärda inte nu)
 - **INV-003 scannar endast `workflows/`.** Flyttas bypass-strängen till en skill eller ett
@@ -250,3 +250,72 @@ Kriteriet är ändringens KARAKTÄR, inte dess storlek. En rad ny kod går allti
 fyrtio rader protokoll som registrerar ett fattat beslut gör det inte. (Denna regel infördes
 själv enligt villkoren: docs/100-dagar/, ingen kod, registrerar ett fattat ägarbeslut, grind
 oförändrad FÖRE/EFTER.)
+
+## BATCH-004A — NRT-009 STÄNGD (doctor 12→13, §A6/HÖGRISK)
+**Fix.** `workflows/nortropic-verify-suite.js` rad 6 (loggmetadata i `meta.phases`) och rad 86
+(den faktiska stewardinstruktionen) ändrade `1–12` → `1–13`. Inget annat i filen rört.
+
+**Dateringsevidens (drift, inte designval).** verify-suite.js skapades `6f0f6d1` 2026-07-19 och
+sade `1–12` från första commit (`git log -S '1–13'` = tom — filen har aldrig sagt annat). Doctor
+#13 tillkom i stewarden `15e2d65` 2026-07-28 → **nio dagars drift**. `15e2d65`:s egen commitmening
+flaggade redan att verify-suitens `1–12` lämnades till ägarens HÖGRISK-hand.
+
+**§A6/HÖGRISK.** `docs/07-konstitution.md` §A punkt 6 skyddar `workflows/nortropic-verify-suite.js`
+vid namn ("regressionssviten … styrningen själv"). Ändringen är därför en §A6-ändring: tillåten
+för människa (§A1: "kräver människa + HÖGRISK-märkning"), aldrig för trappan. Commit + beslutslogg
+märkta `[HÖGRISK, ägar-diffgranskad]`; rad 6/86-diffen visades ordagrant för ägaren före commit.
+
+**Beteendeverifiering (C2 — batchens egentliga bevis, körd EXAKT en gång).** Grinden (INV-005)
+bevisar bara strängöverensstämmelse. C2 körde verify-suitens doctorfas: stewarden utförde
+**FAKTISKT 13 kontroller** (numrerade 1–13), **inklusive #13 (Modellfärskhet) → PASS**. Totalt
+0 FAIL · 4 WARN (#3/#10/#11/#12) · 1 KUNDE-EJ (#4 MCP, WARN-klass — huvudsessionen bekräftade
+10/10 Connected). Kostnad: 144 497 tokens, 33 verktygsanrop, ~27,6 min. **NRT-009 är därmed
+stängd både strukturellt (grind) OCH beteendemässigt (C2).**
+
+**Ägar-rättelse registrerad.** BATCH-004A:s ursprungliga spec ramade ändringen som "icke-§A".
+Fel: verify-suite.js är §A6-skyddad, och uppgiften stod redan i BATCH-001:s Fas A-rapport men
+missades ändå. Rätt ram (§A6/HÖGRISK) etablerades i preflight och bekräftades medvetet av ägaren.
+
+## 004B — förhandsregistrerat beslut (åtgärdas i 004B, ej här)
+design-reviewers `Bash` används till exakt ETT anrop: `pnpm start` (rad 39), en fallback för att
+rendera lokalt när ingen Vercel-preview går att nå. Primärvägen är chrome-devtools mot
+preview-URL; lokal `.next` avråds uttryckligen (rad 37–38). **Beslut inför 004B:** `Bash` tas bort
+och fallbacken accepteras försvinna — en reviewer som tyst faller tillbaka på en lokalt renderad
+sajt granskar inte samma artefakt den ska granska; vid en launchgrind är det sämre än att
+misslyckas högt. **004B exitkriterium:** reviewern svarar **BLOCKED** vid onåbar preview, aldrig
+tyst utebli; testas separat. `agents/design-reviewer.md` rörs INTE i BATCH-004A.
+
+## Stående regel — levande påstående vs historisk förklaring
+Registret blandar två sorters påståenden som inte tål samma underhåll:
+1. **LEVANDE PÅSTÅENDE** om nuläget (nulägesmått, aktuella grindtillstånd, pågående begränsningar)
+   — uppdateras när verkligheten ändras. Ett inaktuellt levande påstående är samma docs↔kod-drift
+   programmet finns till för att stänga.
+2. **HISTORISK FÖRKLARING** av ett fattat beslut (varför en kontroll härdades, vilket problem som
+   fanns) — skrivs i DÅTID och DATERAS med batch-ID. Skrivs ALDRIG om till att beskriva nuläget;
+   då förloras motivet.
+3. **`docs/05-beslutslogg.md` är append-only** och redigeras aldrig alls.
+Nya förklaringar skrivs i dåtid direkt — ett stycke som säger "i nuvarande form" åldras alltid
+fel. (INV-005-reservationen ovan reframades enligt denna regel i BATCH-004A: den beskrev grindens
+FÖRE-härdnings-beteende i presens och var redan inaktuell sedan BATCH-003 tog bort `break`.)
+
+## GRINDINTEGRITETSFYND → BATCH-004D (registrera, åtgärda inte nu · prioritet > 004C)
+C2:s doctorkörning gav 0 FAIL / 4 WARN / **1 KUNDE-EJ-BEDÖMA (#4 MCP)** och räknades ändå som
+GRÖN. Doctor-kontraktet kräver 0 FAIL, men KUNDE-EJ-BEDÖMA är inte FAIL → en körning där en
+kontroll ALDRIG utvärderades passerar grinden. **Strukturellt SAMMA fel som INV-005 hade:** vi
+byggde `INVALID → FAIL` i vår egen grind (`check-invariants.mjs`) av exakt detta skäl — men
+doctor, systemets PRIMÄRA hälsokontroll OCH fas 1 i regressionssviten, saknar regeln. Att #4
+bekräftades manuellt (10/10 Connected) räddade DENNA körning, inte nästa: i en subagent-körd
+doctorfas är #4 alltid onåbar → alltid KUNDE-EJ → grinden passerar utan att MCP-integriteten
+verifierats. **Klassning: GRINDINTEGRITETSFYND. Prioritet: högre än 004C.** Doctor bor i
+stewarden (§A1 SYSTEM MAP / §A6) → 004D blir en §A-ändring, människohand/HÖGRISK.
+
+## BATCH-004E (föreslaget ID) — docs-drift som DENNA process skapade
+BATCH-002 (`b4d77ab`) rörde sju agentkroppar 2026-07-31 (NRT-007-blocket) utan att omstämpla docs
+→ doctor #12(d)/(e) WARN (C2-körningen såg den). Det är drift VÅR EGEN process skapade; den får ett
+eget batch-ID (004E: `Senast verifierad`-omstämpling efter agent-body-tillägget), inte en anonym
+backloggrad. Vi lämnar inte drift efter oss.
+
+## Mätt kostnad — underlag för verify-suite-uppskjutningen
+C2, EN doctorfas: **144 497 tokens · 33 verktygsanrop · ~27,6 min.** Mätt, ej gissat. Underlag för
+regeln att verify-suiten körs TVÅ gånger (före+efter) endast vid första FUNKTIONELLA ändringen —
+kostnaden är verklig, inte antagen.
