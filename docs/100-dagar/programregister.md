@@ -323,3 +323,12 @@ backloggrad. Vi lämnar inte drift efter oss.
 C2, EN doctorfas: **144 497 tokens · 33 verktygsanrop · ~27,6 min.** Mätt, ej gissat. Underlag för
 regeln att verify-suiten körs TVÅ gånger (före+efter) endast vid första FUNKTIONELLA ändringen —
 kostnaden är verklig, inte antagen.
+
+## Observation — BATCH-004A färdigställde en PÅBÖRJAD ägarhandling (inte en missad drift)
+`docs/05-beslutslogg.md:127` (2026-07-28, "§A-sittning · N1-baslinjen 1–12→1–13, §A6, HÖGRISK,
+ägarhandling") visar att ägaren DÅ höjde stewardens baslinje till 1–13 men MEDVETET lämnade
+verify-suitens motsvarighet till senare. BATCH-004A var därför INTE en upptäckt av okänd drift —
+det var färdigställandet av en redan påbörjad ägarhandling. **Detta förändrar hur NRT-009 ska
+läsas i efterhand: fyndet var KÄNT, inte missat.** Nyansering av BATCH-004A:s "ägar-rättelse":
+det som missades i 004A:s spec var §A6-NATUREN (att verify-suite.js är grundlagsskyddad), inte
+driften i sig — driften var känd och medvetet uppskjuten sedan 2026-07-28.
