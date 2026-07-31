@@ -299,19 +299,29 @@ fel. (INV-005-reservationen ovan reframades enligt denna regel i BATCH-004A: den
 FÖRE-härdnings-beteende i presens och var redan inaktuell sedan BATCH-003 tog bort `break`.)
 
 ## GRINDINTEGRITETSFYND → BATCH-004D (registrera, åtgärda inte nu · prioritet > 004C)
-C2:s doctorkörning gav 0 FAIL / 4 WARN / **1 KUNDE-EJ-BEDÖMA (#4 MCP)** och räknades ändå som
-GRÖN. Doctor-kontraktet kräver 0 FAIL, men KUNDE-EJ-BEDÖMA är inte FAIL → en körning där en
-kontroll ALDRIG utvärderades passerar grinden. **Strukturellt SAMMA fel som INV-005 hade:** vi
-byggde `INVALID → FAIL` i vår egen grind (`check-invariants.mjs`) av exakt detta skäl — men
-doctor, systemets PRIMÄRA hälsokontroll OCH fas 1 i regressionssviten, saknar regeln. Att #4
-bekräftades manuellt (10/10 Connected) räddade DENNA körning, inte nästa. **Skärpning
-(granskar-formulering, skarpare än den ursprungliga): doctor #4 (MCP-integritet) är SANNOLIKT
-strukturellt oevaluerbar i subagentkontext → PERMANENT KUNDE-EJ inuti verify-suiten, inte
-sporadisk.** Är det sant är doctor grön VARJE gång med en kontroll som aldrig kan köras, och
-regressionssviten har en blind fläck som är öppen vid varje körning. **Verifiera antagandet (är
-#4 verkligen strukturellt onåbar i subagent?) i 004D INNAN åtgärd väljs.** **Klassning:
-GRINDINTEGRITETSFYND. Prioritet bekräftad: 004D FÖRE 004C.** Doctor bor i stewarden (§A1 SYSTEM
-MAP / §A6) → 004D blir en §A-ändring, människohand/HÖGRISK.
+**Fyndet (C2, BATCH-004A).** verify-suitens doctorfas rapporterade GRÖN (0 FAIL) med en kontroll
+(#4 MCP) som aldrig utvärderades. En KUNDE-EJ-BEDÖMA-kontroll fällde inte grinden → sviten
+intygade grönt med en outvärderad kontroll — strukturellt SAMMA hål som INV-005 hade (vi byggde
+`INVALID → FAIL` i vår egen grind av exakt detta skäl).
+
+**Diagnos (verifierad mot koden — den tidigare "MCP permanent oevaluerbar"-hypotesen var FEL och
+ersätts).** Doctor #4 är INTE trasig: dess text föreskriver KUNDE-EJ-KÖRAS vid omöjlig verifiering
+och förbjuder uttryckligen tyst PASS — samma princip som vår grinds INVALID→FAIL. Kontrollen är
+välskriven. Felet ligger i MOTTAGANDET i `workflows/nortropic-verify-suite.js`:
+- **rad 23** `status: { type: 'string', enum: ['PASS', 'FAIL'] }` — BINÄRT schema, ingen tredje status.
+- **rad 89** `const doctorFailed = !doctor || doctor.status === 'FAIL'` — endast FAIL fäller.
+KUNDE-EJ-KÖRAS har ingen plats i schemat → hamnar i `warns` → warns fäller inte grinden → sviten
+rapporterar GRÖN med en outvärderad kontroll.
+
+**Systemet har redan mönstret.** Proberna har `enum ['PASS','FAIL','OGILTIG']` (rad 55, 70) och
+verdiktlogiken hanterar OGILTIG korrekt (rad 128–133); rad 126 säger det uttryckligen: "En probe
+som dog är odömbar → OGILTIG, aldrig tyst grön." **Doctor är enda fasen utan tredje status — och
+den grindar alla andra.**
+
+**004D är därmed en LITEN schemaändring** (ge doctorfasen en tredje status och fäll grinden
+fail-closed på den, precis som proberna), med starkt stöd i systemets egen design — INTE en
+utredning av MCP-synlighet. **Prioritet: 004D FÖRE 004C.** Schemat/mottagandet bor i
+`verify-suite.js` (§A6-yta, "regressionssviten") → 004D blir en §A6-ändring, människohand/HÖGRISK.
 
 ## BATCH-004E (föreslaget ID) — docs-drift som DENNA process skapade
 BATCH-002 (`b4d77ab`) rörde sju agentkroppar 2026-07-31 (NRT-007-blocket) utan att omstämpla docs
