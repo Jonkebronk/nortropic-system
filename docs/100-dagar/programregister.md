@@ -179,12 +179,11 @@ ger rätt svar NU. Men rättar man i BATCH-003 bara loggmetadata-strängen blir 
 stewarden fortfarande instrueras köra tolv kontroller — grinden skulle då **intyga att NRT-009
 är löst utan att beteendet ändrats**.
 
-**INV-005 är alltså en DEKLARATIONSKONSISTENSKONTROLL, inte en TÄCKNINGSKONTROLL. Den får INTE
-ensam användas som bevis för att NRT-009 är löst.**
-
-**BATCH-003 ska HÄRDA INV-005 före användning:** matcha SAMTLIGA förekomster av mönstret i
-verify-suite och kräv att ALLA är lika med stewardens tal — ingen enskild sträng ska kunna ljuga
-grinden grön.
+**Uppdatering efter BATCH-003 (ersätter reservationen ovan — den var för hård):** INV-005 kan
+efter BATCH-003 inte greenas utan att den faktiska stewardinstruktionen (rad 86) ändras. Risken
+att kontrollen ljuger grön är strukturellt borttagen. **Kvarstående begränsning:** grinden kan
+inte SKILJA PÅ vilken förekomst som gjorde jobbet, så BATCH-004 ska ändå verifiera
+beteendemässigt att stewarden faktiskt kör tretton kontroller.
 
 ## Ytterligare härdningspunkter → BATCH-003 (registrera, åtgärda inte nu)
 - **INV-003 scannar endast `workflows/`.** Flyttas bypass-strängen till en skill eller ett
