@@ -403,3 +403,29 @@ Sex mergade worktrees rensades före batchen (`git worktree remove` utan --force
 safe-delete; remota brancher orörda). Motiv: reporoten är `~/.claude`, så mergade worktrees är
 DUBBLETTER av agents/skills/workflows i hemkatalogen — redigeras fel kopia märks det inte förrän något
 beter sig konstigt. Efter: endast `main`.
+
+## 004F-underlag — #4 är INTE helt blind i subagentkontext (2 av 10 bekräftbara)
+C2:s doctorkörning kunde bekräfta **2 av 10 agent-deklarerade `mcp__`-servrar** ur subagentens egen
+MCP-kontext: **`claude_ai_Trybloom`** och **`plugin_context7_context7`** (figma var också synlig men
+är INTE agent-deklarerad → räknas ej). De övriga 8 (`chrome-devtools`, `21st`,
+`plugin_playwright_playwright`, `shadcn-ui`, `reactbits`, `magicuidesign`, `motion-dev`, `gsap`) var
+obekräftade. Sannolik struktur (VERIFIERAS i 004F, ej fastslaget här): de två bekräftbara är
+HTTP/connector-servrar som är anslutna i subagentens kontext, medan de 8 obekräftade är npx-lanserade
+stdio-servrar som inte spinns upp där. **Konsekvens för 004F:s lösningsrum:** #4 är inte HELT blind —
+den ser en delmängd. Fixen kan bli att doctorfasen rapporterar det den KAN bekräfta och eskalerar bara
+resten (partiell verifiering), i stället för att kapitulera helt till KUNDE-EJ/OGILTIG. Alternativt:
+mata in huvudsessionens fulla /mcp-tillstånd i doctorfasen, eller scopa ut #4.
+
+## Minnesskrivnings-observation (mönster över tre batchar)
+BATCH-001:s C4-doctorkörning skrev om `agent-memory/nortropic-steward/system_baselines.md`. **004A:s
+OCH 004D:s doctorkörningar rörde den INTE** (båda strikt read-only, bekräftat). Två körningar i rad
+utan skrivning tyder på att BATCH-001:s skrivning var SITUATIONSBUNDEN (specifikt uppdragsläge), inte
+systematisk för varje doctorkörning. **Regeln behålls ändå** — den kostar en rad per slutrapport, och
+vi vet fortfarande inte exakt vad som utlöste den första, så bevisbördan ligger på att den ALDRIG
+händer oregistrerat, inte tvärtom. Observationen registrerad så mönstret går att läsa i efterhand.
+
+## Mätt kostnadsspann — doctorfasverifiering
+Två mätpunkter: **144 497 tokens (004A C2)** och **149 003 tokens (004D C2)** för EN verify-suite-
+doctorfas (steward kör 13 kontroller). **~145–150k är ett MÄTT spann, inte en gissning.** Underlag för
+beslut om NÄR verify-suiten är värd att köra: regeln "två körningar (före+efter) vid första
+funktionella ändringen" kostar därmed **~290–300k** för det paret.
