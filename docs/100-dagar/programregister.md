@@ -169,3 +169,25 @@ SJÄLVDOKUMENTERANDE, inte rekonstruerat i efterhand.
 - `projects/.../memory/nortropic_100dagar_program.md` — uppdaterad (BATCH-002-sektion tillagd
   → 20 rader), mtime 2026-07-31T08:02:46Z. Ligger utanför arkivets `agent-memory`-scope.
 - `MEMORY.md` — orörd i BATCH-002 (senaste ändring i BATCH-001, mtime 2026-07-31T06:14Z).
+
+## Reservation — INV-005 är deklarationskonsistens, inte täckning (ägar-granskning)
+INV-005 läser i nuvarande form **FÖRSTA** förekomsten av mönstret `checks|kontroller 1–N` i
+`workflows/nortropic-verify-suite.js` och breakar. Första träffen är en `detail:`-sträng inuti
+`meta.phases` (loggmetadata, rad 6), INTE den verkliga instruktionen till stewarden (rad 86:
+"execute checks 1–12 mechanically EXACTLY as written there"). Båda säger `1–12` i dag → grinden
+ger rätt svar NU. Men rättar man i BATCH-003 bara loggmetadata-strängen blir INV-005 grön medan
+stewarden fortfarande instrueras köra tolv kontroller — grinden skulle då **intyga att NRT-009
+är löst utan att beteendet ändrats**.
+
+**INV-005 är alltså en DEKLARATIONSKONSISTENSKONTROLL, inte en TÄCKNINGSKONTROLL. Den får INTE
+ensam användas som bevis för att NRT-009 är löst.**
+
+**BATCH-003 ska HÄRDA INV-005 före användning:** matcha SAMTLIGA förekomster av mönstret i
+verify-suite och kräv att ALLA är lika med stewardens tal — ingen enskild sträng ska kunna ljuga
+grinden grön.
+
+## Ytterligare härdningspunkter → BATCH-003 (registrera, åtgärda inte nu)
+- **INV-003 scannar endast `workflows/`.** Flyttas bypass-strängen till en skill eller ett
+  agentblock upptäcks den inte — bredda scope i BATCH-003.
+- **INV-004 kontrollerar endast att RUBRIKEN finns.** Blockets brödtext kan bytas ut medan
+  kontrollen förblir grön — en HASH över hela blocket vore starkare.
