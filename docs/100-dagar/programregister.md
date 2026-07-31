@@ -234,3 +234,19 @@ grindkoden: SHA-256 över blocket (markör→EOF), LF-normaliserat och rstrip:at
 ENBART den avslutande radbrytningen. rstrip (`\n+$` bort) är rätt val: en agentfil som får en
 extra eller saknad slutrad ska inte flagga falskt. Konstanten är därmed oberoende reproducerbar,
 inte bara internt konsekvent.
+
+## Stående regel — direkt på main utan branch (endast om SAMTLIGA fyra villkor gäller)
+"Direkt på main utan branch och granskning" är tillåtet ENDAST när alla fyra villkor är uppfyllda:
+1. Ändringen rör ENBART filer under `docs/100-dagar/` (programmets eget protokoll) — ALDRIG
+   `scripts/`, `agents/`, `workflows/`, `skills/`, `docs/00-07` eller `docs/05-beslutslogg.md`
+   (den senare är ett maskinläst styrningsregister).
+2. Ingen körbar kod, inga agent- eller workflowdefinitioner, inga grindkontroller.
+3. Ändringen REGISTRERAR något som redan är beslutat och granskat — den får INTE introducera ett
+   nytt påstående, en ny slutsats eller en ny rekommendation.
+4. Grinden körs FÖRE och EFTER och ger identiskt utfall — main lämnas aldrig i ett okänt
+   grindtillstånd, ens efter en dokumentationscommit.
+
+Kriteriet är ändringens KARAKTÄR, inte dess storlek. En rad ny kod går alltid via branch;
+fyrtio rader protokoll som registrerar ett fattat beslut gör det inte. (Denna regel infördes
+själv enligt villkoren: docs/100-dagar/, ingen kod, registrerar ett fattat ägarbeslut, grind
+oförändrad FÖRE/EFTER.)
