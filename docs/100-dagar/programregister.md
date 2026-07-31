@@ -304,10 +304,14 @@ GRÖN. Doctor-kontraktet kräver 0 FAIL, men KUNDE-EJ-BEDÖMA är inte FAIL → 
 kontroll ALDRIG utvärderades passerar grinden. **Strukturellt SAMMA fel som INV-005 hade:** vi
 byggde `INVALID → FAIL` i vår egen grind (`check-invariants.mjs`) av exakt detta skäl — men
 doctor, systemets PRIMÄRA hälsokontroll OCH fas 1 i regressionssviten, saknar regeln. Att #4
-bekräftades manuellt (10/10 Connected) räddade DENNA körning, inte nästa: i en subagent-körd
-doctorfas är #4 alltid onåbar → alltid KUNDE-EJ → grinden passerar utan att MCP-integriteten
-verifierats. **Klassning: GRINDINTEGRITETSFYND. Prioritet: högre än 004C.** Doctor bor i
-stewarden (§A1 SYSTEM MAP / §A6) → 004D blir en §A-ändring, människohand/HÖGRISK.
+bekräftades manuellt (10/10 Connected) räddade DENNA körning, inte nästa. **Skärpning
+(granskar-formulering, skarpare än den ursprungliga): doctor #4 (MCP-integritet) är SANNOLIKT
+strukturellt oevaluerbar i subagentkontext → PERMANENT KUNDE-EJ inuti verify-suiten, inte
+sporadisk.** Är det sant är doctor grön VARJE gång med en kontroll som aldrig kan köras, och
+regressionssviten har en blind fläck som är öppen vid varje körning. **Verifiera antagandet (är
+#4 verkligen strukturellt onåbar i subagent?) i 004D INNAN åtgärd väljs.** **Klassning:
+GRINDINTEGRITETSFYND. Prioritet bekräftad: 004D FÖRE 004C.** Doctor bor i stewarden (§A1 SYSTEM
+MAP / §A6) → 004D blir en §A-ändring, människohand/HÖGRISK.
 
 ## BATCH-004E (föreslaget ID) — docs-drift som DENNA process skapade
 BATCH-002 (`b4d77ab`) rörde sju agentkroppar 2026-07-31 (NRT-007-blocket) utan att omstämpla docs
