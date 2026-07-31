@@ -1,6 +1,7 @@
 # Agenterna
 
-Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-31 · v17 (denna commit)
+Verifieringsomfång: delta-verifierad mot systemändringarna sedan 2026-07-30 (BATCH-001–004BE: check-invariants.mjs INV-001–005, verify-suite doctor 1–13 + OGILTIG-status, design-reviewer Bash→BLOCKED, NRT-007-blocket i agenterna, docs/100-dagar); 0 påståenden i denna fil ogiltigförklarade. Basstämpeln 2026-07-30 sattes av [AUTO-N1] 64acf9f och är inte oberoende granskad.
 
 Systemet har sju agenter. Tabellen nedan är härledd ur varje agents frontmatter i `agents/`; avsnitten därunder ur agentkropparna. Stegnumren är agentfilernas egna. Varje agents **obligatoriska steg** (t.ex. INPUT GATE, processteg, grind-ordning) står i dess prosaavsnitt nedan — medvetet INTE som tabellkolumn: stegen bor i agentkroppen, inte frontmattern tabellen projicerar, och en kolumn skulle drifta från kroppen utan mekanisk vakt (S4).
 

@@ -1,6 +1,7 @@
 # Justeringskartan — ändra med öppna ögon
 
-Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-31 · v17 (denna commit)
+Verifieringsomfång: delta-verifierad mot systemändringarna sedan 2026-07-30 (BATCH-001–004BE: check-invariants.mjs INV-001–005, verify-suite doctor 1–13 + OGILTIG-status, design-reviewer Bash→BLOCKED, NRT-007-blocket i agenterna, docs/100-dagar); 0 påståenden i denna fil ogiltigförklarade. Basstämpeln 2026-07-30 sattes av [AUTO-N1] 64acf9f och är inte oberoende granskad.
 
 Varje större designval i systemet kostar något och köper något. Det här dokumentet finns för att du ska kunna skruva — eller ta bort — ett val medvetet: här står vad det kostar, vad det köper, exakt var man skruvar, och vad som sannolikt händer utan det. Ändringar går som vanligt via steward-förslag och commit; historiken bakom varje val finns i [05-beslutslogg.md](05-beslutslogg.md).
 

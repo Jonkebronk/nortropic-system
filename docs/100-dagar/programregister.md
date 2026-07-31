@@ -293,7 +293,7 @@ Registret blandar två sorters påståenden som inte tål samma underhåll:
 2. **HISTORISK FÖRKLARING** av ett fattat beslut (varför en kontroll härdades, vilket problem som
    fanns) — skrivs i DÅTID och DATERAS med batch-ID. Skrivs ALDRIG om till att beskriva nuläget;
    då förloras motivet.
-3. **`docs/05-beslutslogg.md` är append-only** och redigeras aldrig alls.
+3. **`docs/05-beslutslogg.md`:** befintliga beslutsrader ändras ALDRIG — historik skrivs inte om. Nya rader appendas i tabellen, direkt efter sista raden. Toppmetadatans stämpelrad underhålls som i alla andra `docs/*.md`, eftersom doctor #12(d) kräver den aktuell. Filens avslutande `---`/`RETRO-1-GENOMFÖRD` rörs aldrig. (Ägar-korrigering BATCH-004BE 2026-07-31: den tidigare lydelsen "redigeras aldrig alls" var för absolut och skyddade av misstag även toppmetadatan — en regel som garanterar en permanent #12(d)-WARN kan inte vara rätt; den skyddar RADERNA, inte stämpeln.)
 Nya förklaringar skrivs i dåtid direkt — ett stycke som säger "i nuvarande form" åldras alltid
 fel. (INV-005-reservationen ovan reframades enligt denna regel i BATCH-004A: den beskrev grindens
 FÖRE-härdnings-beteende i presens och var redan inaktuell sedan BATCH-003 tog bort `break`.)
@@ -394,7 +394,7 @@ Rätt processteg beror på artefaktens typ:
    automatiskt → diagnostiska korrigeringar och tolkande slutsatser FÖLJER MED nästa substantiella
    batch (som denna post gör), ingen egen branch/granskningsrunda. Undantag: ett registerpåstående som
    aktivt kan vilseleda PÅGÅENDE arbete → egen branch.
-3. `docs/05-beslutslogg.md` är append-only, redigeras aldrig.
+3. `docs/05-beslutslogg.md`: befintliga beslutsrader redigeras aldrig; toppmetadatans stämpelrad underhålls per #12(d) (se den korrigerade regeln under "levande påstående vs historisk förklaring").
 Motiv: två dokumentationsbranchar i rad kostade två fulla rundor för 32 rader text ingen kod berodde
 på — noggrannheten var rätt, takten fel.
 
@@ -429,3 +429,67 @@ Två mätpunkter: **144 497 tokens (004A C2)** och **149 003 tokens (004D C2)** 
 doctorfas (steward kör 13 kontroller). **~145–150k är ett MÄTT spann, inte en gissning.** Underlag för
 beslut om NÄR verify-suiten är värd att köra: regeln "två körningar (före+efter) vid första
 funktionella ändringen" kostar därmed **~290–300k** för det paret.
+
+## BATCH-004BE — INV-002 STÄNGD (design-reviewer Bash→BLOCKED) + RIKTAD docs-synk (004B + 004E utförda)
+Två delar, base-SHA `2135d0e`. DEL 1 verkställer det förhandsregistrerade 004B-beslutet; DEL 2 verkställer 004E (docs-drift denna process själv skapade) men som RIKTAD delta-verifiering, inte full docs-synk — kostnadsgrinden slog till.
+
+**DEL 1 — INV-002 stängd. Icke-§A** (`agents/design-reviewer.md` är EJ §A-uppräknad). `tools:`-raden tappar `Bash` (enda kvarvarande skalberoende var en `pnpm start`-fallback för lokal rendering, f.d. rad 39); steg 9 tri-state (3) omskriven: onåbar deployad preview → reviewern returnerar **BLOCKED** med orsak och NAMNGER vilken lins/kund som inte kunde bedömas, aldrig en lokal approximation (en reviewer som tyst faller tillbaka på en lokalt renderad sajt granskar inte samma artefakt den ska granska — vid launchgrind är BLOCKED bättre än en falsk bedömning). MCP-kolumnen i `docs/02-agenter.md` oförändrad: Bash listas aldrig där (endast MCP-servrar) → borttagningen rör inte tabellen.
+- **C1 (positivt):** worktree-grind = **3 PASS / 2 FAIL / 5 överträdelser**; INV-002 borta ur listan (grön). De 5 kvarstående är de kända 004C-uppskjutna (INV-001 ×3 `git add -A` i stack-SKILL/autobygg/launch, INV-003 ×2 prelaunch:11 + launch:54) — ingen införd här. **Grind 6→5.**
+- **C2 (negativt):** git-löst scratch utanför repot med Bash ÅTERINSATT på tools-raden → grinden flaggar exakt `INV-002 agents/design-reviewer.md:3 … innehåller Bash`; INV-001/003/005 blev INVALID (KUNDE-EJ-BEDÖMA, aldrig tyst PASS — tomhetsdisciplin). Grinden fångar regressionen.
+
+**DEL 2 — RIKTAD docs-synk (ej full). Kostnadsgrind (ägarbeslut).** En full docs-synk (omverifiera VARJE påstående mot systemfilerna, def. 00-guide:85) mättes till **77 603 tokens för README ensam**; ×8 filer ≈ **350–620k tokens** >> 200k-taket → full synk är inte rutinmässigt försvarbar. Beslut: RIKTAD delta-verifiering av de 8 filerna mot systemändringarna sedan basstämpeln, med ärlig `Verifieringsomfång:`-rad som SÄGER att omfånget var delta, inte fullt.
+- **README fullverifierad (undantag):** 27 påståenden mot HEAD `2135d0e` + batchens design-reviewer-ändring. **Exakt 1 avvikelse, inne i deltat:** `scripts/`-raden (rad 36) namngav bara `gsc-setup.mjs` — `check-invariants.mjs` (BATCH-002) saknades. Rättad i denna commit. **0 avvikelser utanför deltat.** Klassning **(A)** (belagt fel mot källa, rättat); inga (B)-osäkra kvar.
+- **7 filer delta-verifierade** (00-borja-har, 00-guide, 01-oversikt, 02-agenter, 03-regelverk, 04-justeringskarta, 06-scope): **0 påståenden ogiltigförklarade.** Per-fil-redovisning (vilka delta-delar som prövades mot filen):
+  - **00-guide:** doctor-antalet "tretton"/1–13 (rad 69) + docs-synk-def (rad 85) mot verify-suite/steward → oförändrat korrekt; OGILTIG-status omnämns inte i filen.
+  - **02-agenter:** design-reviewer-raden (opus·max, MCP chrome-devtools) mot frontmatter → korrekt; Bash-borttagningen rör ej MCP-kolumnen.
+  - **01-oversikt:** nod 6/7-raderna (design-reviewer opus·max) → korrekt; ingen tool-nivå-claim att drifta.
+  - **03-regelverk:** 21 sökvägar mot disk (#12b) → existerar; inga check-invariants/Bash-påståenden.
+  - **04-justeringskarta / 06-scope / 00-borja-har:** inga påståenden om det verkställda deltat (Bash/BLOCKED, OGILTIG, check-invariants, NRT-007-block) → 0 berörda; kontrollerade och rena.
+- **Basstämpel-ärlighet (registrerat påstående):** basstämpeln 2026-07-30 sattes av **[AUTO-N1] `64acf9f`** (stämpelsvep) och är **inte oberoende granskad**. Den riktade verifieringen VILAR på den basen → varje ny stämpel bär `Verifieringsomfång:` på egen rad som säger både omfånget OCH att basen är en ogranskad N1-artefakt. Alla 8 + `docs/05` omstämplade **2026-07-31** (= senaste systemcommit → #12(d) parsar och passar). `docs/05`:s stämpel bumpad per retro-appliceringsregeln (SKILL.md:20 — stämpeln uppdateras i varje berörd docs-fil); append-only-regeln skyddar besluts-RADERNA, inte toppmetadatan.
+
+**Doctor #12(a)–(e) körd mekaniskt mot worktree (tomhetsdisciplin bekräftad — ankaret matchade i varje delkontroll):**
+- **(a) PASS** — 7/7 agentrader i 02-agenter stämmer mot frontmatter (0 avvikelse, 0 saknat namn).
+- **(b) PASS** — 21 unika sökvägar i 03-regelverk existerar (0 saknade).
+- **(c) PASS** — 10 unika `/nortropic-<namn>`-kommandon i README/docs löser till skill/workflow (0 olösta; en första grep gav 2 falska "olösta" pga trunkering vid bindestreck — artefakt, ej drift).
+- **(d) PASS** för de 9 omstämplade (07-31 ≥ senaste systemcommit 07-31). **1 känd WARN: `docs/07-konstitution.md` = 2026-07-28 < 07-31** — §A6-skyddad (människohand), lämnas → **004G**. WARN-klass, accepterad; doctorn förblir GRÖN (grön = 0 FAIL).
+- **(e) PASS** — ingen `0[1-7]`/README committad SENARE än `00-borja-har.md`; alla 8 committas i SAMMA commit 07-31 → delade datum, enkla lagret släpar aldrig.
+
+**Integrationspass (fil-mot-fil över de 8, särskilt 00-borja-har vs 01–04/06): REN.** Enda substantiella `scripts/`-uppräkningen är README:36 (nu korrekt med båda skripten); inget annat dokument bär ett inaktuellt "scripts/ = 1 fil"-påstående. Inget dokument påstår att design-reviewer HAR Bash eller renderar lokalt → tool-ändringen skapar ingen doc-motsägelse. Enkla och tekniska lagret motsäger inte varandra på någon punkt batchen rörde.
+
+**Residual (bärs vidare från 004D) — KOSMETISK STATUSHONESTY (låg prio, efter 004C/004F).** I `verify-suite.js` visar en doctor som DOG (null) `doctor: FAIL` i resultatets metablock + retur med tomt `fails[]`. Verdikt RÖD är korrekt/konservativt (blockerar inget fel), men statustexten påstår att kontroller föll när ingen kördes — samma feldomän 004D stängde, fast den faller alltid åt säkra hållet (RÖD). Möjlig fix: skilj FAIL från DÖD/KUNDE-EJ-STARTAS i visningen; verdikt förblir RÖD. Ej åtgärdad här (kosmetisk, blockerar inget).
+
+## Stående regel — commit-trailers i 100D-serien (ägarbeslut 2026-07-31, registrerat val)
+100D-batchcommitsen bär MEDVETET INTE Co-Authored-By/Claude-Session-trailers, trots att trailers är
+NORMEN i repot: av 220 commits bär **191 Co-Authored-By (87 %)** och **100 Claude-Session** — vår
+programserie är den avvikande stilen, inte tvärtom. **Rättelse av mätfel:** BATCH-004BE:s
+commit-granskningsunderlag påstod först att "repo-konventionen" var trailerfri; det var FEL och
+rättades genom att räkna hela historiken (191/220). En omätt "konvention" är ett antagande, inte ett
+faktum — samma klass som backlog-siffror-är-påståenden. Valet att ändå avstå står, av tre skäl:
+- **(a)** Proveniensen fylls redan av beslutsloggraden — läsbar, granskad och maskinellt hittbar; en
+  trailer är inget av det.
+- **(b)** Claude-Session-URL:er i ett PUBLIKT repo pekar på sessioner som inte är publika.
+- **(c)** Byt inte konvention mitt i en batchserie.
+Registrerat så att nästa läsare ser en MEDVETEN avvikelse (191/220-normen känd), inte ett slarvfel.
+
+## LINSKONSISTENS — steg 9 (3) ger BLOCKED, bildlinsen (3) ger "EGET tillstånd" (observation → efter 004C)
+BATCH-004BE gav steg 9:s (kluster-differentiering) tri-state (3) utfallet **BLOCKED**. Bildlinsens
+(steg 10) tri-state (3) ger fortfarande **"EGET tillstånd, rapporteras SEPARAT"** — inte BLOCKED. Den
+raden säger dessutom om sig själv att mönstret är "ordagrant ärvt från steg 9", vilket det INTE längre
+är efter denna batch. Två linser hanterar alltså "kunde ej bedöma" olika. Det KAN vara rätt — att
+sakna bilder att granska är mindre allvarligt än att inte kunna se sajten alls — men det är nu ett
+OMEDVETET gap, inte ett medvetet val, och bildlinsens självbeskrivning ("ärvt från steg 9") är
+inaktuell. **Klassning: LINSKONSISTENS. Låg prioritet, efter 004C.** Ägar-observation, ingen fix här.
+
+## GRANSKNINGSLÄXA — en minimal ändringsinstruktion kan bevara en bugg (ägar-observation)
+Under BATCH-004BE:s DEL 1-granskning kvalificerades steg 9:s tri-state (3) BLOCKED-villkor först ENDAST
+för de två klausuler ägaren namngav ("rör inget annat i raden"). Den avgränsningen lämnade kvar en
+konflikt av SAMMA klass: villkoret "render-upplösning gav ingen sajt" i (3) betyder — per rad 38
+("vald kund → renderbar sajt") — att JÄMFÖRELSEKUNDEN inte kunde lösas upp, och rad 41:s fallback säger
+att exakt det ska HOPPAS, aldrig blockera. Två rader instruerade motsatt om samma tillstånd; dessutom
+pekade rad 38:s eget fall (3) på tri-state (3) i st.f. fallbacken. En helhetsläsning hade fångat det
+direkt — den minimala instruktionen konserverade det. **Läxa: en minimal ändringsinstruktion kan bevara
+en bugg som en bredare läsning hade fångat — granska hela den berörda enheten mot principen, inte bara
+de namngivna klausulerna.** Rättat i samma commit (andra amend-vändan): "render-upplösning gav ingen
+sajt" borttaget ur (3), "render-fel" + rubriken kvalificerade till den nya sajten, rad 38:s fall (3)
+pekar nu på fallbacken. (3):s samtliga villkor gäller nu entydigt granskningssubjektet. Klassning:
+GRANSKNINGSLÄXA, ingen ytterligare åtgärd.

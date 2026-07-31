@@ -1,6 +1,7 @@
 # Översikt — nodkartan, stoppen och artefaktkedjan
 
-Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-31 · v17 (denna commit)
+Verifieringsomfång: delta-verifierad mot systemändringarna sedan 2026-07-30 (BATCH-001–004BE: check-invariants.mjs INV-001–005, verify-suite doctor 1–13 + OGILTIG-status, design-reviewer Bash→BLOCKED, NRT-007-blocket i agenterna, docs/100-dagar); 0 påståenden i denna fil ogiltigförklarade. Basstämpeln 2026-07-30 sattes av [AUTO-N1] 64acf9f och är inte oberoende granskad.
 
 > **Ny här?** Läs [00-borja-har.md](00-borja-har.md) först — hela systemet förklarat från noll utan interna termer. Den här filen och 02–07 är det djupare, tekniska lagret.
 

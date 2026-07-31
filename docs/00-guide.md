@@ -1,6 +1,7 @@
 # Operatörsguiden
 
-Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-31 · v17 (denna commit)
+Verifieringsomfång: delta-verifierad mot systemändringarna sedan 2026-07-30 (BATCH-001–004BE: check-invariants.mjs INV-001–005, verify-suite doctor 1–13 + OGILTIG-status, design-reviewer Bash→BLOCKED, NRT-007-blocket i agenterna, docs/100-dagar); 0 påståenden i denna fil ogiltigförklarade. Basstämpeln 2026-07-30 sattes av [AUTO-N1] 64acf9f och är inte oberoende granskad.
 
 Det här är guiden för dig som kör Nortropic-systemet: en operatör, en sajt i taget. Den är författad ur systemfilerna själva — varje avsnitt pekar på filen där regeln faktiskt bor, och när guiden och en systemfil säger olika saker är det systemfilen som gäller. Guiden förklarar hur du använder systemet och varför det ser ut som det gör; den exakta nodkartan finns i [01-oversikt.md](01-oversikt.md), agenterna i [02-agenter.md](02-agenter.md) och de hårda reglerna med källhänvisningar i [03-regelverk.md](03-regelverk.md).
 

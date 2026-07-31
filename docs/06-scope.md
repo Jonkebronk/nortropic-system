@@ -1,6 +1,7 @@
 # Scope — ringmodellen
 
-Senast verifierad mot systemet: 2026-07-30 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-07-31 · v17 (denna commit)
+Verifieringsomfång: delta-verifierad mot systemändringarna sedan 2026-07-30 (BATCH-001–004BE: check-invariants.mjs INV-001–005, verify-suite doctor 1–13 + OGILTIG-status, design-reviewer Bash→BLOCKED, NRT-007-blocket i agenterna, docs/100-dagar); 0 påståenden i denna fil ogiltigförklarade. Basstämpeln 2026-07-30 sattes av [AUTO-N1] 64acf9f och är inte oberoende granskad.
 
 Vad Nortropic bygger, vad som byggs vid efterfrågan, och vad som är nej. Principen bakom gränsen: **pipelinen levererar stateless sajter som aldrig kräver jour — det är vallgraven, inte en teknisk brist.** En sajt utan databas, inloggning eller eget tillstånd kan inte läcka persondata den inte har, går inte ner av en migrering och väcker ingen klockan tre. Kalibreringen per kund sker i briefens §7 (`agents/project-planner.md`), aldrig genom att systemet kopieras per bransch.
 
