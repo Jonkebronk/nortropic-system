@@ -20,9 +20,10 @@ const DOCTOR = {
   type: 'object',
   required: ['status', 'fails', 'warns'],
   properties: {
-    status: { type: 'string', enum: ['PASS', 'FAIL'] },
+    status: { type: 'string', enum: ['PASS', 'FAIL', 'OGILTIG'] },
     fails: { type: 'array', items: { type: 'string' }, description: 'one line per failing check: "#n <check>: <evidence>"' },
     warns: { type: 'array', items: { type: 'string' } },
+    note: { type: 'string', description: 'vid OGILTIG: vilken kontroll som inte kunde köras (KUNDE-EJ-KÖRAS) och varför' },
   },
 }
 
@@ -83,12 +84,21 @@ const TEMPLATE = {
 
 phase('Doctor')
 const doctor = await agent(
-  `Read ~/.claude/agents/nortropic-steward.md, section "MODE: doctor", and execute checks 1–13 mechanically EXACTLY as written there (shell out to the embedded commands; judge nothing beyond what a check specifies). This is a verify-suite gate run: write NO files, propose nothing — return structured data only. status=FAIL if any check FAILs. Grön = 0 FAIL; WARNs are reported but do not fail the gate.`,
+  `Read ~/.claude/agents/nortropic-steward.md, section "MODE: doctor", and execute checks 1–13 mechanically EXACTLY as written there (shell out to the embedded commands; judge nothing beyond what a check specifies). This is a verify-suite gate run: write NO files, propose nothing — return structured data only. Företräde för status: FAIL om NÅGON kontroll FAILar; annars OGILTIG om NÅGON kontroll rapporterar KUNDE-EJ-KÖRAS (kunde inte utvärderas — sätt note till vilken/vilka kontroller + varför); annars PASS. En outvärderad kontroll ger ALDRIG PASS med bara en WARN. WARNs redovisas men fäller inte grinden.`,
   { label: 'doctor', phase: 'Doctor', schema: DOCTOR }
 )
 const doctorFailed = !doctor || doctor.status === 'FAIL'
+const doctorInvalid = !!doctor && doctor.status === 'OGILTIG'
+const doctorStatus = doctor ? doctor.status : 'FAIL'   // 'PASS' | 'FAIL' | 'OGILTIG' (dött doctor = FAIL)
+// Företräde: doctor FAIL/null → RÖD, hoppa proberna (0 FAIL krävs innan de körs). Doctor OGILTIG
+// hoppar däremot INTE proberna — medvetet val, ej bieffekt: en outvärderbar kontroll (t.ex. #4
+// MCP-integritet) är ORTOGONAL mot plan-/eval-/template-regression. Hoppar vi proberna döljer vi
+// verkliga regressioner bakom en orelaterad oevaluerbar kontroll. Verdiktet låses ändå till OGILTIG
+// nedan, men probinformationen är inte värdelös (och --cut-baseline behöver den).
 if (doctorFailed) {
   log(doctor ? `Doctor RÖD: ${doctor.fails.length} FAIL — proberna hoppas över` : 'Doctor kunde inte köras — proberna hoppas över')
+} else if (doctorInvalid) {
+  log(`Doctor OGILTIG: ${doctor.note || 'kontroll(er) kunde inte köras'} (${doctor.warns.length} WARN) — proberna körs ändå (se not ovan)`)
 } else {
   log(`Doctor grön (${doctor.warns.length} WARN)`)
 }
@@ -129,12 +139,12 @@ const evalV = evalStab ? evalStab.verdict : 'OGILTIG'
 const tmplV = template ? template.verdict : 'OGILTIG'
 let verdict
 if (doctorFailed || planV === 'AVVIKELSE' || evalV === 'FAIL' || tmplV === 'FAIL') verdict = 'RÖD'
-else if (planV === 'KUNDE-EJ-KÖRAS' || evalV === 'OGILTIG' || tmplV === 'OGILTIG') verdict = 'OGILTIG'
+else if (doctorInvalid || planV === 'KUNDE-EJ-KÖRAS' || evalV === 'OGILTIG' || tmplV === 'OGILTIG') verdict = 'OGILTIG'
 else verdict = 'GRÖN'
-log(`Verdikt: ${verdict} (doctor: ${doctorFailed ? 'FAIL' : 'PASS'} · plan: ${planV} · eval: ${evalV} · template: ${tmplV})`)
+log(`Verdikt: ${verdict} (doctor: ${doctorStatus} · plan: ${planV} · eval: ${evalV} · template: ${tmplV})`)
 
 phase('Verdict')
-const summaryLine = `doctor: ${doctorFailed ? 'FAIL' : 'PASS'} · plan: ${planV} · eval: ${evalStab ? `${evalStab.total}/${evalStab.baselineTotal ?? '?'} (Δ${evalStab.delta ?? '?'})` : 'OGILTIG'} · template: ${template ? `${(template.newCriticals || []).length} nya CRITICAL` : 'OGILTIG'}`
+const summaryLine = `doctor: ${doctorStatus} · plan: ${planV} · eval: ${evalStab ? `${evalStab.total}/${evalStab.baselineTotal ?? '?'} (Δ${evalStab.delta ?? '?'})` : 'OGILTIG'} · template: ${template ? `${(template.newCriticals || []).length} nya CRITICAL` : 'OGILTIG'}`
 await agent(
   `Skriv verify-suitens resultatfil. Kör \`git -C ~/.claude rev-parse HEAD\` och hämta dagens datum, SKRIV sedan hela rapporten till ${RESULT_PATH} (skriv över — historiken bor i AUTO-DIGEST) som börjar EXAKT med detta meta-block (fyll i riktiga värden):\n` +
   `<!-- nortropic-verify-suite-meta\ncommit: <hash>\ndate: <YYYY-MM-DD>\nverdict: ${verdict}\n${summaryLine}\nmode: ${cutBaseline ? 'cut-baseline' : 'verify'}\n-->\n` +
@@ -144,4 +154,4 @@ await agent(
   { label: 'report', phase: 'Verdict' }
 )
 
-return { verdict, doctor: doctorFailed ? 'FAIL' : 'PASS', plan: planV, eval: evalV, template: tmplV, resultPath: RESULT_PATH, mode: cutBaseline ? 'cut-baseline' : 'verify' }
+return { verdict, doctor: doctorStatus, plan: planV, eval: evalV, template: tmplV, resultPath: RESULT_PATH, mode: cutBaseline ? 'cut-baseline' : 'verify' }

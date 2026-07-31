@@ -342,3 +342,64 @@ det var färdigställandet av en redan påbörjad ägarhandling. **Detta förän
 läsas i efterhand: fyndet var KÄNT, inte missat.** Nyansering av BATCH-004A:s "ägar-rättelse":
 det som missades i 004A:s spec var §A6-NATUREN (att verify-suite.js är grundlagsskyddad), inte
 driften i sig — driften var känd och medvetet uppskjuten sedan 2026-07-28.
+
+## BATCH-004D — GRINDINTEGRITET: doctorfasen fick tredje status (OGILTIG). §A6/HÖGRISK. STÄNGD.
+**Fix (minsta möjliga), verify-suite.js.** DOCTOR-schemat fick `OGILTIG` + `note`-fält;
+doctorinstruktionen (rad 86) instruerar KUNDE-EJ-KÖRAS → status OGILTIG med note (aldrig PASS+WARN);
+aggregeringen la `doctorInvalid` i den BEFINTLIGA OGILTIG-grenen (RÖD slår OGILTIG slår GRÖN — ingen
+ny hierarki); logg/summary/return visar tre-status. Proberna körs MEDVETET även vid doctor OGILTIG
+(#4 är ortogonal mot plan-/eval-/template-regression — motivering som kodkommentar vid rad 93). "checks 1–13"
+orörd → INV-005 grön. Inget annat rört.
+
+**Diagnos (dåtid, färdigställd).** Doctor #4 var INTE trasig — dess text föreskrev KUNDE-EJ-KÖRAS
+och förbjöd tyst PASS. Felet låg i MOTTAGANDET: DOCTOR-schemat var binärt (PASS/FAIL), så en
+KUNDE-EJ-KÖRAS hade ingen plats → hamnade i warns → warns fällde inte grinden → sviten rapporterade
+GRÖN med en outvärderad kontroll (samma hål INV-005 hade). Proberna hade redan tredje status
+(OGILTIG, rad 55/70) + verdiktlogik; doctor var enda fasen utan den, och den grindade alla andra.
+
+**Beteendeverifiering (C2 — batchens bevis, körd EXAKT en gång).** Doctorfasen kördes med det nya
+kontraktet: **status blev OGILTIG** (inte PASS), **note namnger #4** (MCP-integritet KUNDE-EJ-KÖRAS,
+8 av 10 mcp__-tokens obekräftbara i subagentkontext), 0 FAIL / 4 WARN / 1 KUNDE-EJ / 8 PASS. Under
+det GAMLA binära kontraktet hade samma tillstånd rapporterats **GRÖN/PASS** — precis blindheten 004D
+stänger. Aggregerat verdikt: **OGILTIG** (ej GRÖN → batchen lyckades). Kostnad: 149 003 tokens, 15
+verktygsanrop, ~17 min (jfr 004A:s C2: 144 497).
+
+**Enhetstest (C3).** Verdiktlogiken enhetstestad mot en KOPIA av rad 141–143: doctor PASS + rena
+prober → GRÖN (sviten blir INTE permanent OGILTIG), doctor OGILTIG → OGILTIG, **doctor OGILTIG +
+probe FAIL → RÖD** (en verklig regression döljs INTE bakom den oevaluerbara kontrollen — motiverar
+prob-körningsvalet).
+
+## Blast radius (ägar-verifierad, registrerad)
+- **N1 (Vaktmästaren) berörs INTE.** Dess protokoll är "kör doctor 1–13, grön = 0 FAIL" direkt i
+  huvudsessionen, utan DOCTOR-schemat (som bor i verify-suite.js och används bara där). N1 kan mycket
+  väl evaluera #4 där subagenten inte kan.
+- **N2 (Nattskiftet) berörs HELT.** Dess protokoll kräver "verdikt GRÖN i VERIFY-SUITE-RESULT.md".
+  Permanent OGILTIG (om #4 förblir oevaluerbar i grinden) = N2 kan aldrig applicera.
+- **AUTOPILOT är `off` → praktisk påverkan i dag = noll. KOPPLING (registrerad så den upptäcks före,
+  inte av någon som undrar varför nattskiftet vägrar): AUTOPILOT får INTE höjas till `on` förrän
+  OGILTIG-frågan (004F) är löst.**
+
+## 004F — bokat (villkorat på C2, villkoret uppfyllt)
+C2 visade att doctor blir OGILTIG i subagentkontext (#4 oevaluerbar där, 8/10 tokens obekräftbara).
+Därför skapas **004F**: "gör #4 nåbar i grinden (mata in huvudsessionens /mcp-tillstånd i doctorfasen),
+ELLER scopa ut #4 ur verify-suitens doctorfas". Åtgärdas INTE i 004D. **004F blockerar AUTOPILOT `on`**
+(se blast radius). Ägd fråga med ID — inte en öppen fråga i löptext.
+
+## Stående regel — AKTUATOR vs PROTOKOLL (ägarbeslut 2026-07-31; formellt registrerad här, per regeln själv)
+Rätt processteg beror på artefaktens typ:
+1. **AKTUATOR** — cross-session-minnet (`projects/.../memory/`). Styr nästa sessions beteende; en
+   felaktig post får en framtida session att börja i fel ände → korrigeras OMEDELBART, i den tur felet
+   upptäcks, UTAN branch. Redovisas per bokföringsregeln.
+2. **PROTOKOLL** — `docs/100-dagar/programregister.md`. Läses av människor i efterhand, styr inget
+   automatiskt → diagnostiska korrigeringar och tolkande slutsatser FÖLJER MED nästa substantiella
+   batch (som denna post gör), ingen egen branch/granskningsrunda. Undantag: ett registerpåstående som
+   aktivt kan vilseleda PÅGÅENDE arbete → egen branch.
+3. `docs/05-beslutslogg.md` är append-only, redigeras aldrig.
+Motiv: två dokumentationsbranchar i rad kostade två fulla rundor för 32 rader text ingen kod berodde
+på — noggrannheten var rätt, takten fel.
+
+## Worktree-rensning (STEG 0, BATCH-004D)
+Sex mergade worktrees rensades före batchen (`git worktree remove` utan --force + `git branch -d`
+safe-delete; remota brancher orörda). Motiv: reporoten är `~/.claude`, så mergade worktrees är
+DUBBLETTER av agents/skills/workflows i hemkatalogen — redigeras fel kopia märks det inte förrän något
+beter sig konstigt. Efter: endast `main`.
