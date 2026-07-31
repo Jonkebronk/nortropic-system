@@ -191,3 +191,47 @@ grinden grön.
   agentblock upptäcks den inte — bredda scope i BATCH-003.
 - **INV-004 kontrollerar endast att RUBRIKEN finns.** Blockets brödtext kan bytas ut medan
   kontrollen förblir grön — en HASH över hela blocket vore starkare.
+
+## BATCH-003 — Grindhärdning (endast skärpta kontroller, inga fixar)
+Tre kontroller härdade; INV-001 + INV-002 orörda. Utfall **6 → 8** överträdelser (steg, aldrig
+sjönk — grundprincipen: en härdning som gör grinden grönare är per definition felskriven).
+Base-SHA `7984377`.
+
+- **INV-005 — matcha SAMTLIGA förekomster, inte den första.** `break` borttaget; varje träff på
+  `checks|kontroller 1–N` i verify-suite samlas och flaggas per förekomst vars tal avviker från
+  stewardens. FÖRE: 1 (rad 6). EFTER: 2 (rad 6 = loggmetadata i `meta.phases`, rad 86 = den
+  faktiska instruktionen till stewarden) — båda 12 mot stewardens 13. **Negativt test bevisat:**
+  ändras BARA rad 6 till 1–13 i scratch flaggas rad 86 fortfarande → ingen enskild sträng kan
+  ljuga grinden grön.
+- **INV-003 — breddat scope + medveten undantagsprincip.** FÖRE: endast `workflows/`. EFTER:
+  git-spårade filer under `workflows/ + skills/ + agents/`, med `scripts/` och `docs/` UNDANTAGNA.
+  Breddningen avslöjade en tidigare OSYNLIG förekomst: `skills/nortropic-prelaunch/SKILL.md:11`.
+  FÖRE: 1 (launch.js:54). EFTER: 2.
+- **INV-004 — hasha blocket, inte bara rubriken.** Blocket (markörrad → nästa `## ` eller
+  filslut, LF-normaliserat) hashas och jämförs mot en hårdkodad konstant `7ecd05e0…` — en
+  säkerhetsinvariant; avsiktlig ändring KRÄVER medveten uppdatering av konstanten. Alla sju
+  block identiska → EFTER: 0. Negativt test: ett ändrat tecken i ett agentblock flaggar exakt
+  den filen (blockhash avviker), övriga rena.
+
+**Stående princip (från INV-003-härdningen):** *En mönstermatchande grind scannar ALDRIG sin
+egen källkod eller sin egen dokumentation.* Grindens källa bär nödvändigtvis söksträngen den
+letar efter, och programregistret beskriver regeln; skulle de scannas flaggar grinden sig själv,
+blir permanent röd, och någon "löser" det genom att ta bort kontrollen.
+
+**Känd begränsning — INV-004 förutsätter identiska block (ägar-tillägg, medvetet vald).** Den
+gemensamma blockhashen låser alla sju agenter till ETT identiskt block: enklare, verifierbart och
+tillräckligt nu. Men det utesluter per-agent-skärpning. Konkret bär `project-planner` ensam både
+`WebFetch`, `WebSearch` och `Write` — en bredare injektionsyta än t.ex. `seo-optimizer`. Vill man
+någon gång ge den en strängare klausul kräver det att INV-004 görs om (t.ex. hasha ett
+obligatoriskt KÄRNSTYCKE och tillåta agentspecifik text efter det). **INV-004 förutsätter
+identiska block. Per-agent-skärpning kräver omdesign av kontrollen. Känd begränsning, medvetet vald.**
+
+**Fixarna av de 8 överträdelserna är BATCH-004.** Denna batch skärpte endast kontrollerna.
+
+## Oberoende verifiering — INV-004:s blockhash reproducerbar (ej bara internt konsekvent)
+En oberoende part reproducerade konstanten `7ecd05e0` från en EGEN klon UTAN tillgång till
+grindkoden: SHA-256 över blocket (markör→EOF), LF-normaliserat och rstrip:at, räknat på
+`origin/main:agents/qa-launcher.md`. **Utan rstrip blir värdet `cb884e24`** — skillnaden är
+ENBART den avslutande radbrytningen. rstrip (`\n+$` bort) är rätt val: en agentfil som får en
+extra eller saknad slutrad ska inte flagga falskt. Konstanten är därmed oberoende reproducerbar,
+inte bara internt konsekvent.
