@@ -580,3 +580,17 @@ release-/commitsteget stageer exakt den mängden** (Dag 5/16-arbete, ändrar age
 add -u` får ALDRIG användas som mellanlösning** — den missar NYA filer och återinför rorjour-buggen
 (ocommittade fixar → preview serverar förfix-värden), exakt felet steget finns för att förhindra. Tills dess
 håller INV-001 dem röda, vilket är korrekt: grinden ska visa att arbetet återstår.
+
+## Accepterade begränsningar i BATCH-004C:s grindomformning (ägar-granskning, ingen åtgärd)
+Två svagheter i den härdade grinden, MEDVETET accepterade så en framtida läsare ser ett VÄGVAL, inte en glömska:
+1. **Kommentar-skippens yta.** INV-001 hoppar rader som börjar med `#`/`//` (kommentar/prosa exekverar aldrig →
+   ingen riktig staging). I ett bash-block är `#` en kommentar (korrekt hoppad); UTANFÖR ett block är `#` en
+   markdownrubrik som inte heller exekveras. Kvarvarande teoretiskt gap: en rubrik/kommentar som en agent LÄSER
+   som instruktion snarare än exekverar. Låg risk — agenter kör scaffold-block, de tolkar inte rubriker som
+   körbara kommandon — men skrivet så det inte återupptäcks som nytt.
+2. **INV-003:s LEAK003 är token-baserad, inte hash.** Fyra tokens på samma rad (`LÄCKSKYDD`+`hemligheten`+
+   `ALDRIG`+`URL`) är väsentligt starkare än ett ord, och klausulerna i båda filerna är verklig substans. Men det
+   är en svagare kontrollklass än INV-004:s blockhash. **Blockhash går INTE här:** klausulerna lever i olika
+   kontexter (JS-sträng i `launch.js`, markdown-blockquote i `prelaunch/SKILL.md`) och kan inte vara byte-
+   identiska — en gemensam hash skulle kräva identiska block, vilket kontexterna omöjliggör. Token-substanskravet
+   är därför det starkaste mekaniska krav som är tillgängligt här. Accepterad begränsning med det motivet.
