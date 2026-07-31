@@ -493,3 +493,17 @@ de namngivna klausulerna.** Rättat i samma commit (andra amend-vändan): "rende
 sajt" borttaget ur (3), "render-fel" + rubriken kvalificerade till den nya sajten, rad 38:s fall (3)
 pekar nu på fallbacken. (3):s samtliga villkor gäller nu entydigt granskningssubjektet. Klassning:
 GRANSKNINGSLÄXA, ingen ytterligare åtgärd.
+
+## METODOBSERVATION — granskningen hittade fler defekter än testerna (BATCH-004BE)
+BATCH-004BE är den FÖRSTA batchen där GRANSKNINGEN hittade fler defekter än TESTERNA. Grinden var
+oförändrad genom hela batchen (**3 PASS / 2 FAIL / 5**), C1/C2 gröna från första passet, doctor #12
+grön. Samtliga fyra defekter — tre tvetydigheter i en punktlista (rad 42:s (3): ospecificerad preview,
+ospecificerat "render-fel", ospecificerad rubrik) plus en felriktad hänvisning (rad 38:s (3) pekade på
+tri-state (3) i st.f. fallbacken) — hittades genom att läsa PROSA mot PRINCIP. Ingen mekanisk kontroll
+kunde ha fångat någon av dem. **Slutsats att bära vidare:** grinden täcker det GREPPBARA (tools-rader,
+strängar, hashar, filnamn); systemets faktiska BETEENDE ligger i agentinstruktioner, som är prosa. En
+felriktad hänvisning i en punktlista kan blockera ett korrekt kundbygge utan att någon exit-kod någonsin
+rapporterar det. Detta betyder INTE att grinden är felbyggd — den gör det den kan deterministiskt. Det
+betyder att prosagranskning inte kan ersättas av fler invarianter, och att batcher som ändrar
+agentinstruktioner måste läsas i sin HELHET, inte punktvis. **Klassning: METODOBSERVATION. Ingen åtgärd
+— men ska vägas in när 004C:s scope sätts (INV-001 och INV-003 rör båda promptsträngar).**
