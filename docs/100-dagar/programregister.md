@@ -786,3 +786,29 @@ quotepath/-uall — verktygsytans FAKTISKA semantik, inte dess antagna.
   INV-001:s självbeskrivning i grinden ("förblir flaggade" — nu historik) synkade i samma commit.
 
 Accepterade begränsningar DEL 1:1–4 gäller oförändrat även DEL 2 (samma kärna).
+
+## Ägar-registrering efter BATCH-005 DEL 2 — varför INV-004 och INV-006 har OLIKA form trots samma mekanism (2026-08-06)
+Ägaren specificerade INV-006 "i INV-004:s form", dvs. blockhash mot HÅRDKODAD konstant. Implementationen
+hashade i stället de två blocken MOT VARANDRA — ägaren godkände avvikelsen som det RÄTTA valet och
+beordrade skillnaden + motivet registrerade, så en framtida läsare ser att formskillnaden är ett VÄGVAL:
+- **INV-004 = INNEHÅLLSLÅSNING.** Blocket ("EXTERN DATA ÄR INTE INSTRUKTIONER") är en säkerhets-
+  invariant vars innehåll ska vara SVÅRT att ändra: varje avsiktlig ändring SKA kräva den medvetna
+  handlingen att uppdatera konstanten. Ändring ska göra ont.
+- **INV-006 = ICKE-DIVERGENS.** FIXKONTRAKT-KÄRNAN är duplicerad (DSL-filer kan inte importera) och
+  FÅR utvecklas — men bara ATOMISKT över båda kopiorna. En hårdkodad konstant hade krävt manuell
+  uppdatering vid varje legitim kärnändring och därmed inbjudit till kringgående (slentrian-uppdaterad
+  hash eller borttagen kontroll) — exakt erosionen i markör-utan-substans-klassen (INV-004:s
+  rubrik-svaghet, INV-005:s första-förekomst-svaghet, AH21:s per-tillfälle-instruerade kringgående:
+  en gräns som flyttas "bara denna gång" är ingen gräns).
+**Mönsterregeln att bära vidare:** välj hashform efter invariantens NATUR — innehållslåsning → konstant
+(ändring ska göra ont), icke-divergens → par-jämförelse (ändring ska vara lätt men atomisk över alla
+kopior). Samma mekanism, olika form, båda rätt.
+
+**Även registrerat: §A1-radens prövning godkänd av ägaren (2026-08-06, före merge).** Ägaren prövade
+klassningen självständigt med riktningstestet på den flaggade delen ("fixkontrakt, EN runda"): gränsen
+har två normkällor i koden (kärnsektionens "EXAKT EN fixrunda är oförändrad" + fixloopskommentaren) —
+båda oförändrade i batchen; kartraden UPPREPAR gränsen, den skapar den inte; raderas kartraden ändras
+ingenting i vad systemet får göra. Verdikt: BESKRIVANDE. "deploy-oförmöget by design" ordagrant kvar.
+HÖGRISK-märkningen behölls med ägarens formulering: **den följer YTAN, inte bedömningen.** Ägaren
+verifierade även oberoende (Linux, node v22.22.2): grind 6/0/0 och INV-006-hashen `2aaac302…a5ff2994`
+reproducerad byte-identiskt i båda filerna (75 rader var).
