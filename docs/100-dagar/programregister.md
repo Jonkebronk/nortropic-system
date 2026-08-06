@@ -662,3 +662,43 @@ Accepterade begränsningar i DEL 1 (vägval, inte glömska):
 4. **CONTRACT_EXEMPT (AGENT-LOG.md) är en skopning, ingen sänkning:** kontraktet vaktar SAJT-fixarna;
    loggen är meta-observabilitet som aldrig commitas av loopen. Utan undantaget fäller systemets egen
    loggdisciplin ärliga rundor falskt. Loggens hemvist-/commitfråga ägs av Z1-spåret, inte launch.
+
+## Ägar-registrering efter BATCH-005 DEL 1 — fyra återanvändbara mönster + metodobservations-stöd (2026-08-06)
+Ägaren verifierade DEL 1-diffen oberoende i egen miljö (grind 4/1/1; badRepoPaths adversariellt prövad
+mot 12 sökvägar — traversal/shell-injektion blockerade, `app/[stad]/`, `app/(grupp)/`, åäö och
+Windows-backslash intakta; §A3-ytorna orörda) och registrerade fyra saker som blev STARKARE än begärt —
+**mönster att återanvända**, inte engångslösningar:
+1. **Snittet `declared ∩ post`:** begäran var "stagea deklarerad mängd"; lösningen stagear endast filer
+   som bevisligen står i porcelain-utdata → kataloger, globs och fantomsökvägar blir OMÖJLIGA, inte
+   upptäckta. Mönsterklass: gör felmoden orepresenterbar i stället för att detektera den.
+2. **`core.quotepath=off`:** utan den oktalescapas `tjänster.ts` till `tj\303\244nster.ts` och kan
+   aldrig matcha agentens UTF-8-deklaration → deterministisk falsk blockering i varje svensk pipeline.
+   Fyndklassen kräver att kommandot KÖRTS skarpt — skrivbordsgranskning ser den inte.
+3. **`-uall`:** utan den listas en ny katalog som `dir/` → ärligt deklarerade nya filer falskblockeras.
+   Samma klass som 2: porcelain-utdatats faktiska form, inte dess antagna.
+4. **Efterkontroll av commit-mängden:** sista ledet vilar inte på prosa; kommentarens ärlighet om
+   detektion-vs-prevention (committen finns när avvikelsen upptäcks) är rätt hållning — lova aldrig
+   prevention som mekaniken inte ger.
+
+**Ytterligare stöd för METODOBSERVATIONEN (BATCH-004BE, "granskning > tester"):** att `seo-optimizer.md`
+HELT saknade fix-mode trots att launch anropar agenten i fixläge kunde bara hittas genom att läsa hela
+avsnittet mot principen — ingen grind, inget schema och ingen körning hade flaggat en agentdefinition
+som saknar det läge dess anropare använder. Samma slutsats som 004BE: batcher som ändrar
+agentinstruktioner läses i sin HELHET, aldrig punktvis.
+
+**Ägarbeslut inför DEL 2 (samma sittning, 2026-08-06):**
+1. **Content-fasen får F1** (fasgränscommit med samma kontrakt) **och den INGÅR i DEL 2** — en batch
+   som levererar ett obrukbart kontrakt är inte klar. **F1 TÄCKER EN OTÄCKT YTA:** i dag förblir
+   content-rester ocommittade ända till överlämning vid REN review — en verklig lucka som råkar döljas
+   av `git add -A`, inte en ny kostnad som införs. F2 avvisad: DEL 2 flyttar commit-ansvaret UT ur
+   agenterna och F2 lägger samtidigt IN det i content-designern — går åt två håll; init-prejudikatet
+   håller inte (init committar en SCAFFOLD ingen agent redigerat, content committar AGENTPRODUCERAT
+   innehåll — exakt skillnaden kontraktet finns för). F3 avvisad: foreign-blocket blir normalfall i
+   stället för undantag, och en kontraktsvakt som fäller vid normal drift blir bortkopplad inom en månad.
+2. **Commit-granularitet U (union):** attribution är LOGGDATA, inte commit-data — AUTOBYGG-LOG bär den
+   redan; P kostar dubbla scouts för information som redan finns. Formlikhet med launch är ett värde
+   när samma mönster underhålls på två ställen.
+3. **Blockhash-vakten ingår i DEL 2 som INV-006** (GATE-schemat är redan dubblerat mellan filerna UTAN
+   driftvakt — exakt den drift som väntar på att hända): FIXKONTRAKT-KÄRNAN hålls byte-identisk i båda
+   workflowfilerna och hashas i samma form som INV-004; avviker de flaggas det.
+4. **Rad 197-kommentaren får textuppdateras men ALDRIG semantiskt** — 1-vs-3 står fast.
