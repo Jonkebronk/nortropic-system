@@ -442,11 +442,26 @@ const nonLegalPass = GATES.filter(g => g.key !== 'legal').every(g => gates[g.key
 
 // v5: non-blocking quality eval. Runs only once the non-legal gates pass — the GATES block launch,
 // the eval only measures. Its score informs the report and feeds retro's cross-client comparison.
+// BATCH-007: evalen mäter det som LANSERAS. Invarianten (mekaniskt prövad i FAS A): eval nås endast
+// via (A) noll committade fixrundor — site är då orörd sedan rond 0 — eller (B) svep GENOMFÖRT utan
+// regressioner — sweep.url är då den enda BEVISADE mätytan, bunden till finalCommit. Pekaren
+// villkoras EXPLICIT på verdiktet, aldrig på blotta sweep !== null: datat bär sin egen betydelse,
+// och pekaren får inte vila på den implicita invarianten "sweep non-null ∧ nonLegalPass ⇒ GENOMFÖRT"
+// som en framtida redigering kan bryta tyst. ERSÄTTNING, inte supersede — evalens prompt bär EN URL
+// (BATCH-006-skeptiklärdomen: två URL:er i samma prompt är felmoden). Dev-server är ALDRIG evalens
+// mätyta — siffran jämförs mellan kunder och över tid (grindarnas dev-server-fallback är ett EGET
+// registrerat ärende och rörs inte här). Kriterieantalet har EN hemvist: rubrikens egen header —
+// prompten räknar aldrig igen ("all 10" stod kvar efter v14:s elfte kriterium; en-plats-principen).
+const evalSite = (sweep && sweep.verdict === 'GENOMFÖRT')
+  ? `the Nortropic site in the current working directory (preview URL: ${sweep.url} — the FINAL-SWEEP-VERIFIED deployment of final commit ${String(sweep.finalCommit).slice(0, 12)}; measure ONLY this URL, never any other preview and never a dev server)`
+  : ((args && args.url)
+    ? `${site} — measure ONLY this URL, never any other preview and never a dev server`
+    : `the Nortropic site in the current working directory (measure the UNIQUE deployed preview URL — never a project/branch alias — whose commit SHA per vercel inspect matches git HEAD of this working directory; if no deployment matches HEAD, do NOT guess and never start a dev server — stamp "mätyta obevisad: ingen HEAD-matchande deploy" in the scorecard header and score URL-dependent criteria on that honest basis)`)
 let evalResult = null
 if (nonLegalPass) {
   phase('Eval')
   evalResult = await agent(
-    `Run the nortropic-eval quality rubric against ${site}. Read ~/.claude/skills/nortropic-eval/SKILL.md and its references/eval-rubric.md, then score all 10 criteria in ONE coherent judgment, apply the Faktatrohet hard-gate, and WRITE the scorecard to EVAL-RESULT.md in the project root (stamped with today's date and the rubric version). This is INFORMATIONAL — it does not gate the launch. Return the structured result (total, faktatrohet PASS/FAIL, band, version, top brister, resultPath).`,
+    `Run the nortropic-eval quality rubric against ${evalSite}. Read ~/.claude/skills/nortropic-eval/SKILL.md and its references/eval-rubric.md, then score ALL criteria in the rubric (the rubric's own intro states how many — that count is authoritative over any other number you encounter, including the skill's headings and the rubric changelog) in ONE coherent judgment, apply the Faktatrohet hard-gate, and WRITE the scorecard to EVAL-RESULT.md in the project root per the skill's template, stamped with today's date, the rubric version, the number of criteria scored, and the clean preview ORIGIN you measured against — WITHOUT any bypass query parameters (LÄCKSKYDD gäller även denna stämpel). This is INFORMATIONAL — it does not gate the launch. Return the structured result (total, faktatrohet PASS/FAIL, band, version, top brister, resultPath).` + bypass + ` EVAL-NOTE (overrides the Gate-7 exception in the note above, for THIS eval only): the eval has NO naked-request assertion — EVERY URL request here authenticates with the bypass; a 401 is a bypass mistake in YOUR tooling, never grounds for the rubric's static-assessment fallback while the preview is reachable.`,
     { label: 'eval:rubric', phase: 'Eval', schema: EVAL }
   )
 }

@@ -39,11 +39,12 @@ If **any** factual claim on the site (certifikat, betyg, priser, garantier, rest
 ## Output
 
 1. Print the scorecard (format below).
-2. Write it to `<projektmapp>/EVAL-RESULT.md`, stamped with **today's date** and the **rubric version**, so retro can compare it against other clients. Overwrite any previous EVAL-RESULT.md but note the previous total in a one-line "Föregående" if one exists.
+2. Write it to `<projektmapp>/EVAL-RESULT.md`, stamped with **today's date**, the **rubric version**, the **number of criteria scored** and the **measured preview origin** (BATCH-007: en scorecard bär sin egen mätyta så jämförelser över tid är tolkningsbara; origin skrivs ALLTID utan bypass-query-parametrar — LÄCKSKYDD gäller stämpeln), so retro can compare it against other clients. Overwrite any previous EVAL-RESULT.md but note the previous total in a one-line "Föregående" if one exists.
 
 ```
 # EVAL-RESULT — <projektnamn>
 Datum: <YYYY-MM-DD> · Rubrikversion: v<X.Y.Z> · Totalpoäng: NN/100 (<verdict-band>)
+Kriterier bedömda: NN · Mätt preview-origin: <https://... utan bypass-query, eller "mätyta obevisad: <skäl>">
 Faktatrohet: PASS | FAIL   (FAIL överskuggar totalpoängen)
 
 ## Poäng per kriterium

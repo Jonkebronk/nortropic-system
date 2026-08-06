@@ -944,3 +944,81 @@ exakt när svepet körts). **Inte en en-radsfix:** rör även site-strängens fa
 the preview/dev URL…"), och två ändringar i samma villkorskedja som svepet ägargranskas sämre i samma
 batch (ägarbeslut 4, 2026-08-06). Eval-RUBRIKEN är §A2 och rörs inte — endast URL-pekaren i prompten.
 Körs direkt efter BATCH-006:s merge.
+
+**Status 2026-08-06: VERKSTÄLLD — se sektionen "BATCH-007-eval-url — GENOMFÖRD" nedan.**
+
+## BATCH-007-eval-url — GENOMFÖRD (2026-08-06, ägar-lett, HÖGRISK: §A3-fil; inga §A3-ytor rörda, ingen §A1-rad)
+Base-SHA `5ad7276`. Fyra ägarbeslut ur FAS A, verkställda:
+1. **evalSite-formen godkänd:** ersättning (EN URL i prompten — BATCH-006-skeptiklärdomen), pekaren
+   villkorad EXPLICIT på `sweep && sweep.verdict === 'GENOMFÖRT'` — aldrig på blotta `sweep !== null`
+   (datat bär sin egen betydelse; den implicita invarianten "sweep non-null ∧ nonLegalPass ⇒
+   GENOMFÖRT" får inte bära pekaren). `freshUrl || site` avvisad: freshUrl SEEDAS från args.url och
+   är ospårad — sweep.url bär beviset. Rad `const nonLegalPass` och rad `if (nonLegalPass)`
+   BYTE-IDENTISKA i diffen (§A3-gränsdragningen: villkoret är skyddat, URL-strängen är fixen).
+2. **Båda metodnotsfynden ingick — och (b) uppgraderades av ägaren:**
+   (a) `+ bypass` på eval-anropet — var enda URL-mätaren utan Deployment-Protection-instruktion
+   (grindar/recheck/svep bär den; eval mötte 401 och tvingades improvisera).
+   (b) **"score all 10 criteria" mot en rubrik med ELVA kriterier** — inte stale text utan ett
+   MÄTFEL: prompten har sannolikt beordrat tio av elva sedan v14 lade till kriterium 9 — varje
+   historisk launch-eval-poäng är ofullständig mot rubriken, inte bara mätt på fel URL.
+   **Ägarens räkning verifierad mekaniskt före ändring** (beordrat: annat tal = STOPP): 11 numrerade
+   kriterierubriker (## 1–## 11), headerraden ordagrant "100 points across 11 weighted criteria",
+   v3.0.0. Fix (slutform efter skeptikerrundan — första utkastets "the count lives there and
+   nowhere else" var falskt, se adversariell-blocket): "score ALL criteria in the rubric (the
+   rubric's own intro states how many — that count is authoritative over any other number you
+   encounter, including the skill's headings and the rubric changelog)" — rubrikens ingress är
+   facit med uttrycklig företrädesregel; raden kan aldrig drifta igen.
+3. **Dev-server-hålet stängt för EVALEN** (aldrig dess mätyta — siffran jämförs mellan kunder och
+   över tid; a-grenen utan args.url säger nu "find the deployed preview URL from vercel — never a
+   dev server"). **Grindarnas fallback lämnad orörd** — eget ärende, registrerat nedan.
+4. **Retro-spårbarhet:** EVAL-RESULT-metan stämplar nu datum + rubrikversion + ANTAL BEDÖMDA
+   KRITERIER + EXAKT MÄTT URL — en scorecard bär sin egen mätyta och blir tolkningsbar i efterhand.
+
+**Adversariell trippellins BATCH-007 (prompttext/mekanik/§A, tre oberoende skeptiker, 2026-08-06):
+mekanik- och §A-linserna RENA (0 fynd — första batchen med två tomma linser); prosalinsen fann sex,
+alla åtgärdade:**
+- **LÄCKSKYDD-kollisionen (HIGH):** "the exact URL you measured" — den faktiskt mätta URL:en bär
+  bypass-hemligheten i query-form, och stämpeln kunde persistera den i kundrepots EVAL-RESULT.md,
+  i direkt strid med LÄCKSKYDD i samma prompt. Fix: stämpeln är "the clean preview ORIGIN …
+  WITHOUT any bypass query parameters (LÄCKSKYDD gäller även denna stämpel)" — kan per definition
+  aldrig bära hemligheten, och origin/singular-tvetydigheten löstes samtidigt.
+- **Gate-7-felmappningen (MEDIUM):** bypass-textens Gate-7-undantag är skrivet för GATES-kontexten;
+  i eval-prompten är enda "7" rubrikens kriterium 7 (Prestanda) — en agent kunde köra Lighthouse
+  UTAN bypass, få 401 och ta rubrikens statiska fallback medan stämpeln hävdar att sweep.url mättes.
+  Fix: EVAL-NOTE appendad EFTER bypass ("no naked-request assertion here; 401 = bypass-fel i DITT
+  verktyg, aldrig grund för statisk fallback när previewn är nåbar").
+- **SKILL-mallens konkurrens (MEDIUM) — SCOPEBESLUT flaggat för ägargranskning:** SKILL.md:s
+  kanoniska EVAL-RESULT-mall saknade fält för de två nya stämplarna — en malltrogen agent hade
+  tappat dem tyst och beslut 4(i) hade aldrig landat. Mallen + Output-raden UTÖKADE i batchen
+  ("Kriterier bedömda: NN · Mätt preview-origin: …") så formatet har EN hemvist och prompten pekar
+  (en-plats-principen). SKILL.md är INTE §A2 (rubriken är); mallen är FORMAT, inte mått.
+- **"nowhere else" var falskt (MEDIUM):** antalet står OCKSÅ i SKILL-rubriken ("The 11 criteria" +
+  tabellen) och changeloggens "10 criteria" är en greppbar lockelse. Fix: promptfrasen omskriven
+  till företrädesregel ("the rubric's own intro states how many — authoritative over any other
+  number you encounter, including the skill's headings and the rubric changelog"). SKILL-rubrikens
+  andra hemvist LÄMNAD orörd — ankarrisken (vad grep:ar mot rubriktexten?) är outredd; registrerad
+  som kvarvarande andra hemvist som prompten pekar förbi.
+- **Gren 3 oförankrad (MEDIUM):** "find the deployed preview URL" kunde hitta en gammal deploy eller
+  ett repointbart alias — och den nya stämpeln hade då LEGITIMERAT felytan. Fix: grenen kräver den
+  UNIKA deploy-URL:en vars commit-SHA matchar git HEAD; ingen match → synlig degradering i
+  scorecarden ("mätyta obevisad"), aldrig gissning — deployBevis-mönstret.
+- **Gren 2 orenderad (LOW, AG5-klassen):** args.url-grenen deklarerade dev-server-förbudet i
+  kommentaren men renderade det inte i prompten. Fix: samma "measure ONLY this URL …"-suffix som
+  gren 1 och 3 — deklarerad distinktion är nu renderad på alla tre vägar.
+
+**Villkorad not om historiska poäng (ägarbeslut 4ii — villkorad, aldrig mätt faktum):**
+pre-BATCH-007-poäng ur LAUNCH-flödet bär BÅDE mät-URL-osäkerhet (endast launches med fixrundor —
+evalen pekades på ursprungs-URL:en medan fixarna deployats till freshUrl) OCH kriterieosäkerhet
+(alla launches sedan v14 — prompten sade "all 10 criteria" medan rubriken haft elva). **Att sådana
+scorecards existerar är INTE belagt** — noten säger inte att felet inträffat, bara att poäng ur den
+vägen inte kan friskrivas. Verify-suitens frysta eval-baseline (v3.0.0, 95p) är OPÅVERKAD av båda
+fynden: proben kör rubriken via skillen direkt mot den frysta publika previewn, aldrig via
+launch-prompten.
+
+## Öppet ärende (registrerat ur BATCH-007 beslut 3): grindarnas dev-server-fallback
+`site`-strängens b-gren (args.url saknas) instruerar samtliga sju grindagenter att "find the
+preview/dev URL from vercel or start the dev server if needed" — en dev-server saknar
+produktionsheaders, Deployment Protection och produktionsbundlar, så Gate 2/7-klassens mätningar
+sker mot fel artefakt. Pre-existerande, annan klass än evalens (en enskild grindmätning blir fel;
+evalens siffra blir OBRUKBAR för jämförelse). Ägarbeslut 2026-08-06: fixas INTE i BATCH-007 —
+eget ärende, prioriteras separat.
