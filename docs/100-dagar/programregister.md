@@ -899,6 +899,41 @@ Accepterade begränsningar BATCH-006 (vägval, inte glömska):
    deploy ≥ commit exakt; en deploy som skapas inom skevet kan falskt fällas (säkra riktningen,
    aldrig falskt grönt). Identitetsbeviset är immunt mot klassen.
 
+## Ägar-registrering efter BATCH-006 — sju härdningar utanför spec (mönster) + NRT-001 STÄNGD (2026-08-06)
+Ägaren verifierade BATCH-006-diffen oberoende (Linux, node v22.22.2: grind 6/0/0; §A3-raderna
+nonLegalPass/verdiktgrenarna/remainingRaw/`while (round < 3)` byte-identiska — "svepet uppdaterar
+input, inte logik"; validPreviewUrl prövad mot 11 fall, deployBevis mot 5; §A1-raden BESKRIVANDE per
+riktningstestet) och registrerade SJU härdningar som inte stod i specen — **mönster att återanvända:**
+1. **fixLog.push efter efterkontrollen** *(viktigast av de sju)*: en fixLog-rad BETYDER nu "committad
+   runda" per konstruktion. Tidigare bars invarianten implicit av contractStop-vägarna. **Datat bär
+   sin egen betydelse** — samma klass som "struktur före regel".
+2. **Identitet slår tid:** vercel inspect följer alias och en samtidig auto-deploy kan repointa det —
+   tidsbeviset ensamt binder inte URL:en till slutcommiten; deployCommit prövas mot lastHead.
+3. **Ankrad multiline-regex med .pop():** release-prompten citerar själv PREVIEW_URL-strängen — en
+   oankrad first-match kunde fånga instruktionsekot i stället för slutraden.
+4. **validPreviewUrl:** agentreturer är otillförlitlig data — samma hotmodell som badRepoPaths,
+   tillämpad på varje värde som interpoleras i en "Run exactly"-prompt.
+5. **Offsetkravet i ISO-regexen:** offsetlös tid tolkas som värddatorns lokaltid och kunde förskjuta
+   beviset åt båda hållen.
+6. **Recheck-textens ärlighetsfix:** påstod REDEPLOYED även på none-vägen — promptpåståenden ska
+   vara sanna i varje gren de når agenten.
+7. **regressions = [] vid ODÖMBAR:** syntetiska FAIL är inte uppmätta regressioner
+   (backlog-numbers-are-claims).
+
+**Observation (RAPPORTÄRLIGHET, låg prio — åtgärdas EFTER BATCH-007, registrerad så den inte glöms):**
+sweepNote är TOM när `fixLog.length >= 1` men preSweepPass är falskt — en BLOCKED-rapport med
+committade fixrundor säger inget om VARFÖR svepet uteblev. Konsekvent med det accepterade
+kostnadsbeslutet (beslut 2), men rapporten är tyst där den kunde vara ärlig. Föreslagen rad:
+"Final sweep ej kört: grindar röda före svepet (PASS-invariant)."
+
+**NRT-001-STATUS: STÄNGD (2026-08-06, merge `cc7017e`).** Historiskt problem: "Launch kan godkänna
+regression efter fix" (Appendix A; målutfall "Alla gates om mot final SHA/URL; PASS-invariant").
+Stängd **strukturellt** — villkorsformen (svep endast vid pre-svep-PASS) gör uppåt-flipp onåbar —
+och **funktionellt** — svepet ankrar verdiktet i en färsk helmätning av alla sex icke-legal-grindar
+mot en bevisat färsk deploy (identitet före tid), med FAIL-fallback och ODÖMBAR-vägen så att READY
+aldrig kan vila på stale eller omätta gröna värden. Dag 3/10/95-verifieringarna prövar stängningen
+mot skarpa körningar.
+
 ## BATCH-007-eval-url (öppen, ägar-ID) — eval-fasen mäter fel URL efter fixrundor
 **Fyndet (verifierat i FAS A-utredningen för BATCH-006):** eval-fasen kör mot `site` — strängen byggd
 av det URSPRUNGLIGA `args.url` (launch.js, `const site`-raden) — medan fixrundorna deployats till
