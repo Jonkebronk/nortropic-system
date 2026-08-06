@@ -1,11 +1,12 @@
 export const meta = {
   name: 'nortropic-launch',
-  description: 'Pre-launch gate for a Nortropic site: 7 parallel audit lenses, bounded fix-loop (legal always stops for human), Swedish handover doc, launch readiness report',
+  description: 'Pre-launch gate for a Nortropic site: 7 parallel audit lenses, bounded fix-loop (legal always stops for human), final sweep that re-anchors the verdict in a fresh full measurement when fixes were committed (NRT-001 PASS-invariant, BATCH-006), Swedish handover doc, launch readiness report',
   whenToUse: 'Run when a Nortropic client site is believed ready to launch, before /vercel:deploy',
   phases: [
     { title: 'Freshness', detail: 'block launch if the last FULL review predates changes on the main pages' },
     { title: 'Gates', detail: '7 parallel audit lenses' },
     { title: 'Fix loop', detail: 'max 3 rounds via stack-builder; legal never auto-fixed' },
+    { title: 'Final sweep', detail: '≥1 committad fixrunda + pre-svep-PASS → alla 6 icke-legal-grindar körs om EN gång mot bevisat färsk preview; verdiktet ankras här (NRT-001). Obevisbar deploy → ODÖMBART, aldrig tyst grönt' },
     { title: 'Eval', detail: 'non-blocking quality score via nortropic-eval (informs report only)' },
     { title: 'Handover', detail: 'GBP/GSC deliverables + Swedish client handover doc' },
     { title: 'Report', detail: 'launch readiness verdict' },
@@ -178,6 +179,7 @@ if (!fresh || fresh.status !== 'FRESH') {
     remainingFindings: [],
     fixRounds: [],
     contractStop: null,
+    sweep: null,
     handoverWritten: false,
   }
 }
@@ -206,6 +208,8 @@ let round = 0
 let freshUrl = (args && args.url) ? args.url : null   // repointed to each round's redeploy
 const fixLog = []
 let contractStop = null   // BATCH-005: brutet fixkontrakt → rundan blockeras utan commit, loopen avslutas
+let lastHead = null       // BATCH-006: slutcommitens SHA (sätts efter varje godkänd efterkontroll) — svepets ankare
+let lastFreshRound = null // BATCH-006: senaste runda vars release BEVISLIGEN repointade freshUrl (um-match ≠ none)
 // Bemannat: upp till 3 autonoma fixrundor med en människa som övervakar. Obemannat (nortropic-autobygg.js) gör MEDVETET bara EN runda och lämnar sedan över — ingen vaktar där, så det är försiktigare. 1-vs-3 är avsiktligt; harmonisera aldrig. Gränsen 3 är §A-skyddad (docs/07 §A3) — ändras bara av människa.
 while (round < 3) {
   const failing = GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL')
@@ -259,7 +263,6 @@ while (round < 3) {
   const postSet = new Set(postFiles.map(normPath))
   const stageSet = declared.filter(f => postSet.has(f))
   if (!stageSet.length) { log('Fixagenterna ändrade ingenting — inget att committa; kvarvarande fynd behöver människa.'); break }
-  fixLog.push({ round, findings: fixable.length, files: stageSet, byAgent: fixReturns.map(x => ({ agent: x.agent, files: (x.result.files || []).map(normPath) })) })
   // Commit + redeploy BEFORE re-checking so URL-based gates (Lighthouse, curl-headers,
   // end-to-end lead, SSL) audit the FIXED build — not the stale origin/main preview.
   // rorjour: fixes sat uncommitted → the preview served pre-fix values → rounds were wasted
@@ -268,12 +271,18 @@ while (round < 3) {
   // verifierade KÄNDA mängden stageSet (NRT-003) — aldrig git add -A, aldrig git add -u.
   const pathArgs = stageSet.map(f => `"${f}"`).join(' ')
   const release = await agent(
-    `Release step for the Nortropic site in the current working directory — do NOT change any code. (1) Stage EXACTLY this known set and nothing else by running exactly: git --literal-pathspecs add -- ${pathArgs} — then commit ONLY that same set by running exactly: git --literal-pathspecs commit -m "<descriptive message about the round-${round} launch-gate fixes>" -- ${pathArgs} — the pathspec'd commit is deliberate: it keeps any previously staged unrelated content OUT of this commit, and --literal-pathspecs is deliberate: paths like app/[stad]/page.tsx are literal file names, never glob patterns. NEVER stage sweepingly (no "-A", no "-u", no "git add ."), never add any path outside the list. If a git step fails: do NOT improvise and do NOT widen the staging — stop, report the error, and return PREVIEW_URL=none. (2) Redeploy a fresh preview of THIS commit (vercel deploy) and return the new preview URL on the final line as exactly PREVIEW_URL=<url>. If no deploy is possible, run pnpm build to prove the fixed tree compiles and return PREVIEW_URL=none.`,
+    `Release step for the Nortropic site in the current working directory — do NOT change any code. (1) Stage EXACTLY this known set and nothing else by running exactly: git --literal-pathspecs add -- ${pathArgs} — then commit ONLY that same set by running exactly: git --literal-pathspecs commit -m "<descriptive message about the round-${round} launch-gate fixes>" -- ${pathArgs} — the pathspec'd commit is deliberate: it keeps any previously staged unrelated content OUT of this commit, and --literal-pathspecs is deliberate: paths like app/[stad]/page.tsx are literal file names, never glob patterns. NEVER stage sweepingly (no "-A", no "-u", no "git add ."), never add any path outside the list. If a git step fails: do NOT improvise and do NOT widen the staging — stop, report the error, and return PREVIEW_URL=none. (2) Redeploy a fresh preview of THIS commit (vercel deploy) and return the UNIQUE deployment URL that vercel deploy prints (the https://<project>-<hash>-<scope>.vercel.app form — NEVER a project or branch alias, which can be repointed by concurrent deploys) on the final line as exactly PREVIEW_URL=<url>. If no deploy is possible, run pnpm build to prove the fixed tree compiles and return PREVIEW_URL=none.`,
     { label: `release:round${round}`, phase: 'Fix loop', agentType: 'stack-builder' }
   )
   if (!release) { contractStop = { round, rule: 'release', detail: 'release-steget returnerade ingenting — commit-utfallet är odömbart' }; break }
-  const um = typeof release === 'string' ? release.match(/PREVIEW_URL=(\S+)/) : null
-  if (um && um[1] && um[1] !== 'none') freshUrl = um[1]
+  // BATCH-006: förankrad multiline-match, SISTA träffen — release-prompten citerar själv strängen
+  // "PREVIEW_URL=<url>"/"=none" och en oankrad first-match kunde fånga instruktionsekot i stället
+  // för slutraden. URL:en valideras i ren JS (validPreviewUrl, hoistad från BATCH-006-blocket nedan)
+  // innan den godtas — ogiltig form behandlas som none, aldrig interpolering av ovaliderad agentretur.
+  const um = typeof release === 'string' ? [...release.matchAll(/^PREVIEW_URL=(\S+)\s*$/gm)].pop() : null
+  const deployedThisRound = !!(um && um[1] && um[1] !== 'none' && validPreviewUrl(um[1]))
+  if (um && um[1] && um[1] !== 'none' && !deployedThisRound) log(`WARN: release returnerade ogiltig preview-URL — behandlas som PREVIEW_URL=none (ovaliderad agentretur interpoleras aldrig)`)
+  if (deployedThisRound) { freshUrl = um[1]; lastFreshRound = round }
   // BATCH-005: mekanisk EFTERKONTROLL av commit-utfallet — sista ledet vilar aldrig på prosa.
   // Detektion, inte prevention: committen finns när avvikelsen upptäcks, men rundan blockeras
   // FÖRE omkontrollen och människan får revert-underlaget i klartext.
@@ -289,12 +298,145 @@ while (round < 3) {
     contractStop = { round, rule: 'release-efterkontroll', detail: `committad mängd ≠ stagead känd mängd (committat: ${[...committed].join(', ') || 'inget'}; förväntat: ${stageSet.join(', ')}) — committen finns redan; mänsklig granskning/revert krävs före ny körning` }
     break
   }
+  lastHead = commitSnap.head.trim()   // BATCH-006: godkänd efterkontroll → detta är (hittills) slutcommiten
+  // BATCH-006: fixLog pushas FÖRST HÄR, efter godkänd efterkontroll — en fixLog-rad BETYDER därmed
+  // "committad runda" per konstruktion (adversariell granskning: pushen låg tidigare före release-
+  // steget, så en runda vars commit fallerade stod ändå i loggen och invarianten bars implicit av
+  // contractStop-vägarna; nu bär datat sin egen betydelse och fixRounds i rapporten ljuger aldrig).
+  fixLog.push({ round, findings: fixable.length, files: stageSet, byAgent: fixReturns.map(x => ({ agent: x.agent, files: (x.result.files || []).map(normPath) })) })
+  // BATCH-006 (ärlighetsfix, adversariell granskning): recheck-texten påstod "REDEPLOYED" även på
+  // none-vägen — falsk premiss mot en stale preview. Nu villkorad på deployedThisRound, med
+  // supersede-mening så baspromptens inbäddade ursprungs-URL aldrig konkurrerar med den färska.
   const recheck = await parallel(failing.map(g => () =>
-    agent(GATES.find(x => x.key === g.key).prompt + ` This is a RE-CHECK after fixes. The working-tree fixes are now COMMITTED and REDEPLOYED${freshUrl ? ` — run every check against this fresh preview: ${freshUrl}` : ''}. Verify the previously failing checks first; before reporting any issue, confirm it still reproduces on THIS build (not a cached/stale one).` + bypass, { label: `recheck:${g.key}:r${round}`, phase: 'Fix loop', agentType: g.agentType, schema: GATE })
+    agent(GATES.find(x => x.key === g.key).prompt + (deployedThisRound
+      ? ` This is a RE-CHECK after fixes. The fixes are COMMITTED and REDEPLOYED — run every check against this fresh preview: ${freshUrl}. Any preview or dev URL mentioned earlier in this prompt is SUPERSEDED by that URL — never contact it and do not start a dev server.`
+      : ` This is a RE-CHECK after fixes. The fixes are COMMITTED, but this round could NOT be redeployed — any deployed preview is STALE relative to this round's fixes: verify code-level checks against the working tree, and never report a URL-dependent check as PASS on stale grounds.`)
+      + ` Verify the previously failing checks first; before reporting any issue, confirm it still reproduces on THIS build (not a cached/stale one).` + bypass, { label: `recheck:${g.key}:r${round}`, phase: 'Fix loop', agentType: g.agentType, schema: GATE })
   ))
   failing.forEach((g, i) => { if (recheck[i]) gates[g.key] = recheck[i] })
 }
 if (contractStop) log(`FIXKONTRAKT BRUTET (runda ${contractStop.round}, ${contractStop.rule}): ${contractStop.detail} — fixloopen avbröts före omkontrollen; kvarvarande fynd behöver människa.`)
+
+// ═══════════ BATCH-006-full-sweep: PASS-INVARIANTEN (NRT-001) ═══════════
+// Appendix A: "Alla gates om mot final SHA/URL; PASS-invariant" — verdiktets ankare är en FÄRSK
+// helmätning, inte rond-0-resultat som fixrundor kan ha gjort stale (`const failing` omkontrollerar
+// bara tidigare RÖDA grindar — en grön grind kan aldrig bli röd igen inne i loopen; DET är NRT-001).
+// Villkorsformen är STRUKTURELL (ägarbeslut 2026-08-06): svepet körs ENDAST när (a) inget
+// contractStop (en helmätning mot ett träd i kontraktsbrott ankrar ingenting), (b) ≥1 fixrunda
+// COMMITTAD — fixLog pushas först efter godkänd release-efterkontroll, så en rad BETYDER committad
+// runda (round duger inte: den räknar även no-op-rundor där inget ändrades), och
+// (c) alla icke-legal-grindar står PASS FÖRE svepet. (c) gör uppåt-flipp strukturellt onåbar:
+// svepet kan bara BEKRÄFTA eller FÄLLA ett READY, aldrig fria en röd grind — en fjärde omkontroll
+// vore en de facto-erosion av 3-rundorsgränsen (§A3). Struktur före regel: INV-001/INV-006-klassen.
+// Accepterad kostnad (registrerad): en BLOCKED-rapport får ingen färskhetsgaranti för gröna rader —
+// rapporten är redan BLOCKED och läses av en människa.
+
+// Beslut 3 (BATCH-006): ren JS-prövning av deploy-beviset — scouten rapporterar RÅDATA, beslutet
+// fattas här. Odömbart (oparsbart/tomt/UTAN EXPLICIT TIDSZON/deploy äldre än commit) → aldrig tyst
+// grönt. Offsetkravet är bärande (adversariell granskning): offsetlös ISO är giltig ISO men tolkas
+// som VÄRDDATORNS lokaltid av Date.parse — beviset kunde förskjutas ±offset åt BÅDA hållen, inklusive
+// att en stale deploy passerade som färsk. Trim är bärande: %cI slutar med newline → NaN annars.
+function deployBevis(deployedAt, commitTime) {
+  const ISO_MED_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/
+  const ds = String(deployedAt || '').trim()
+  const cs = String(commitTime || '').trim()
+  if (!ISO_MED_OFFSET.test(ds)) return { ok: false, reason: 'deployens skapelsetid saknas, är ofullständig eller saknar explicit tidszon (Z/offset) — lokaltolkad tid är odömbar' }
+  if (!ISO_MED_OFFSET.test(cs)) return { ok: false, reason: 'slutcommitens tid saknas, är ofullständig eller saknar explicit tidszon' }
+  const d = Date.parse(ds)
+  const c = Date.parse(cs)
+  if (!isFinite(d) || !isFinite(c)) return { ok: false, reason: 'tidsstämpel kunde inte tolkas' }
+  if (d < c) return { ok: false, reason: `deployen (${ds}) är ÄLDRE än slutcommiten (${cs}) — previewn serverar inte det slutliga bygget` }
+  return { ok: true }
+}
+
+// BATCH-006: preview-URL:er är AGENTRETURER — opålitlig data (samma hotmodell som badRepoPaths i
+// kärnan: shellaktiva tecken passerar \S+) — och interpoleras i recheck-/svep-/scoutprompter som
+// beordrar "Run exactly". Ren JS-validering INNAN de godtas: https, vercel.app-värd, rot-path,
+// ingen query/hash/auth. Ogiltig form ⇒ behandlas som PREVIEW_URL=none, aldrig interpolering.
+// (Deklarerad här i BATCH-006-blocket; används i fixloopen ovan via function-hoisting.)
+function validPreviewUrl(u) {
+  try {
+    const p = new URL(String(u || ''))
+    return p.protocol === 'https:' && /^[a-z0-9-]+(\.[a-z0-9-]+)*\.vercel\.app$/.test(p.hostname)
+      && p.pathname === '/' && !p.search && !p.hash && p.username === '' && p.password === ''
+  } catch (e) { return false }
+}
+
+const DEPLOYPROOF = {
+  type: 'object',
+  required: ['deployedAt', 'commitTime'],
+  properties: {
+    deployedAt: { type: 'string', description: 'deployens skapelsetid, ISO 8601 MED explicit tidszon (Z eller ±offset); tom sträng om den inte kan fastställas' },
+    commitTime: { type: 'string', description: 'utdata från git show -s --format=%cI <slutcommit>' },
+    deployCommit: { type: 'string', description: 'deployens git-commit-SHA (40 hex) om vercel inspect visar den; tom sträng annars' },
+    note: { type: 'string' },
+  },
+}
+
+const SWEEP_GATES = GATES.filter(g => g.key !== 'legal')   // SAMMA uttryck som failing/nonLegalPass/remaining — legal dras ALDRIG in (§A3-exkluderingen bevaras genom återanvändning, aldrig ny logik)
+const preSweepPass = SWEEP_GATES.every(g => gates[g.key].status === 'PASS')
+let sweep = null   // { verdict: 'GENOMFÖRT' | 'ODÖMBAR', regressions, finalCommit, url, ... } | null (villkoret föll — inget svep)
+if (!contractStop && fixLog.length >= 1 && preSweepPass) {
+  phase('Final sweep')
+  const preSweepStatus = Object.fromEntries(SWEEP_GATES.map(g => [g.key, gates[g.key].status]))
+  // Färsk deploy måste BEVISAS, aldrig antas — en boolean kan säga true medan URL:en serverar
+  // för-fix-bygget. Bevis i tre led: (1) sista committade rundans release repointade freshUrl
+  // (JS-spårat via lastFreshRound), (2) mekanisk scout hämtar deployens skapelsetid + slut-
+  // commitens tid som rådata, (3) deployBevis kräver deploy EFTER commit. Faller något led är
+  // svepet ODÖMBART → FAIL-fallback på alla sex grindar med ärlig orsak — samma form som
+  // contractStop och doctors OGILTIG: odömbart blir aldrig tyst grönt.
+  let bevisFel = null
+  const lastCommittedRound = fixLog[fixLog.length - 1].round
+  if (!freshUrl || lastFreshRound !== lastCommittedRound) {
+    bevisFel = 'fixar committade men aldrig deployade (sista committade rundans release gav ingen färsk preview-URL) — deploya och kör om'
+  } else if (!validHead(lastHead || '')) {
+    bevisFel = 'slutcommitens SHA saknas — deploy-beviset kan inte föras'
+  } else {
+    const proof = await agent(
+      `Mechanical deploy proof in the project root of the Nortropic site in the current working directory. Run exactly: vercel inspect ${freshUrl} — from its output report: (a) the deployment's creation time as ISO 8601 WITH explicit UTC offset or Z in deployedAt (if the tool shows a local time, keep that exact offset; NEVER strip or invent a timezone; if the time cannot be determined, return deployedAt as an empty string and say exactly why in note — never guess), and (b) the deployment's git commit SHA as deployCommit if the output shows one (empty string if not shown — never guess). Also run exactly: git show -s --format=%cI ${lastHead} — return the timestamp as commitTime. Do not filter or judge — report mechanically.`,
+      { label: 'sweep:deploy-bevis', phase: 'Final sweep', schema: DEPLOYPROOF }
+    )
+    // Identitet slår tid (adversariell granskning: vercel inspect följer alias, och en samtidig
+    // auto-deploy kan repointa ett alias — tidsbeviset ensamt binder inte URL:en till slutcommiten):
+    // visar deployen en commit-SHA prövas den mot lastHead i ren JS; annars gäller tidsbeviset.
+    const dc = String((proof && proof.deployCommit) || '').trim()
+    if (validHead(dc)) {
+      if (dc !== lastHead) bevisFel = `deployens commit-SHA (${dc.slice(0, 8)}) ≠ slutcommiten (${lastHead.slice(0, 8)}) — previewn serverar fel bygge`
+    } else {
+      const chk = deployBevis(proof && proof.deployedAt, proof && proof.commitTime)
+      if (!chk.ok) bevisFel = `${chk.reason}${proof && proof.note ? ` (note: ${proof.note})` : ''}`
+    }
+  }
+  if (bevisFel) {
+    log(`FINAL SWEEP ODÖMBART: ${bevisFel} — READY blockeras; odömbart blir aldrig tyst grönt.`)
+    SWEEP_GATES.forEach(g => { gates[g.key] = { status: 'FAIL', findings: [{ severity: 'CRITICAL', title: `final sweep odömbar (${g.key})`, location: 'workflow', why: `PASS-invarianten (NRT-001) kräver färsk helmätning mot BEVISAD deploy: ${bevisFel}`, fix: 'deploya den slutliga committen och kör /nortropic-launch igen', category: g.key }] } })
+    sweep = { verdict: 'ODÖMBAR', reason: bevisFel, finalCommit: lastHead, url: freshUrl }
+  } else {
+    log(`Final sweep: alla sex icke-legal-grindar körs om mot den slutliga previewn (${lastHead.slice(0, 12)}) — verdiktet ankras i denna mätning`)
+    const sweepResults = await parallel(SWEEP_GATES.map(g => () =>
+      agent(g.prompt + ` This is the FINAL SWEEP after the fix loop — the launch verdict is anchored in THIS measurement (NRT-001 PASS-invariant). All fixes are committed (final commit ${lastHead.slice(0, 12)}) and THIS preview URL is mechanically verified fresh: ${freshUrl}. Any preview or dev URL mentioned ANYWHERE earlier in this prompt is SUPERSEDED by that URL — never contact it and do not start a dev server; EVERY URL-based check (Lighthouse, curl, crawl, form submits, the naked-request assertion) runs against exactly that preview. Run your FULL gate from scratch; assume NOTHING from earlier results in this run.` + bypass,
+        { label: `sweep:${g.key}`, phase: 'Final sweep', agentType: g.agentType, schema: GATE })
+    ))
+    // ERSÄTTNINGSSEMANTIK (ägarbeslut): svepet uppdaterar kartINNEHÅLLET — verdiktraderna nedan är
+    // orörda. Död svepagent → FAIL-fallback (rad-200-precedentet): en odömbar svepgrind får ALDRIG
+    // tyst behålla sitt gamla gröna värde.
+    SWEEP_GATES.forEach((g, i) => {
+      gates[g.key] = sweepResults[i] || { status: 'FAIL', findings: [{ severity: 'CRITICAL', title: `${g.key} final-sweep did not complete`, location: 'workflow', why: 'svepagenten dog — en odömbar svepgrind får aldrig tyst behålla sitt gamla gröna värde', fix: 'rerun /nortropic-launch', category: g.key }] }
+    })
+    sweep = { verdict: 'GENOMFÖRT', finalCommit: lastHead, url: freshUrl }
+  }
+  // NRT-001-fallet självt — grön i tidigare mätning, röd i svepet — ska vara OMÖJLIGT att missa.
+  // Endast för GENOMFÖRT: ODÖMBAR-fallbackens FAIL är SYNTETISKA, inte uppmätta regressioner
+  // (backlog-numbers-are-claims-klassen — omätta tal rapporteras aldrig som mätta).
+  sweep.regressions = sweep.verdict === 'GENOMFÖRT'
+    ? SWEEP_GATES.filter(g => preSweepStatus[g.key] === 'PASS' && gates[g.key].status === 'FAIL').map(g => g.key)
+    : []
+  if (sweep.verdict === 'GENOMFÖRT' && sweep.regressions.length) {
+    sweep.changedFiles = [...new Set(fixLog.flatMap(r => r.files))]
+    log(`SVEPET FÄLLDE tidigare grön(a) grind(ar): ${sweep.regressions.join(', ')} — ändrade filer sedan de gröna mätningarna (fixkontraktets deklarationer): ${sweep.changedFiles.join(', ')}`)
+  }
+}
+// ═══════════ SLUT BATCH-006-full-sweep ═══════════
 
 const nonLegalPass = GATES.filter(g => g.key !== 'legal').every(g => gates[g.key].status === 'PASS')
 
@@ -331,9 +473,18 @@ const rows = GATES.map(g => {
 const evalNote = evalResult
   ? ` | Kvalitetseval: ${evalResult.total}/100${evalResult.faktatrohet === 'FAIL' ? ' — FAKTATROHET FAIL (granska innan lansering)' : ` (${evalResult.band})`}`
   : ''
+// BATCH-006: informationsnot i verdiktsträngen (samma appendform som evalNote — grenlogiken orörd).
+// NRT-001-fallet (svepet fällde tidigare grön grind) ska vara omöjligt att missa i rapporten.
+const sweepNote = sweep
+  ? (sweep.verdict === 'ODÖMBAR'
+    ? ` | FINAL SWEEP ODÖMBART: ${sweep.reason}`
+    : sweep.regressions.length
+      ? ` | FINAL SWEEP FÄLLDE tidigare grön grind: ${sweep.regressions.join(', ')} — ändrade filer sedan de gröna mätningarna: ${(sweep.changedFiles || []).join(', ')}`
+      : ` | Final sweep GENOMFÖRT: verdiktet ankrat i färsk helmätning av ${String(sweep.finalCommit).slice(0, 8)} mot ${sweep.url}`)
+  : (fixLog.length ? '' : ' | Final sweep ej tillämpligt: inga fixrundor committade — verdiktet vilar på rond 0:s sammanhängande mätning')
 const verdict = (nonLegalPass
   ? (legalFindings.length ? 'BLOCKED — technical gates pass, LEGAL FINDINGS REQUIRE HUMAN JUDGMENT before launch' : 'READY — pending human legal sign-off, then run /vercel:deploy')
-  : `BLOCKED — gates still failing after ${round} fix round(s); remaining findings need human attention`) + evalNote
+  : `BLOCKED — gates still failing after ${round} fix round(s); remaining findings need human attention`) + evalNote + sweepNote
 
 // v5: merge identical findings flagged by more than one gate — count once, record which gates flagged
 const remainingRaw = GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL').flatMap(g => (gates[g.key].findings || []).map(f => ({ ...f, gate: g.key })))
@@ -354,5 +505,6 @@ return {
   remainingFindings,
   fixRounds: fixLog,
   contractStop,
+  sweep,
   handoverWritten: Boolean(handover),
 }

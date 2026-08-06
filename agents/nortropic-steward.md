@@ -42,7 +42,8 @@ You are the steward of the Nortropic system — the meta-agent that keeps the OT
 ~/.claude/workflows/       nortropic-review.js (3 reviewers → adversarial verify → report; --diff = diff-skopad
                            mellangranskning, skriver REVIEW-REPORT.md med commit-meta; --no-verify → *-CALIBRATION.md)
                            nortropic-launch.js (freshness-grind: full review krävs, färskare än src/content →
-                           7 gates incl. security → fix-loop ≤3 → legal STOPS → handover)
+                           7 gates incl. security → fix-loop ≤3 → final sweep (PASS-ankare NRT-001; endast
+                           committade fixar + pre-svep-PASS; obevisbar deploy = ODÖMBAR) → legal STOPS → handover)
                            nortropic-verify-suite.js (v15, trappans regressionsnät: doctor → plan-torrtest +
                            eval-stabilitet + template-spotcheck parallellt mot tests/fixtures/ →
                            VERIFY-SUITE-RESULT.md i ~/Workflow; --cut-baseline skriver kandidater, aldrig fixtures)

@@ -812,3 +812,100 @@ ingenting i vad systemet får göra. Verdikt: BESKRIVANDE. "deploy-oförmöget b
 HÖGRISK-märkningen behölls med ägarens formulering: **den följer YTAN, inte bedömningen.** Ägaren
 verifierade även oberoende (Linux, node v22.22.2): grind 6/0/0 och INV-006-hashen `2aaac302…a5ff2994`
 reproducerad byte-identiskt i båda filerna (75 rader var).
+
+## BATCH-006-full-sweep — launch.js (2026-08-06, ägar-lett, HÖGRISK: §A3-fil + §A1-rad i SYSTEM MAP)
+Base-SHA `9d10d40`. Stänger NRT-001 ("Launch kan godkänna regression efter fix" — Appendix A:
+"Alla gates om mot final SHA/URL; PASS-invariant"). FAS A-utredning read-only → fyra ägarbeslut:
+1. **contractStop → SKIP:** en helmätning mot ett träd i kontraktsbrott ankrar ingenting; verdiktet
+   är BLOCKED ändå. Redundant med beslut 2 — dubbelt skäl, registrerat båda.
+2. **SVEP ENDAST VID PRE-SVEP-PASS** (inte "kör + aldrig-uppåt-spärr"): svepet är en PASS-INVARIANT —
+   det finns för att verifiera att ett READY är SANT, inte för att ge en fjärde chans åt något som
+   redan är BLOCKED. Villkorsformen gör uppåt-flipp (röd→grön via svep = de facto-erosion av
+   3-rundorsgränsen) STRUKTURELLT ONÅBAR i stället för regelspärrad — struktur före regel, samma
+   princip som INV-001:s kedjade vakt och INV-006:s par-hash. **Accepterad kostnad (ägar-
+   registrering):** en människa som läser en BLOCKED-rapport får ingen färskhetsgaranti för "gröna"
+   rader — rapporten är redan BLOCKED och läses av en människa.
+3. **none-vägen → READY blockeras mekaniskt, deploy måste BEVISAS:** en boolean räcker inte (kan
+   säga true medan URL:en serverar för-fix-bygget). Bevis i tre led: (1) JS-spårat att sista
+   COMMITTADE rundans release repointade freshUrl (`lastFreshRound === fixLog[sista].round`),
+   (2) mekanisk scout hämtar deployens skapelsetid (vercel inspect) + slutcommitens tid
+   (git show -s --format=%cI) som RÅDATA, (3) ren JS-prövning `deployBevis` kräver deploy EFTER
+   commit. Faller något led → svepet ODÖMBART → FAIL-fallback på alla sex grindarna med ärlig orsak
+   ("fixar committade men aldrig deployade — deploya och kör om") — samma form som contractStop och
+   doctors OGILTIG: odömbart blir aldrig tyst grönt.
+4. **Eval-URL-fyndet → EGEN BATCH (BATCH-007-eval-url, registrerad nedan):** två ändringar i samma
+   villkorskedja i samma batch är svårare att ägargranska, inte lättare.
+
+**Mekaniken:** villkor `!contractStop && fixLog.length >= 1 && preSweepPass` — fixLog (inte round)
+eftersom round även räknar no-op-rundor där inget ändrades; preSweepPass beräknas med samma
+filteruttryck som failing/nonLegalPass/remaining (`GATES.filter(g => g.key !== 'legal')` — legal dras
+ALDRIG in, §A3-exkluderingen bevaras genom ORDAGRANN återanvändning, aldrig ny logik). ERSÄTTNINGS-
+semantik: svepets sex resultat ersätter kartinnehållet FÖRE nonLegalPass-raden — verdiktraderna
+byte-identiska (sweepNote appendas per evalNote-prejudikatet v5, grenlogiken orörd). Död svepagent →
+FAIL-fallback per rad-200-precedentet — en odömbar svepgrind får ALDRIG tyst behålla sitt gamla gröna
+värde. `sweep.regressions` (statussnapshot före/efter) + explicit log- och verdiktsats gör NRT-001-
+fallet (grön i rond 0 → röd i svepet) omöjligt att missa; fixkontraktets per-runda-filmängder
+(`fixLog[].files`, BATCH-005-utdelningen) visar VAD som ändrats sedan de gröna mätningarna. Två
+loggdatalyft i loopen utan logik: `lastHead` (efter godkänd efterkontroll) + `lastFreshRound`.
+
+**§A3-genomgång:** GATE-schemat orört (svepet återanvänder det); `nonLegalPass`-raden, verdiktgrenarna,
+`while (round < 3)`, `const failing`, freshness-blocket, legal-filtren — byte-identiska (sånär som på
+`+ sweepNote`-appenden i verdiktsträngen, evalNote-klassen, och `sweep: null` i freshness-returen).
+Kravet HÖJS: ett READY kräver nu färsk, bevisat deployad helmätning. Ingen väg gör en körning grönare
+än före batchen (villkorsformen + FAIL-fallbacks). INV-006-kärnan ORÖRD (hash `2aaac302…` oförändrad).
+
+**Adversariell trippellins BATCH-006 (prompttext/mekanik/§A3, tre oberoende skeptiker, 2026-08-06) —
+7 defektklasser i första utkastet, empiriskt belagda (Node 22 + Vercel CLI 55), alla mekaniskt åtgärdade:**
+- **Två konkurrerande URL:er i sveppromten (HIGH, 2 linser):** baspromptens inbäddade `${site}` (rond-
+  0-URL) mot appendens freshUrl — den verdiktankrande mätningen kunde tyst köras mot för-fix-deployen
+  och beviskedjan bevisar URL:ens färskhet, aldrig att agenterna MÄTTE den. Fix: SUPERSEDE-mening i
+  svep- OCH recheck-prompterna ("varje URL tidigare i prompten är ersatt — kontakta den aldrig, starta
+  aldrig dev-server; VARJE URL-baserad kontroll körs mot exakt denna preview").
+- **Tid utan identitet i deploy-beviset (MEDIUM):** vercel inspect följer ALIAS, och en samtidig
+  auto-deploy (t.ex. git-integrationens, som saknar de lokalt committade fixarna — release pushar
+  aldrig) kan repointa aliaset → färsk-men-fel deployment passerade tidsbeviset. Fix: IDENTITET SLÅR
+  TID — scouten rapporterar deployens commit-SHA när vercel inspect visar den (deployCommit i
+  schemat); JS kräver = lastHead, annars ODÖMBART; tidsbeviset är fallback när metadata saknas.
+  Release-prompten kräver dessutom den UNIKA deploy-URL:en, aldrig alias.
+- **Offset-hålet (MEDIUM, 2 linser):** offsetlös ISO tolkas som VÄRDDATORNS lokaltid av Date.parse —
+  beviset kunde förskjutas ±offset åt BÅDA hållen, inklusive att en stale deploy passerade som färsk.
+  Fix: deployBevis kräver fullständig datetime MED explicit Z/offset (regex), annars ODÖMBART.
+- **Trim-hålet (HIGH mekanik/LOW prosa):** `%cI` slutar med newline; "verbatim" → Date.parse NaN →
+  deterministiskt falskt ODÖMBART på grön körning. Fix: trim i deployBevis (samma disciplin som
+  HEAD-hanteringen).
+- **Ovaliderad freshUrl i "Run exactly"-prompter (MEDIUM, 2 linser):** `(\S+)` släpper `;`/`$`/
+  backtick — samma hotmodell som kärnans badRepoPaths, med direktare exekveringskanal. Fix:
+  `validPreviewUrl` (ren JS: https + vercel.app-värd + rot-path + ingen query/hash/auth; isolerat
+  testad 10/10 båda riktningar) — ogiltig form behandlas som PREVIEW_URL=none, aldrig interpolering.
+  Dessutom förankrad SISTA-raden-match (`^PREVIEW_URL=(\S+)\s*$` multiline, .pop()) — release-
+  prompten citerar själv strängen och first-match kunde fånga instruktionsekot.
+- **fixLog betydde "nådde staging", inte "committad" (LOW, 2 linser):** pushen låg före release-
+  steget; invarianten bars implicit av contractStop. Fix: fixLog.push flyttad till EFTER godkänd
+  release-efterkontroll — en rad BETYDER nu committad runda per konstruktion, och rapportens
+  fixRounds kan aldrig innehålla ocommittade rundor.
+- **ODÖMBAR-grenen rapporterade sex "regressioner" som aldrig mätts (LOW, 2 linser)** (backlog-
+  numbers-are-claims-klassen) **+ recheck-textens falska "REDEPLOYED" på none-vägen (LOW):** Fix:
+  regressions beräknas endast för GENOMFÖRT; recheck-augmentationen villkorad på deployedThisRound
+  med ärlig stale-varning när rundan inte kunde deployas.
+
+Accepterade begränsningar BATCH-006 (vägval, inte glömska):
+1. **Identitetsbeviset gäller när vercel inspect visar deployens commit-SHA** — CLI-deploys utan
+   git-metadata faller tillbaka på tidsbeviset + unik-URL-kravet i release-prompten + validPreviewUrl.
+   Alias kan inte robust regex-detekteras (alias- och unika URL:er delar form) — därför SHA-företräde
+   när det finns, prosakrav + tid annars. Omprövas om ett falskt ankare någonsin observeras skarpt.
+2. **BLOCKED-rapporter får ingen färskhetsgaranti för gröna rader** (ägarbeslut 2 — svepet är en
+   PASS-invariant; rapporten är redan BLOCKED och läses av en människa).
+3. **Klockskev mellan git-klockan och Vercels klocka saknar tolerans** — tidsbeviset kräver
+   deploy ≥ commit exakt; en deploy som skapas inom skevet kan falskt fällas (säkra riktningen,
+   aldrig falskt grönt). Identitetsbeviset är immunt mot klassen.
+
+## BATCH-007-eval-url (öppen, ägar-ID) — eval-fasen mäter fel URL efter fixrundor
+**Fyndet (verifierat i FAS A-utredningen för BATCH-006):** eval-fasen kör mot `site` — strängen byggd
+av det URSPRUNGLIGA `args.url` (launch.js, `const site`-raden) — medan fixrundorna deployats till
+`freshUrl`. Varje launch med fixrundor scorar alltså det för-fixade bygget; poängen skrivs till
+EVAL-RESULT.md och matar retrons kundjämförelse. NRT-002-klassen inne i launch. Blir MER synlig efter
+BATCH-006: svepet ankrar verdiktet färskt medan evalen förblir gammal (eval körs vid nonLegalPass —
+exakt när svepet körts). **Inte en en-radsfix:** rör även site-strängens fallback-formulering ("find
+the preview/dev URL…"), och två ändringar i samma villkorskedja som svepet ägargranskas sämre i samma
+batch (ägarbeslut 4, 2026-08-06). Eval-RUBRIKEN är §A2 och rörs inte — endast URL-pekaren i prompten.
+Körs direkt efter BATCH-006:s merge.
