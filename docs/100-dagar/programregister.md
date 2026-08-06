@@ -1015,6 +1015,23 @@ vägen inte kan friskrivas. Verify-suitens frysta eval-baseline (v3.0.0, 95p) ä
 fynden: proben kör rubriken via skillen direkt mot den frysta publika previewn, aldrig via
 launch-prompten.
 
+## Ägar-registrering efter BATCH-007 — tre saker starkare än spec (2026-08-06, efter oberoende verifiering + merge-go)
+Ägaren verifierade oberoende (nonLegalPass: enda diffträffen i KOMMENTAR, koden byte-identisk;
++bypass på eval-anropet; noll hårdkodade kriterieantal i SKILL-diffen — NN-platshållare, noll
+förekomster av 10/11/elva/tio; eval-rubric.md ej i diffen, §A2 orörd; grind 6/0/0) och registrerade
+tre saker som blev STARKARE än specen:
+1. **Tredje grenen.** Beslutet var sweep.url eller site; implementationen delade site-fallet i två:
+   med args.url → "measure ONLY this URL"; utan args.url → krav att previewens commit-SHA matchar
+   git HEAD och ALDRIG ett projekt-/branch-alias. Stänger dev-server-hålet i den gren där det
+   faktiskt var öppet, med samma bevisform som svepets identitetskontroll (härdning 2 ur BATCH-006).
+   **Mönstret återanvänt, inte återuppfunnet.**
+2. **"utan bypass-query" i stämpelfältet** *(viktigast av de tre)*. Mät-URL:en skrivs till en fil i
+   KUNDREPOT — hade den burit bypass-hemligheten i query-form hade vi läckt den till disk, exakt
+   NRT-013, i en fil vi själva skapar. Fältet förbjuder det uttryckligen.
+3. **"mätyta obevisad: <skäl>" som alternativvärde.** Fältet kan inte fyllas i tyst med något
+   ospecificerat — samma form som doctors OGILTIG och contractStop. **Odömbart blir aldrig tyst
+   grönt, nu även i en artefakt.**
+
 ## Öppet ärende (registrerat ur BATCH-007 beslut 3): grindarnas dev-server-fallback
 `site`-strängens b-gren (args.url saknas) instruerar samtliga sju grindagenter att "find the
 preview/dev URL from vercel or start the dev server if needed" — en dev-server saknar
