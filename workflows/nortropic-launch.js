@@ -61,14 +61,27 @@ const EVAL = {
 // (--literal-pathspecs — [slug]-routes är literala filnamn, inte mönster), committen är pathspec:ad
 // (för-stagat främmande innehåll åker aldrig med) och commit-UTFALLET efterkontrolleras mekaniskt
 // mot den stageade mängden — sista ledet vilar inte på prosa (adversariell granskning 2026-08-06).
+// Kärnan nedan är delad med nortropic-autobygg.js (DEL 2) — DSL-filer kan inte importera varandra,
+// så den är MEDVETET duplicerad och hålls byte-identisk; INV-006 hashar båda blocken.
+
+// ─────────── FIXKONTRAKT-KÄRNA (BATCH-005) — BYTE-IDENTISK i nortropic-autobygg.js och nortropic-launch.js; INV-006 hashar båda blocken och flaggar avvikelse ───────────
 
 const FILELIST = {
   type: 'object',
   required: ['files'],
   properties: {
     files: { type: 'array', items: { type: 'string' }, description: 'repo-relativa sökvägar' },
+    head: { type: 'string', description: 'full git HEAD-hash (40 hex) när prompten begär den' },
     note: { type: 'string' },
   },
+}
+
+// HEAD-spårningen är kontraktets ankare mot två felmoder som ligger UTANFÖR porcelain-deltat:
+// en agent som committar SJÄLV (HEAD flyttar under fasen → trädet ser rent ut och deltat blir
+// blint) och ett commit-steg som aldrig committade (HEAD står stilla → efterkontrollen jämför
+// mot FEL commit). Adversariell granskning DEL 2, 2026-08-06.
+function validHead(h) {
+  return /^[0-9a-f]{40}$/.test(String(h || '').trim())
 }
 
 // Normalisering före mängdjämförelse: porcelain ger alltid framåtslash; en agent på Windows kan
@@ -80,7 +93,7 @@ function normPath(p) {
 
 // Felmod 3: fil utanför byggkatalogen. Endast repo-relativa sökvägar — absolut sökväg (POSIX eller
 // enhetsbokstav), '..'-segment, citattecken/radbrytning eller tom sträng avvisas; likaså $ och
-// backtick (shell-aktiva ÄVEN inom dubbelcitat — deklarationen interpoleras i release-kommandot,
+// backtick (shell-aktiva ÄVEN inom dubbelcitat — deklarationen interpoleras i stagingkommandot,
 // och agentreturer är opålitlig data). Legitima Next.js-sökvägar (app/[stad]/, app/(grupp)/, @modal)
 // bär inget av tecknen. Deterministiskt, aldrig prosa.
 function badRepoPaths(files) {
@@ -110,18 +123,22 @@ function fixDelta(preFiles, postFiles, declaredFiles) {
 }
 
 // Z1-arbetsloggen (AGENT-LOG.md) är undantagen kontraktet: agentdefinitionerna beordrar friktions-
-// loggning MITT i arbetet (stack-builder/seo-optimizer/content-designer Z1-regeln), och gates-fasen
-// kan redan ha lämnat ett ocommittat block — utan namngivet undantag fäller systemets EGEN logg-
-// disciplin rundan som falsk felmod 1/2b. Loggen commitas aldrig av release-steget (efterkontrollen
-// fäller en release som ändå committar den); dess hemvist avgörs utanför launch.
+// loggning MITT i arbetet (stack-builder/seo-optimizer/content-designer Z1-regeln), och tidigare
+// faser kan redan ha lämnat ett ocommittat block — utan namngivet undantag fäller systemets EGEN
+// loggdisciplin rundan som falsk felmod 1/2b. Loggen commitas aldrig av kontraktets commit-steg
+// (efterkontrollen fäller en commit som ändå innehåller den); dess hemvist avgörs utanför workflowet.
 const CONTRACT_EXEMPT = f => normPath(f) === 'AGENT-LOG.md'
 
 // -uall är bärande: utan den listar porcelain en NY katalog som "dir/" i stället för filerna i den,
 // och en ärligt deklarerad ny fil skulle falskblockeras som undeclared-mismatch. quotepath=off är
 // lika bärande: med gits default oktalescapas åäö-sökvägar ('"tj\303\244nster.ts"') och kan då
 // aldrig matcha fixarens deklarerade UTF-8-form → deterministisk falsk felmod-1 i en svensk pipeline.
-const porcelainPrompt = when =>
-  `Mechanical working-tree snapshot (${when}) in the project root of the Nortropic site in the current working directory. Run exactly: git -c core.quotepath=off status --porcelain -uall. Return every repo-relative path it lists (modified, staged, deleted and untracked; for a rename list BOTH the old and the new path). Return BARE paths only: strip the two-character status prefix and the space after it, and strip any surrounding double quotes around paths that git still quotes. Do not filter or judge the list — report it mechanically. A clean tree returns files: [].`
+// OBS (par-regeln): commit-stegens och commit-inspektionens promptar är FLÖDESSPECIFIKA och ligger
+// UTANFÖR denna hashade kärna — INV-006 vaktar dem INTE; de ändras alltid i PAR i båda filerna.
+const porcelainPrompt = (when, where) =>
+  `Mechanical working-tree snapshot (${when}) in the project root of ${where}. Run exactly: git -c core.quotepath=off status --porcelain -uall. Return every repo-relative path it lists (modified, staged, deleted and untracked; for a rename list BOTH the old and the new path). Return BARE paths only: strip the two-character status prefix and the space after it, and strip any surrounding double quotes around paths that git still quotes. Also run exactly: git rev-parse HEAD — return the full 40-character hash as head. Do not filter or judge — report mechanically. A clean tree returns files: []. If a git command fails or you are not in a git project root, do NOT guess and do NOT report a clean tree — put exactly what failed in note.`
+
+// ─────────── SLUT FIXKONTRAKT-KÄRNA (BATCH-005) ───────────
 
 const site = (args && args.url) ? `the Nortropic site in the current working directory (preview URL: ${args.url})` : 'the Nortropic site in the current working directory (find the preview/dev URL from vercel or start the dev server if needed)'
 const structured = 'Return PASS only if every check passes. Every finding needs severity, exact location, why it matters, concrete fix, and category.'
@@ -198,8 +215,9 @@ while (round < 3) {
   if (!fixable.length) break
   log(`Fix round ${round}/3: ${fixable.length} findings across ${failing.map(g => g.key).join(', ')}`)
   // BATCH-005: snapshot FÖRE rundan — utan den är deltat odömbart → blockera innan fixarbete slösas.
-  const preSnap = await agent(porcelainPrompt(`before fix round ${round}`), { label: `snapshot:pre:r${round}`, phase: 'Fix loop', schema: FILELIST })
+  const preSnap = await agent(porcelainPrompt(`before fix round ${round}`, 'the Nortropic site in the current working directory'), { label: `snapshot:pre:r${round}`, phase: 'Fix loop', schema: FILELIST })
   if (!preSnap) { contractStop = { round, rule: 'snapshot', detail: 'före-snapshoten kunde inte tas — deltat är odömbart' }; break }
+  if (!validHead(preSnap.head)) { contractStop = { round, rule: 'snapshot', detail: `före-snapshoten saknar giltig HEAD-hash — odömbart${preSnap.note ? ` (note: ${preSnap.note})` : ''}` }; break }
   // D1: route by category — seo findings to seo-optimizer (it can Edit meta/schema), the rest to stack-builder.
   // Sequential (not parallel) so two fixers never write the repo at once.
   const seoFixable = fixable.filter(f => f.category === 'seo')
@@ -225,10 +243,13 @@ while (round < 3) {
   const declared = [...new Set(fixReturns.flatMap(x => (x.result.files || []).map(normPath)))].filter(f => !CONTRACT_EXEMPT(f))
   const bad = badRepoPaths(declared)
   if (bad.length) { contractStop = { round, rule: 'felmod-3', detail: `sökväg utanför byggkatalogen/ogiltig: ${bad.join(', ')}` }; break }
-  const postSnap = await agent(porcelainPrompt(`after fix round ${round}`), { label: `snapshot:post:r${round}`, phase: 'Fix loop', schema: FILELIST })
+  const postSnap = await agent(porcelainPrompt(`after fix round ${round}`, 'the Nortropic site in the current working directory'), { label: `snapshot:post:r${round}`, phase: 'Fix loop', schema: FILELIST })
   if (!postSnap) { contractStop = { round, rule: 'snapshot', detail: 'efter-snapshoten kunde inte tas — deltat är odömbart' }; break }
+  if (!validHead(postSnap.head)) { contractStop = { round, rule: 'snapshot', detail: `efter-snapshoten saknar giltig HEAD-hash — odömbart${postSnap.note ? ` (note: ${postSnap.note})` : ''}` }; break }
+  if (preSnap.head.trim() !== postSnap.head.trim()) { contractStop = { round, rule: 'head-flytt', detail: `HEAD flyttades under fixrundan (${preSnap.head.trim().slice(0, 8)} → ${postSnap.head.trim().slice(0, 8)}) — en agent committade själv; endast release-steget får committa` }; break }
   const preFiles = (preSnap.files || []).filter(f => !CONTRACT_EXEMPT(f))
   const postFiles = (postSnap.files || []).filter(f => !CONTRACT_EXEMPT(f))
+  if (declared.length && !postFiles.length) { contractStop = { round, rule: 'snapshot', detail: 'deklarationen är icke-tom men efter-snapshoten tom — motsägelse, odömbart (aldrig tyst överhoppad commit)' }; break }
   const delta = fixDelta(preFiles, postFiles, declared)
   if (delta.foreign.length) { contractStop = { round, rule: 'felmod-2b', detail: `deklarerade filer var redan smutsiga FÖRE rundan (commit skulle smuggla in främmande ändringar): ${delta.foreign.join(', ')}` }; break }
   if (delta.undeclared.length) { contractStop = { round, rule: 'felmod-1', detail: `ändrade men EJ deklarerade filer: ${delta.undeclared.join(', ')} — partiell commit återinför rorjour-buggen för exakt dem` }; break }
@@ -257,10 +278,12 @@ while (round < 3) {
   // Detektion, inte prevention: committen finns när avvikelsen upptäcks, men rundan blockeras
   // FÖRE omkontrollen och människan får revert-underlaget i klartext.
   const commitSnap = await agent(
-    `Mechanical commit inspection in the project root of the Nortropic site in the current working directory. Run exactly: git -c core.quotepath=off show --name-only --format= HEAD. Return every path listed as BARE repo-relative paths (strip any surrounding double quotes). Do not filter or judge — report the list mechanically. If the command fails, return files: [] and say why in note.`,
+    `Mechanical commit inspection in the project root of the Nortropic site in the current working directory. Run exactly: git -c core.quotepath=off -c diff.renames=false show --name-only --format= HEAD — diff.renames=false is deliberate: a rename must list BOTH paths, matching the staged set. Return every path listed as BARE repo-relative paths (strip any surrounding double quotes). Also run exactly: git rev-parse HEAD — return the full 40-character hash as head. Do not filter or judge — report mechanically. If a command fails, return files: [] and say exactly why in note.`,
     { label: `commitset:r${round}`, phase: 'Fix loop', schema: FILELIST }
   )
   if (!commitSnap) { contractStop = { round, rule: 'release-efterkontroll', detail: 'commit-inspektionen kunde inte tas — utfallet är odömbart' }; break }
+  if (!validHead(commitSnap.head)) { contractStop = { round, rule: 'release-efterkontroll', detail: `commit-inspektionen saknar giltig HEAD-hash — odömbart${commitSnap.note ? ` (note: ${commitSnap.note})` : ''}` }; break }
+  if (commitSnap.head.trim() === postSnap.head.trim()) { contractStop = { round, rule: 'release-efterkontroll', detail: 'ny commit saknas — HEAD står kvar; release-stegets commit fallerade (ingenting att reverta, fixarna står ocommittade)' }; break }
   const committed = new Set((commitSnap.files || []).map(normPath))
   if (committed.size !== stageSet.length || !stageSet.every(f => committed.has(f))) {
     contractStop = { round, rule: 'release-efterkontroll', detail: `committad mängd ≠ stagead känd mängd (committat: ${[...committed].join(', ') || 'inget'}; förväntat: ${stageSet.join(', ')}) — committen finns redan; mänsklig granskning/revert krävs före ny körning` }

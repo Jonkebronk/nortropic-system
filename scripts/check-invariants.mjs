@@ -10,7 +10,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
-const CHECKS = ['INV-001', 'INV-002', 'INV-003', 'INV-004', 'INV-005'];
+const CHECKS = ['INV-001', 'INV-002', 'INV-003', 'INV-004', 'INV-005', 'INV-006'];
 const violations = [];               // { id, line }
 const invalid = new Set();           // checks som inte kunde bedomas -> FAIL, aldrig PASS
 function flag(id, file, line, reason) { violations.push({ id, line: `${id} ${file}:${line} ${reason}` }); }
@@ -38,10 +38,11 @@ const trackedUnder = (...paths) => execFileSync('git', ['ls-files', '--', ...pat
 // inte bara olamplig (aven en agent som kor raden kan inte na git add -A forbi ett secret). Kravet ar SUBSTANS,
 // inte ett ord: en kommentar eller ett echo som namner "SECRET-VAKT" bryter prefixet (raden borjar da inte med
 // vakten) -> flaggas anda. `startsWith` pa den exakta prefixen ar substanskrav + kedjningskrav i ett.
-// Pipeline-.js-steg (autobygg:203, launch:149) har git add -A inuti en strang som inte borjar med prefixet ->
-// forblir flaggade (BATCH-005-fixkontrakt; .js saknar dessutom ```-block, sa undantagsvagen ar strukturellt
-// otillganglig for dem — de SKA losas med kand fil-mangd, inte med en vakt). `git add -u` far ALDRIG anvandas
-// (missar nya filer -> aterinfor rorjour-buggen).
+// HISTORIK: pipeline-.js-stegens git add -A (autobygg:203, launch:149) hölls RÖDA tills BATCH-005-
+// fixkontraktet ersatte dem (DEL 1 launch 2026-08-06, DEL 2 autobygg samma dag) — .js-filer LÖSES med
+// kand fil-mangd (deklaration → delta-verifiering → pathspec:ad commit), ALDRIG med vakten (saknar
+// ```-block; undantagsvagen ar strukturellt otillganglig). En gron INV-001 ar alltsa det FORVANTADE
+// tillstandet efter BATCH-005. `git add -u` far ALDRIG anvandas (missar nya filer -> rorjour-buggen).
 const VAKT001_CORE = "! git status --porcelain | grep -E '\\.env|\\.vercel|node_modules' | grep -vqE '\\.example' && git add -A";
 try {
   const tracked = trackedUnder('workflows', 'skills');
@@ -161,6 +162,34 @@ try {
       `doctor-checkantal: verify-suite=${h.n} != steward=${stN} (NRT-009)`);
   }
 } catch { invalid.add('INV-005'); }
+
+// ---- INV-006 (BATCH-005): FIXKONTRAKT-KARNAN byte-identisk i autobygg + launch ----
+// Karnan (FILELIST + normPath/badRepoPaths/fixDelta + CONTRACT_EXEMPT + porcelainPrompt) ar
+// MEDVETET duplicerad — workflow-DSL-filer kan inte importera varandra — och duplicering utan
+// driftvakt ar exakt den drift som vantar pa att handa (agarbeslut 2026-08-06: GATE-schemat drev
+// redan isar mellan filerna utan att nagon grind sag det). Samma form som INV-004: LF-normaliserad
+// SHA-256 over blocket mellan de exakta markorraderna (inkl. markorerna); har hashas de TVA blocken
+// MOT VARANDRA (inte mot konstant) — invarianten ar ICKE-DIVERGENS, och en legitim samordnad
+// andring av bada blocken ar underhallsmodellen, inte drift. Saknad/dubblerad/omvand markor i
+// NAGON av filerna -> INVALID (kunde-ej-bedoma, aldrig tyst PASS — INV-001:s tomhetsdisciplin).
+const K6_FILES = ['workflows/nortropic-autobygg.js', 'workflows/nortropic-launch.js'];
+const K6_START = '// ─────────── FIXKONTRAKT-KÄRNA (BATCH-005) — BYTE-IDENTISK i nortropic-autobygg.js och nortropic-launch.js; INV-006 hashar båda blocken och flaggar avvikelse ───────────';
+const K6_END = '// ─────────── SLUT FIXKONTRAKT-KÄRNA (BATCH-005) ───────────';
+function karnHash(file) {
+  const lines = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n');
+  const starts = []; const ends = [];
+  lines.forEach((l, i) => { if (l === K6_START) starts.push(i); if (l === K6_END) ends.push(i); });
+  if (starts.length !== 1 || ends.length !== 1 || ends[0] <= starts[0]) return null;   // saknad/dubblerad/omvand -> odombar
+  return { line: starts[0] + 1, hash: createHash('sha256').update(lines.slice(starts[0], ends[0] + 1).join('\n'), 'utf8').digest('hex') };
+}
+try {
+  const a = karnHash(K6_FILES[0]);
+  const b = karnHash(K6_FILES[1]);
+  if (!a || !b) invalid.add('INV-006');
+  else if (a.hash !== b.hash)
+    flag('INV-006', K6_FILES[0], a.line,
+      `FIXKONTRAKT-KÄRNAN avviker från ${K6_FILES[1]} (${a.hash.slice(0, 12)}… != ${b.hash.slice(0, 12)}…) (BATCH-005)`);
+} catch { invalid.add('INV-006'); }
 
 // ---- Rapport ----
 for (const v of violations) console.log(v.line);

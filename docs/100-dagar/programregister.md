@@ -702,3 +702,87 @@ agentinstruktioner läses i sin HELHET, aldrig punktvis.
    driftvakt — exakt den drift som väntar på att hända): FIXKONTRAKT-KÄRNAN hålls byte-identisk i båda
    workflowfilerna och hashas i samma form som INV-004; avviker de flaggas det.
 4. **Rad 197-kommentaren får textuppdateras men ALDRIG semantiskt** — 1-vs-3 står fast.
+
+## BATCH-005-fixkontrakt DEL 2 — autobygg.js + INV-006 (2026-08-06, ägar-lett; autobygg EJ §A-namngiven, grep-verifierat; commit HÖGRISK-märkt p.g.a. EN §A1-rad — stewardens SYSTEM MAP-versionssync v16→v17, ren faktasync, ägar-diffgranskad)
+Base-SHA `9a47e88`. Verkställer FAS A-utredningens fyra ägarbeslut (sektionen ovan). A2 stängd.
+
+**Ändringen i `workflows/nortropic-autobygg.js` (v16→v17):**
+- **FIXKONTRAKT-KÄRNAN** (FILELIST + normPath/badRepoPaths/fixDelta + CONTRACT_EXEMPT +
+  porcelainPrompt) delas nu med launch.js — DSL-filer kan inte importera varandra, så kärnan är
+  MEDVETET duplicerad, hålls BYTE-IDENTISK (splitsad maskinellt ur launch, aldrig handavskriven;
+  kärnhash `aa674a36…` i båda) och vaktas av INV-006. porcelainPrompt parametriserades
+  `(when, where)` så samma kärna tjänar cwd-läget (launch) och buildDir-läget (autobygg).
+- **F1 — fasgränscommit i Content:** content-designern deklarerar per FILELIST (rapportessensen
+  bevaras i `note`-fältet; "facts still missing" överlever ändå mekaniskt som TODO-FACT-markörer
+  som final-touches greppar), ett mekaniskt commit-steg committar snittet declared ∩ post.
+  **Täcker en OTÄCKT yta** (ägar-registrering): vid REN review förblev content-arbetet ocommittat
+  ända till överlämning — hålet doldes av den gamla svepande fix-stageningen.
+- **Fixloopen (U):** de tre sekventiella fixagenterna deklarerar var för sig (schema per anrop),
+  EN unionscommit committar snittet; per-agent-attribution är LOGGDATA (`byAgent` →
+  contentCommit/fixCommit-fälten i AUTOBYGG-LOG + retur). **EXAKT EN runda oförändrad** —
+  kommentaren textuppdaterad, aldrig semantiskt; strukturen är ett if-block, ingen loop.
+- **kontraktsCommit-hjälparen** (autobygg-specifik, utanför kärnan): felmod 4→3→snapshot→2b→1→2a i
+  samma ordning som launch, därefter commit-steg (generisk mekanisk agent, `--literal-pathspecs`
+  add + pathspec:ad commit) + EFTERKONTROLL av commit-utfallet (git show --name-only + JS-mängd-
+  likhet). Kontraktsbrott → `overlamnadKontrakt(stage, reason)` = exakt samma maskineri som övriga
+  stopp (AUTOBYGG-LOG + return); stage `content` respektive `fixkontrakt`. Content-stoppet följer
+  del-c-stoppets form (log + return UTAN final-touches — sajten är halvbyggd, en TODO-punchlista
+  mitt i content vore brus); review-stoppet (CRITICAL efter EN runda) är oförändrat och kör
+  final-touches som förr.
+
+**INV-006 i `scripts/check-invariants.mjs`:** LF-normaliserad SHA-256 över blocket mellan de exakta
+markörraderna i BÅDA filerna, hashade MOT VARANDRA (inte mot konstant — invarianten är ICKE-DIVERGENS;
+samordnad ändring av båda blocken är underhållsmodellen). Saknad/dubblerad/omvänd markör → INVALID,
+aldrig tyst PASS. **Ärlighetstestad i tre riktningar** (scratch): identiska block → ingen flagga;
+en-byte-mutation → flagga med båda hasharna; borttagen END-markör → KUNDE-EJ-BEDOMA.
+
+**launch.js i samma commit:** markörrader + fil-neutraliserade kommentarer i kärnan
+("release-kommandot"→"stagingkommandot", "gates-fasen"→"tidigare faser") + porcelainPrompt-signaturen
+(anropsplatserna ger identiska slutsträngar) SAMT skeptikerhärdningarna nedan (HEAD-spårning,
+diff.renames=false i inspektionen, tom-snapshot-motsägelseblocket) — samtliga ÅTSTRAMNINGAR av
+kontraktet, ingen sänkning. §A3-ytorna orörda (GATE-schema, PASS/FAIL, 3-rundor, freshness, legal,
+`const failing`-raden byte-identisk).
+
+**Grindutfall: 1 → 0 överträdelser, 6 PASS (INV-006 tillagd) — programmets FÖRSTA helgröna körning.**
+Förväntat tal redovisat FÖRE körning; utfallet matchade. Pure functions 32/32 PASS mot BÅDA filernas
+kärna. INV-001:s A2/A3-rader är därmed stängda: fixkontraktet ersatte den svepande stageningen i båda
+pipelinefilerna.
+
+**Metodincident (registrerad läxa, kostnad ~5 min):** första kärn-splitsen använde `String.replace`
+med blocktext som replacement — `` $` `` i badRepoPaths-regexen är en MAGISK replacement-sekvens
+("allt före träffen") och expanderade filprefixet mitt i blocket. Åtgärd: radoperationer (aldrig
+String.replace med okontrollerad replacement), reparerad + hashverifierad. Klass: samma som
+quotepath/-uall — verktygsytans FAKTISKA semantik, inte dess antagna.
+
+**Adversariell trippellins DEL 2 (prompttext/mekanik/semantik, tre oberoende skeptiker, 2026-08-06)
+— fynden empiriskt belagda i scratch-git och åtgärdade MEKANISKT före ägargranskningen:**
+- **Rename-kollapsen (HIGH, 2 linser):** `git show --name-only` kör rename-detektion per default →
+  en KORREKT commit av en omdöpning (porcelain + stageade mängden bär BÅDA sökvägarna) listades som
+  EN → falsk mängddivergens → falsk ÖVERLÄMNAD med revert-instruktion mot en riktig commit. Fix:
+  `-c diff.renames=false` i inspektionskommandot, i PAR i båda filerna; par-regeln (flödespromptar
+  ligger UTANFÖR INV-006-kärnan och ändras alltid samordnat) inskriven i kärnkommentaren.
+- **Självcommit-hålet (HIGH):** en fixagent som committar SJÄLV (exakt v16-beteendet för samma
+  agenter) gjorde trädet rent → cleanDeclared-WARN → tomt stageSet → tyst ok — kontraktet passerat
+  utan granskning. Fix: HEAD-SPÅRNING i kärnan (FILELIST.head + validHead; porcelainPrompt kör
+  rev-parse): HEAD-flytt under fasen = brott ("en agent committade själv"); HEAD-stillestånd efter
+  commit-steget = "ny commit saknas — commit-steget fallerade" (ärlig stopptext; stänger samtidigt
+  falsk-PASS-scenariot där föregående commits filmängd råkar matcha stageade mängden, och
+  falsk-revert-anvisningen mot legitima commits).
+- **Scriptskrivna filer (HIGH):** bildkedjan skrivs "av ett script, inte av dig direkt"
+  (content-designer.md) — en ordagrant lydig agent deklarerade inte public/images/raw|ref,
+  BILDRAPPORT.json, SLOTS.json, fotouppdrag-klient.md → falsk felmod 1 på en LYCKAD fas. Fix:
+  F1-promptens deklarationsklausul kräver nu scriptens outputs uttryckligen.
+- **Tom-snapshot-motsägelsen (MEDIUM):** declared icke-tom ∧ efter-snapshot tom gav cleanDeclared-
+  WARN + tyst överhoppad commit — F1:s hela syfte voidat. Fix: mekanisk motsägelseregel (block,
+  odömbart) i båda flödena + felklausul i porcelainPrompt (aldrig gissa rent träd; kärnändring).
+- **content-designer.md-synken (MEDIUM):** enda fixerdefinitionen utan BATCH-005-kontraktet, och
+  Z1-radens premiss "copy-beslut står redan i dina commits" blev falsk under kontraktet. Fix:
+  Kontraktsläge-paragraf (samma form som stack-builder/seo-optimizer) + Z1-raden omskriven —
+  ersätter DEL 2:s ursprungliga vägval 5 ("lämnad orörd"), som skeptikerna refuterade.
+- **Attribution/notes (LOW×2):** overlamnadKontrakt bär nu contentCommit/fixCommit (log + retur);
+  byAgent bär note-fältet (rapportessensen persisteras — begärdes förr men lästes aldrig).
+- **Docs-drift i commit-scopet (MEDIUM):** README v16-raden, 00-guide:s (a)(b)(c)-bromslista,
+  justeringskartans "tre villkorade stoppen", stewardens SYSTEM MAP-rad (§A1 — se rubriken) och
+  INV-001:s självbeskrivning i grinden ("förblir flaggade" — nu historik) synkade i samma commit.
+
+Accepterade begränsningar DEL 1:1–4 gäller oförändrat även DEL 2 (samma kärna).
