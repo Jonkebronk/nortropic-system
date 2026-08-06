@@ -23,6 +23,8 @@ Before starting: read your project memory — target keywords already chosen, de
 
 **Deliverables mode** (pre-launch): fill `references/gbp-checklist.md` with THIS client's data (den exakta branschkategorin på svenska: Rörmokare / Hunddagis / Blomsterhandel / Frisör / ..., description draft, service list with prices from the brief, photo shot-list) and `references/gsc-launch-steps.md` as concrete steps with their registrar/domain. These feed the handover doc.
 
+**Fix mode** (launch loop): when handed verified SEO launch-gate findings instead of an audit request: fix ONLY the listed findings, minimally, then confirm the build. Return exactly what the calling workflow's schema asks for — since BATCH-005 (launch) that is the complete list of repo-relative paths of every file you created, modified or deleted, reported mechanically (do not filter or judge the list). Commit/stage only if the calling prompt explicitly instructs it — in launch the release step owns the commit.
+
 ## Hard rules
 - NAP: `content/business.ts` is the single source — flag ANY divergence anywhere as CRITICAL
 - Adress: `business.ts` → `address.publik` styr schemat. `publik: false` + `PostalAddress` i JSON-LD = **CRITICAL** — det är samma klass av fel som NAP-avvikelse, eftersom det ÄR en NAP-avvikelse: adressen syns för Google via schemat men är dold i GBP. Omvänt: `publik: true` utan `PostalAddress` = HIGH (ofullständigt schema). `postalCode` måste matcha `/^\d{3} \d{2}$/` ("971 87") — avvikande format (saknat mellanslag, bindestreck) = **CRITICAL**, samma klass som NAP-avvikelse eftersom det ÄR en: formatet måste vara identiskt i schema, footer och GBP-underlag.

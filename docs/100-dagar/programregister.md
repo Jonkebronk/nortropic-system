@@ -581,6 +581,9 @@ add -u` får ALDRIG användas som mellanlösning** — den missar NYA filer och 
 (ocommittade fixar → preview serverar förfix-värden), exakt felet steget finns för att förhindra. Tills dess
 håller INV-001 dem röda, vilket är korrekt: grinden ska visa att arbetet återstår.
 
+**Status 2026-08-06: DEL 1 (launch:149) VERKSTÄLLD — se sektionen "BATCH-005-fixkontrakt DEL 1" nedan.
+autobygg:203 kvarstår öppen (DEL 2, egen sittning; grinden håller den röd tills dess).**
+
 ## Accepterade begränsningar i BATCH-004C:s grindomformning (ägar-granskning, ingen åtgärd)
 Två svagheter i den härdade grinden, MEDVETET accepterade så en framtida läsare ser ett VÄGVAL, inte en glömska:
 1. **Kommentar-skippens yta.** INV-001 hoppar rader som börjar med `#`/`//` (kommentar/prosa exekverar aldrig →
@@ -594,3 +597,68 @@ Två svagheter i den härdade grinden, MEDVETET accepterade så en framtida läs
    kontexter (JS-sträng i `launch.js`, markdown-blockquote i `prelaunch/SKILL.md`) och kan inte vara byte-
    identiska — en gemensam hash skulle kräva identiska block, vilket kontexterna omöjliggör. Token-substanskravet
    är därför det starkaste mekaniska krav som är tillgängligt här. Accepterad begränsning med det motivet.
+
+## BATCH-005-fixkontrakt DEL 1 — launch.js (2026-08-06, ägar-lett, HÖGRISK §A3-yta)
+Base-SHA `1d9ed4f`. FAS A-utredning (read-only, redovisad i sittningen) → tre ägarbeslut: (1) **ORDNING**
+launch först, autobygg DEL 2 i egen sittning — samma batch-ID, grind 2→1→0; (2) **DIFFSCOPE-formen
+återanvänds** (`files: string[]` + mekanisk rapportdisciplin, `nortropic-review.js:54`) — inget nytt
+schema uppfunnet; prosarapporten "fixed / needs-human" **BORTTAGEN** i stället för schemalagd, eftersom
+grep visade noll nedströms konsumenter (endast launch-prompterna själva + `agents/stack-builder.md:48`,
+som synkats i samma commit); (3) **felmoderna**: 1 (utelämnad fil), 2b (deklarerad-men-redan-smutsig),
+3 (sökväg utanför byggkatalogen) och 4 (ingen lista) **BLOCKERAR** rundan utan commit (`contractStop`;
+aldrig svepande staging som fallback — INV-005 INVALID→FAIL-klassen, verify-suitens "död probe är
+odömbar"); 2a (deklarerad-men-oförändrad) WARN. Mekanisk grund: **delta-snapshot** `git status
+--porcelain -uall` FÖRE/EFTER varje runda; alla beslut i REN JS (`normPath`/`badRepoPaths`/`fixDelta`),
+aldrig agentprosa. Pure functions isolerat testade **32/32 PASS i BÅDA riktningar** (fånga + släppa-
+igenom, guard-honesty-läxan); `-uall` är bärande (utan den listas ny katalog som `dir/` → falskblock).
+
+**Adversariell trippellins FÖRE ägargranskning (prompttext/mekanik/§A3, tre oberoende skeptiker,
+2026-08-06) fann 5 verkliga defektklasser i första utkastet — empiriskt belagda av skeptikerna i
+scratch-git, alla åtgärdade MEKANISKT (aldrig med mer prosa):**
+- **Pathspec ≠ literal (HIGH, alla tre linser):** deklarationer nådde `git add` som GLOB-pathspecs —
+  `app/[stad]/page.tsx` (kärnan i stacken) är ett mönster för git; katalog/`.`/`content/*.ts`
+  passerade badRepoPaths och WARN:ades under falsk "no-op"-premiss trots att de SVEPER. Fix: stagea
+  SNITTET `declared ∩ efter-snapshot` (endast verkliga porcelain-filer kan nå git — katalog/glob/
+  fantom kan per definition inte stå i porcelain-utdata) + `--literal-pathspecs` på add och commit.
+- **Index-svepning (HIGH):** en pathspec-lös commit committar HELA indexet → för-stagat främmande
+  innehåll åkte med. Fix: pathspec:ad commit (`git --literal-pathspecs commit -m … -- <mängden>`).
+- **Sista ledet var prosa (MEDIUM, konvergens i alla tre linser):** release-utfallet verifierades
+  aldrig — 004BE-klassen återinförd på exakt det steg kontraktet ska skydda. Fix: mekanisk
+  EFTERKONTROLL (`git show --name-only` via scout + JS-mängdlikhet mot stageade mängden; avvikelse
+  → contractStop FÖRE omkontrollen).
+- **åäö-oktalescapning (MEDIUM):** porcelains default `core.quotepath` C-escapar svenska filnamn →
+  deterministisk falsk felmod-1 i en svensk pipeline. Fix: `git -c core.quotepath=off` i snapshot-
+  och inspektionskommandona.
+- **Z1-kollisionen (MEDIUM):** agentdefinitionernas EGEN friktionslogg (AGENT-LOG.md skrivs mitt i
+  arbetet; gates-fasen kan redan ha lämnat ett ocommittat block) fällde rundan som falsk felmod
+  1/2b. Fix: namngivet mekaniskt undantag (CONTRACT_EXEMPT) ur pre/post/declared; efterkontrollen
+  fäller ändå en release som committar loggen. Dessutom: `$`/backtick/CR avvisas i badRepoPaths
+  (shell-aktiva ÄVEN inom dubbelcitat; legitima Next.js-sökvägar bär dem aldrig) och
+  `seo-optimizer.md` fick fix-mode-raden (asymmetrin mot stack-builder.md var ett skeptikerfynd).
+
+**NRT-001 (`launch.js` `const failing = ...`, endast tidigare RÖDA grindar omkontrolleras) MEDVETET
+ORÖRD** — ägardirektiv: två §A3-ingrepp i samma tjugo rader slås inte ihop; utredningsunderlaget för
+BATCH-006 redovisat i sittningsrapporten. §A3-ytor verifierade orörda: GATE-schemat, PASS/FAIL-logiken,
+3-rundorsgränsen, freshness-grinden, legal-exkluderingen — kontraktet HÖJER ett krav, sänker inget.
+
+**Grindutfall: 2 → 1 överträdelser (autobygg:203 kvar — SKA stå röd tills DEL 2).** Förväntat tal
+redovisat före körning; utfallet matchade.
+
+Accepterade begränsningar i DEL 1 (vägval, inte glömska):
+1. **Porcelain-deltat kan inte särskilja "var smutsig FÖRE rundan + ändrades IGEN av fixern".**
+   Deklareras filen → foreign-BLOCK (säkra sidan, människan reder ut); deklareras den inte → den nya
+   ändringen är osynlig i deltat (filen låg redan i före-snapshoten) och förblir ocommittad. Trädet
+   förutsätts i praktiken rent vid launchstart; för-existerande smuts commitas aldrig av loopen
+   (den pathspec:ade committen håller även för-STAGAT främmande innehåll ute).
+2. **Efterkontrollen är detektion, inte prevention:** en release-agent som trots allt sveper upptäcks
+   mekaniskt (commit-mängd ≠ stagead mängd → contractStop före omkontrollen) men committen existerar
+   då redan — revert är en mänsklig handling. Prevention vore att workflow-koden själv körde git,
+   vilket DSL:en inte kan (agenter är enda aktuatorn); detta är samma aktuator-vs-protokoll-gräns
+   som registrerades i BATCH-004D.
+3. **Förbudsprosan bär inte INV-001-literalen:** release-promptens förbud uttrycks utan strängen
+   ("NEVER stage sweepingly (no \"-A\", no \"-u\"...)"), annars hade grinden hållit raden röd av fel
+   skäl — semantiken (förbudet) är starkare uttryckt än förr, och den exekverbara vägen stagear en
+   explicit uppräknad, delta-verifierad mängd.
+4. **CONTRACT_EXEMPT (AGENT-LOG.md) är en skopning, ingen sänkning:** kontraktet vaktar SAJT-fixarna;
+   loggen är meta-observabilitet som aldrig commitas av loopen. Utan undantaget fäller systemets egen
+   loggdisciplin ärliga rundor falskt. Loggens hemvist-/commitfråga ägs av Z1-spåret, inte launch.

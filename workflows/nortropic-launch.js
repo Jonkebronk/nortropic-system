@@ -48,6 +48,81 @@ const EVAL = {
   },
 }
 
+// ─────────── BATCH-005-fixkontrakt (DEL 1, launch): returkontrakt för ändrade filer ───────────
+// Fixagenterna deklarerar sin ändrade-fil-lista per schema (DIFFSCOPE-formen ur nortropic-review.js:
+// files: string[] + mekanisk rapportdisciplin) och release-steget stagear EXAKT den mängden —
+// aldrig svepande staging (-A/-u; -u missar dessutom nya filer → rorjour-buggen). Alla kontrakts-
+// beslut fattas i ren JS nedan, aldrig i agentprosa. Delta-snapshoten (git status --porcelain -uall
+// före/efter rundan) gör alla fyra felmoder mekaniskt kontrollerbara. Kontraktsbrott BLOCKERAR
+// rundan utan commit — aldrig tyst degradering (samma klass som INV-005 INVALID→FAIL och
+// verify-suitens "en död probe är odömbar → OGILTIG, aldrig tyst grön"). Stageningen använder
+// snittet declared ∩ efter-snapshot (endast delta-verifierade VERKLIGA filer når git; kataloger,
+// globs och fantomsökvägar kan per definition inte stå i porcelain-utdata), pathspecs literaliseras
+// (--literal-pathspecs — [slug]-routes är literala filnamn, inte mönster), committen är pathspec:ad
+// (för-stagat främmande innehåll åker aldrig med) och commit-UTFALLET efterkontrolleras mekaniskt
+// mot den stageade mängden — sista ledet vilar inte på prosa (adversariell granskning 2026-08-06).
+
+const FILELIST = {
+  type: 'object',
+  required: ['files'],
+  properties: {
+    files: { type: 'array', items: { type: 'string' }, description: 'repo-relativa sökvägar' },
+    note: { type: 'string' },
+  },
+}
+
+// Normalisering före mängdjämförelse: porcelain ger alltid framåtslash; en agent på Windows kan
+// returnera backslash eller ledande "./" — samma fil får inte räknas som två. Case röras aldrig
+// (skulle dölja verkliga avvikelser).
+function normPath(p) {
+  return String(p || '').trim().replace(/\\/g, '/').replace(/^\.\//, '')
+}
+
+// Felmod 3: fil utanför byggkatalogen. Endast repo-relativa sökvägar — absolut sökväg (POSIX eller
+// enhetsbokstav), '..'-segment, citattecken/radbrytning eller tom sträng avvisas; likaså $ och
+// backtick (shell-aktiva ÄVEN inom dubbelcitat — deklarationen interpoleras i release-kommandot,
+// och agentreturer är opålitlig data). Legitima Next.js-sökvägar (app/[stad]/, app/(grupp)/, @modal)
+// bär inget av tecknen. Deterministiskt, aldrig prosa.
+function badRepoPaths(files) {
+  return (files || []).filter(raw => {
+    const p = normPath(raw)
+    return !p || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..') || /["\n\r$`]/.test(p)
+  })
+}
+
+// Delta-jämförelsen som gör felmod 1/2 kontrollerbara:
+//   undeclared    = smutsig EFTER rundan, ren FÖRE, ej deklarerad → utelämnad fil (felmod 1, BLOCKERA)
+//   foreign       = deklarerad men redan smutsig FÖRE rundan → commit skulle smuggla in främmande
+//                   ändringar (felmod 2b, BLOCKERA)
+//   cleanDeclared = deklarerad men aldrig smutsig → överdeklaration (felmod 2a, WARN — posten
+//                   utesluts ur stageningen via snittet declared ∩ post; den når aldrig git)
+// Känd begränsning (registrerad i programregistret): en fil som var smutsig FÖRE rundan och ändras
+// IGEN av fixern kan inte särskiljas mekaniskt — deklareras den blockeras rundan som foreign (säkra sidan).
+function fixDelta(preFiles, postFiles, declaredFiles) {
+  const pre = new Set((preFiles || []).map(normPath))
+  const post = new Set((postFiles || []).map(normPath))
+  const declared = (declaredFiles || []).map(normPath)
+  return {
+    undeclared: [...post].filter(f => !pre.has(f) && !declared.includes(f)),
+    foreign: declared.filter(f => pre.has(f)),
+    cleanDeclared: declared.filter(f => !post.has(f)),
+  }
+}
+
+// Z1-arbetsloggen (AGENT-LOG.md) är undantagen kontraktet: agentdefinitionerna beordrar friktions-
+// loggning MITT i arbetet (stack-builder/seo-optimizer/content-designer Z1-regeln), och gates-fasen
+// kan redan ha lämnat ett ocommittat block — utan namngivet undantag fäller systemets EGEN logg-
+// disciplin rundan som falsk felmod 1/2b. Loggen commitas aldrig av release-steget (efterkontrollen
+// fäller en release som ändå committar den); dess hemvist avgörs utanför launch.
+const CONTRACT_EXEMPT = f => normPath(f) === 'AGENT-LOG.md'
+
+// -uall är bärande: utan den listar porcelain en NY katalog som "dir/" i stället för filerna i den,
+// och en ärligt deklarerad ny fil skulle falskblockeras som undeclared-mismatch. quotepath=off är
+// lika bärande: med gits default oktalescapas åäö-sökvägar ('"tj\303\244nster.ts"') och kan då
+// aldrig matcha fixarens deklarerade UTF-8-form → deterministisk falsk felmod-1 i en svensk pipeline.
+const porcelainPrompt = when =>
+  `Mechanical working-tree snapshot (${when}) in the project root of the Nortropic site in the current working directory. Run exactly: git -c core.quotepath=off status --porcelain -uall. Return every repo-relative path it lists (modified, staged, deleted and untracked; for a rename list BOTH the old and the new path). Return BARE paths only: strip the two-character status prefix and the space after it, and strip any surrounding double quotes around paths that git still quotes. Do not filter or judge the list — report it mechanically. A clean tree returns files: [].`
+
 const site = (args && args.url) ? `the Nortropic site in the current working directory (preview URL: ${args.url})` : 'the Nortropic site in the current working directory (find the preview/dev URL from vercel or start the dev server if needed)'
 const structured = 'Return PASS only if every check passes. Every finding needs severity, exact location, why it matters, concrete fix, and category.'
 // Deployment Protection-bypass: Gate 7 kräver att preview har Vercel Deployment Protection på (naken .vercel.app → 401). Alla URL-baserade grindar UTOM Gate 7:s egen protection-assertion måste därför bära bypass-hemligheten, annars FAILar de av fel skäl. En hemvist — appendas på varje gate-prompt (initial + recheck).
@@ -85,6 +160,7 @@ if (!fresh || fresh.status !== 'FRESH') {
     legalFindings: [],
     remainingFindings: [],
     fixRounds: [],
+    contractStop: null,
     handoverWritten: false,
   }
 }
@@ -112,6 +188,7 @@ phase('Fix loop')
 let round = 0
 let freshUrl = (args && args.url) ? args.url : null   // repointed to each round's redeploy
 const fixLog = []
+let contractStop = null   // BATCH-005: brutet fixkontrakt → rundan blockeras utan commit, loopen avslutas
 // Bemannat: upp till 3 autonoma fixrundor med en människa som övervakar. Obemannat (nortropic-autobygg.js) gör MEDVETET bara EN runda och lämnar sedan över — ingen vaktar där, så det är försiktigare. 1-vs-3 är avsiktligt; harmonisera aldrig. Gränsen 3 är §A-skyddad (docs/07 §A3) — ändras bara av människa.
 while (round < 3) {
   const failing = GATES.filter(g => g.key !== 'legal' && gates[g.key].status === 'FAIL')
@@ -120,42 +197,81 @@ while (round < 3) {
   const fixable = failing.flatMap(g => (gates[g.key].findings || []).filter(f => f.category !== 'legal'))
   if (!fixable.length) break
   log(`Fix round ${round}/3: ${fixable.length} findings across ${failing.map(g => g.key).join(', ')}`)
+  // BATCH-005: snapshot FÖRE rundan — utan den är deltat odömbart → blockera innan fixarbete slösas.
+  const preSnap = await agent(porcelainPrompt(`before fix round ${round}`), { label: `snapshot:pre:r${round}`, phase: 'Fix loop', schema: FILELIST })
+  if (!preSnap) { contractStop = { round, rule: 'snapshot', detail: 'före-snapshoten kunde inte tas — deltat är odömbart' }; break }
   // D1: route by category — seo findings to seo-optimizer (it can Edit meta/schema), the rest to stack-builder.
   // Sequential (not parallel) so two fixers never write the repo at once.
   const seoFixable = fixable.filter(f => f.category === 'seo')
   const buildFixable = fixable.filter(f => f.category !== 'seo')
-  const fixReports = []
+  const fixReturns = []
   if (buildFixable.length) {
     const r = await agent(
-      `Fix mode. Fix ONLY these verified launch-gate findings in the Nortropic site in the current working directory, minimally, then run pnpm build and confirm zero errors. Report per finding: fixed / needs-human (with reason).\n\n${JSON.stringify(buildFixable, null, 2)}`,
-      { label: `fix:build:round${round}`, phase: 'Fix loop', agentType: 'stack-builder' }
+      `Fix mode. Fix ONLY these verified launch-gate findings in the Nortropic site in the current working directory, minimally, then run pnpm build and confirm zero errors. Do NOT commit and do NOT stage anything — the release step commits a known set. Return per schema the complete list of repo-relative paths of every file you created, modified or deleted (including package.json and pnpm-lock.yaml if you install or upgrade anything) — report the list mechanically, do not filter or judge it.\n\n${JSON.stringify(buildFixable, null, 2)}`,
+      { label: `fix:build:round${round}`, phase: 'Fix loop', agentType: 'stack-builder', schema: FILELIST }
     )
-    fixReports.push({ agent: 'stack-builder', report: typeof r === 'string' ? r.slice(0, 1500) : r })
+    fixReturns.push({ agent: 'stack-builder', result: r })
   }
   if (seoFixable.length) {
     const r = await agent(
-      `Fix mode (SEO). Fix ONLY these verified SEO launch-gate findings (meta/titles/schema/NAP/sitemap) in the Nortropic site in the current working directory, minimally, then confirm the build. Report per finding: fixed / needs-human (with reason).\n\n${JSON.stringify(seoFixable, null, 2)}`,
-      { label: `fix:seo:round${round}`, phase: 'Fix loop', agentType: 'seo-optimizer' }
+      `Fix mode (SEO). Fix ONLY these verified SEO launch-gate findings (meta/titles/schema/NAP/sitemap) in the Nortropic site in the current working directory, minimally, then confirm the build. Do NOT commit and do NOT stage anything — the release step commits a known set. Return per schema the complete list of repo-relative paths of every file you created, modified or deleted — report the list mechanically, do not filter or judge it.\n\n${JSON.stringify(seoFixable, null, 2)}`,
+      { label: `fix:seo:round${round}`, phase: 'Fix loop', agentType: 'seo-optimizer', schema: FILELIST }
     )
-    fixReports.push({ agent: 'seo-optimizer', report: typeof r === 'string' ? r.slice(0, 1500) : r })
+    fixReturns.push({ agent: 'seo-optimizer', result: r })
   }
-  fixLog.push({ round, findings: fixable.length, reports: fixReports })
+  // BATCH-005: kontraktet prövas MEKANISKT (ren JS, aldrig agentprosa) innan något stageas.
+  const dead = fixReturns.filter(x => !x.result)
+  if (dead.length) { contractStop = { round, rule: 'felmod-4', detail: `${dead.map(x => x.agent).join(', ')} returnerade ingen fillista — blockerat; aldrig svepande staging (-A/-u) som fallback` }; break }
+  const declared = [...new Set(fixReturns.flatMap(x => (x.result.files || []).map(normPath)))].filter(f => !CONTRACT_EXEMPT(f))
+  const bad = badRepoPaths(declared)
+  if (bad.length) { contractStop = { round, rule: 'felmod-3', detail: `sökväg utanför byggkatalogen/ogiltig: ${bad.join(', ')}` }; break }
+  const postSnap = await agent(porcelainPrompt(`after fix round ${round}`), { label: `snapshot:post:r${round}`, phase: 'Fix loop', schema: FILELIST })
+  if (!postSnap) { contractStop = { round, rule: 'snapshot', detail: 'efter-snapshoten kunde inte tas — deltat är odömbart' }; break }
+  const preFiles = (preSnap.files || []).filter(f => !CONTRACT_EXEMPT(f))
+  const postFiles = (postSnap.files || []).filter(f => !CONTRACT_EXEMPT(f))
+  const delta = fixDelta(preFiles, postFiles, declared)
+  if (delta.foreign.length) { contractStop = { round, rule: 'felmod-2b', detail: `deklarerade filer var redan smutsiga FÖRE rundan (commit skulle smuggla in främmande ändringar): ${delta.foreign.join(', ')}` }; break }
+  if (delta.undeclared.length) { contractStop = { round, rule: 'felmod-1', detail: `ändrade men EJ deklarerade filer: ${delta.undeclared.join(', ')} — partiell commit återinför rorjour-buggen för exakt dem` }; break }
+  if (delta.cleanDeclared.length) log(`WARN (felmod 2a): deklarerade men aldrig ändrade — utesluts ur stageningen (endast delta-verifierade filer når git): ${delta.cleanDeclared.join(', ')}`)
+  // Stagea SNITTET declared ∩ efter-snapshot: varje post är en verklig smutsig FIL ur porcelain —
+  // kataloger, globs ('content/*.ts'), '.' och fantomsökvägar kan inte förekomma här.
+  const postSet = new Set(postFiles.map(normPath))
+  const stageSet = declared.filter(f => postSet.has(f))
+  if (!stageSet.length) { log('Fixagenterna ändrade ingenting — inget att committa; kvarvarande fynd behöver människa.'); break }
+  fixLog.push({ round, findings: fixable.length, files: stageSet, byAgent: fixReturns.map(x => ({ agent: x.agent, files: (x.result.files || []).map(normPath) })) })
   // Commit + redeploy BEFORE re-checking so URL-based gates (Lighthouse, curl-headers,
   // end-to-end lead, SSL) audit the FIXED build — not the stale origin/main preview.
   // rorjour: fixes sat uncommitted → the preview served pre-fix values → rounds were wasted
   // re-finding fixed issues. This step NEVER edits code: legal is still excluded from `fixable`,
-  // the 3-round bound and D1 routing are unchanged.
+  // the 3-round bound and D1 routing are unchanged. BATCH-005: stageningen är nu den delta-
+  // verifierade KÄNDA mängden stageSet (NRT-003) — aldrig git add -A, aldrig git add -u.
+  const pathArgs = stageSet.map(f => `"${f}"`).join(' ')
   const release = await agent(
-    `Release step for the Nortropic site in the current working directory — do NOT change any code. (1) git add -A and commit the round-${round} launch-gate fixes with a descriptive message. (2) Redeploy a fresh preview of THIS commit (vercel deploy) and return the new preview URL on the final line as exactly PREVIEW_URL=<url>. If no deploy is possible, run pnpm build to prove the fixed tree compiles and return PREVIEW_URL=none.`,
+    `Release step for the Nortropic site in the current working directory — do NOT change any code. (1) Stage EXACTLY this known set and nothing else by running exactly: git --literal-pathspecs add -- ${pathArgs} — then commit ONLY that same set by running exactly: git --literal-pathspecs commit -m "<descriptive message about the round-${round} launch-gate fixes>" -- ${pathArgs} — the pathspec'd commit is deliberate: it keeps any previously staged unrelated content OUT of this commit, and --literal-pathspecs is deliberate: paths like app/[stad]/page.tsx are literal file names, never glob patterns. NEVER stage sweepingly (no "-A", no "-u", no "git add ."), never add any path outside the list. If a git step fails: do NOT improvise and do NOT widen the staging — stop, report the error, and return PREVIEW_URL=none. (2) Redeploy a fresh preview of THIS commit (vercel deploy) and return the new preview URL on the final line as exactly PREVIEW_URL=<url>. If no deploy is possible, run pnpm build to prove the fixed tree compiles and return PREVIEW_URL=none.`,
     { label: `release:round${round}`, phase: 'Fix loop', agentType: 'stack-builder' }
   )
+  if (!release) { contractStop = { round, rule: 'release', detail: 'release-steget returnerade ingenting — commit-utfallet är odömbart' }; break }
   const um = typeof release === 'string' ? release.match(/PREVIEW_URL=(\S+)/) : null
   if (um && um[1] && um[1] !== 'none') freshUrl = um[1]
+  // BATCH-005: mekanisk EFTERKONTROLL av commit-utfallet — sista ledet vilar aldrig på prosa.
+  // Detektion, inte prevention: committen finns när avvikelsen upptäcks, men rundan blockeras
+  // FÖRE omkontrollen och människan får revert-underlaget i klartext.
+  const commitSnap = await agent(
+    `Mechanical commit inspection in the project root of the Nortropic site in the current working directory. Run exactly: git -c core.quotepath=off show --name-only --format= HEAD. Return every path listed as BARE repo-relative paths (strip any surrounding double quotes). Do not filter or judge — report the list mechanically. If the command fails, return files: [] and say why in note.`,
+    { label: `commitset:r${round}`, phase: 'Fix loop', schema: FILELIST }
+  )
+  if (!commitSnap) { contractStop = { round, rule: 'release-efterkontroll', detail: 'commit-inspektionen kunde inte tas — utfallet är odömbart' }; break }
+  const committed = new Set((commitSnap.files || []).map(normPath))
+  if (committed.size !== stageSet.length || !stageSet.every(f => committed.has(f))) {
+    contractStop = { round, rule: 'release-efterkontroll', detail: `committad mängd ≠ stagead känd mängd (committat: ${[...committed].join(', ') || 'inget'}; förväntat: ${stageSet.join(', ')}) — committen finns redan; mänsklig granskning/revert krävs före ny körning` }
+    break
+  }
   const recheck = await parallel(failing.map(g => () =>
     agent(GATES.find(x => x.key === g.key).prompt + ` This is a RE-CHECK after fixes. The working-tree fixes are now COMMITTED and REDEPLOYED${freshUrl ? ` — run every check against this fresh preview: ${freshUrl}` : ''}. Verify the previously failing checks first; before reporting any issue, confirm it still reproduces on THIS build (not a cached/stale one).` + bypass, { label: `recheck:${g.key}:r${round}`, phase: 'Fix loop', agentType: g.agentType, schema: GATE })
   ))
   failing.forEach((g, i) => { if (recheck[i]) gates[g.key] = recheck[i] })
 }
+if (contractStop) log(`FIXKONTRAKT BRUTET (runda ${contractStop.round}, ${contractStop.rule}): ${contractStop.detail} — fixloopen avbröts före omkontrollen; kvarvarande fynd behöver människa.`)
 
 const nonLegalPass = GATES.filter(g => g.key !== 'legal').every(g => gates[g.key].status === 'PASS')
 
@@ -214,5 +330,6 @@ return {
   legalFindings,
   remainingFindings,
   fixRounds: fixLog,
+  contractStop,
   handoverWritten: Boolean(handover),
 }
