@@ -11,8 +11,8 @@ trap 'rm -rf "$WORK"' EXIT
 # K1: skrivvägen mot scripts/ måste vara öppen, annars är K2 odömbart.
 # Under Claude Codes sandbox nekas skrivning mot §A — då är "hash-bindningen
 # fungerar inte" och "manipulationen hände aldrig" samma utfall.
-krav_mekanism "skrivväg mot scripts/ öppen" \
-  'p=scripts/.h002-mekanismprov; printf x > "$p" && rm -f "$p"'
+krav_mekanism "append mot scripts/check-invariants.mjs tillåten" \
+  'f=scripts/check-invariants.mjs; b="$WORK/mekanismprov.orig"; cp "$f" "$b" && printf "\n" >> "$f" && cp "$b" "$f" && cmp -s "$b" "$f"'
 
 # K2: registret pekar på BEFINTLIGA grindar, inte kopior
 lista=$("$CLI" list 2>/dev/null)
