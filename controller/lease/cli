@@ -65,6 +65,37 @@ def skapa_exklusivt(p: Path, data: dict) -> bool:
     return True
 
 
+def utgangen(lease: dict) -> bool:
+    """Har leasen löpt ut?
+
+    Utgången mäts med TVÅ klockor och kräver att båda är överens.
+
+    Väggklockan (time.time) är den enda som är jämförbar mellan processer över
+    tid, men den kan hoppa — NTP-korrigering, manuell ändring, virtualisering.
+    Ett hopp FRAMÅT hos den process som läser är skevheten åt fel håll: leasen
+    ser utgången ut medan innehavaren fortfarande tror sig äga den, och två
+    processer äger samma task. Den monotona klockan kan inte hoppa och används
+    därför som spärr mot just det.
+
+    Kravet är att BÅDA klockorna säger att ttl förflutit. Ett väggklockshopp
+    framåt blåser upp vagg_forfluten men lämnar mono_forfluten sann, och
+    leasen behålls. Ett hopp bakåt krymper vagg_forfluten, och leasen behålls
+    också. Åt båda hållen vägrar vi hellre än tillåter dubbelägande.
+
+    Undantaget är omstart. time.monotonic räknas från uppstart, så efter en
+    omstart blir mono_forfluten negativ. Det kan bara betyda att maskinen
+    startat om — och då är innehavarprocessen med säkerhet död, så väggklockan
+    får avgöra ensam. Utan undantaget hade en lease som överlevt en omstart
+    blockerat för alltid.
+    """
+    ttl = lease["ttl"]
+    vagg_forfluten = time.time() - lease["beviljad_vagg"]
+    mono_forfluten = time.monotonic() - lease["beviljad_mono"]
+    if mono_forfluten < 0:
+        return vagg_forfluten >= ttl
+    return vagg_forfluten >= ttl and mono_forfluten >= ttl
+
+
 def kmd_acquire(kat: Path, task: str, ttl: float) -> int:
     data = {
         "task": task,
@@ -73,9 +104,29 @@ def kmd_acquire(kat: Path, task: str, ttl: float) -> int:
         "beviljad_vagg": time.time(),
         "beviljad_mono": time.monotonic(),
     }
-    if skapa_exklusivt(lease_fil(kat, task), data):
+    p = lease_fil(kat, task)
+    if skapa_exklusivt(p, data):
         return 0
-    return fel(f"acquire: {task} ägs redan")
+
+    # Filen fanns. Bara en utgången lease får tas över.
+    ravar = p.read_bytes() if p.exists() else None
+    lease = las_lease(p)
+    if lease is None:
+        return fel(f"acquire: {task} har en oläsbar lease — vägrar hellre än gissar")
+    if not utgangen(lease):
+        return fel(f"acquire: {task} ägs av {lease['agare']}")
+
+    # Ta bort den utgångna leasen bara om den fortfarande är exakt den vi
+    # dömde. Hann någon annan skriva en färsk däremellan rör vi den aldrig.
+    try:
+        if p.read_bytes() != ravar:
+            return fel(f"acquire: {task} togs av någon annan")
+        p.unlink()
+    except OSError:
+        pass
+    if skapa_exklusivt(p, data):
+        return 0
+    return fel(f"acquire: {task} togs av någon annan")
 
 
 def kmd_release(kat: Path, task: str) -> int:
@@ -85,7 +136,7 @@ def kmd_release(kat: Path, task: str) -> int:
 
 def kmd_owner(kat: Path, task: str) -> int:
     lease = las_lease(lease_fil(kat, task))
-    if lease is None:
+    if lease is None or utgangen(lease):
         return fel(f"owner: {task} ägs inte")
     print(lease["agare"])
     return 0
