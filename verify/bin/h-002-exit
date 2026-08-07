@@ -5,40 +5,63 @@
 CLI="controller/verify/cli"
 krav_komponent "$CLI"
 
-# K1: registret pekar på BEFINTLIGA grindar, inte kopior
+WORK="$(temp_kat)" || { echo "FAIL  harness — temp-katalog kunde inte skapas"; exit 2; }
+trap 'rm -rf "$WORK"' EXIT
+
+# K1: skrivvägen mot scripts/ måste vara öppen, annars är K2 odömbart.
+# Under Claude Codes sandbox nekas skrivning mot §A — då är "hash-bindningen
+# fungerar inte" och "manipulationen hände aldrig" samma utfall.
+krav_mekanism "skrivväg mot scripts/ öppen" \
+  'p=scripts/.h002-mekanismprov; printf x > "$p" && rm -f "$p"'
+
+# K2: registret pekar på BEFINTLIGA grindar, inte kopior
 lista=$("$CLI" list 2>/dev/null)
 if echo "$lista" | grep -q "scripts/check-invariants.mjs"; then
-  ok "K1 registret pekar på befintlig grind (check-invariants.mjs)"
+  ok "K2 registret pekar på befintlig grind (check-invariants.mjs)"
 else
-  no "K1 register" "check-invariants.mjs saknas i registret — ny verifierare byggd i stället för registrerad?"
+  no "K2 register" "check-invariants.mjs saknas i registret — ny verifierare byggd i stället för registrerad?"
 fi
 
-# K2: manipulerad verifierarfil → hash_mismatch FÖRE körning
-tmp=$(mktemp); cp scripts/check-invariants.mjs "$tmp"
-printf '\n// manipulerad av h-002-exit\n' >> scripts/check-invariants.mjs
+# K3: manipulerad verifierarfil → hash_mismatch FÖRE körning
+SAK="scripts/check-invariants.mjs"
+SPAR="$WORK/check-invariants.mjs.orig"
+if ! cp "$SAK" "$SPAR" || [ ! -s "$SPAR" ]; then
+  echo "FAIL  harness — kunde inte säkra kopia av $SAK, K3 hoppas"
+  echo; echo "$pass PASS, $fail FAIL, ODÖMBART"
+  exit 2
+fi
+printf '\n// manipulerad av h-002-exit\n' >> "$SAK"
 ut=$("$CLI" run check-invariants 2>&1); kod=$?
-cp "$tmp" scripts/check-invariants.mjs; rm -f "$tmp"
+cp "$SPAR" "$SAK"
+if ! cmp -s "$SPAR" "$SAK"; then
+  echo "FAIL  harness — $SAK kunde inte återställas, ÅTGÄRDA MANUELLT"
+  echo; echo "$pass PASS, $fail FAIL, ODÖMBART"
+  exit 2
+fi
 if [ "$kod" -ne 0 ] && echo "$ut" | grep -qi "hash_mismatch"; then
-  ok "K2 manipulerad fil → hash_mismatch, körning stoppad"
+  ok "K3 manipulerad fil → hash_mismatch, körning stoppad"
 else
-  no "K2 hash-bindning" "manipulerad fil gav kod=$kod utan hash_mismatch"
+  no "K3 hash-bindning" "manipulerad fil gav kod=$kod utan hash_mismatch"
 fi
 
-# K3: fri text i verifier-fältet kan inte exekvera
-ut=$("$CLI" run 'echo INJEKTION > /tmp/h002-bevis' 2>&1); kod=$?
-if [ -f /tmp/h002-bevis ]; then
-  rm -f /tmp/h002-bevis
-  no "K3 ingen shell-exekvering" "fri text kördes som kommando"
+# K4: fri text i verifier-fältet kan inte exekvera.
+# Bevisfilen ligger i temp_kat, aldrig /tmp — under sandboxen är /tmp oskrivbar,
+# och en CLI som FAKTISKT exekverar strängen hade fått PASS av OS-stoppet.
+BEVIS="$WORK/injektionsbevis"
+ut=$("$CLI" run "echo INJEKTION > $BEVIS" 2>&1); kod=$?
+if [ -f "$BEVIS" ]; then
+  rm -f "$BEVIS"
+  no "K4 ingen shell-exekvering" "fri text kördes som kommando"
 elif [ "$kod" -ne 0 ]; then
-  ok "K3 fri text i verifier-fältet exekverar inte"
+  ok "K4 fri text i verifier-fältet exekverar inte"
 else
-  no "K3 ingen shell-exekvering" "okänt verifier-id gav exit 0"
+  no "K4 ingen shell-exekvering" "fri text gav exit 0"
 fi
 
-# K4: okänt id → avvisas, aldrig tyst PASS
+# K5: okänt id → avvisas, aldrig tyst PASS
 if "$CLI" run finns-inte-i-registret >/dev/null 2>&1; then
-  no "K4 okänt id" "okänt verifier-id gav exit 0"
+  no "K5 okänt id" "okänt verifier-id gav exit 0"
 else
-  ok "K4 okänt verifier-id avvisas"
+  ok "K5 okänt verifier-id avvisas"
 fi
 summera
