@@ -9,6 +9,11 @@ krav_komponent "$CLI"
 # git -C <underkatalog> rev-parse HEAD besvaras av repot och ger HEAD för
 # varje katalog i arbetskopian — en stub hade passerat.
 SHA=$(git rev-parse HEAD~1)
+# Grenbaslinjen tas EN gång för hela provet. K7 och K8 jämförde tidigare
+# före/efter sitt EGET fönster — en gren som skapas i K1 och aldrig tas bort
+# var osynlig för båda. Mätt: lögnstubben lämnade lognstub-gren kvar och
+# passerade ändå.
+GRENAR0=$(git branch --list | wc -l | tr -d ' ')
 "$CLI" destroy t1 >/dev/null 2>&1
 
 # K1: ren checkout på BEORDRAD base-SHA
@@ -97,33 +102,39 @@ else
   ok "K6 ogiltigt base-SHA avvisas"
 fi
 
-# K7: SIGINT mitt i create → ingen rest. Tredje ledet i exit_criterion,
-# tidigare helt oprövat.
-"$CLI" destroy t4 >/dev/null 2>&1
-gf=$(git branch --list | wc -l | tr -d ' ')
-( "$CLI" create t4 "$SHA" >/dev/null 2>&1 ) &
-bg=$!
-sleep 0.3
-kill -INT $bg 2>/dev/null
-wait $bg 2>/dev/null
-"$CLI" destroy t4 >/dev/null 2>&1
-WS4=$("$CLI" path t4 2>/dev/null)
-ge=$(git branch --list | wc -l | tr -d ' ')
-rest=""
-[ -n "$WS4" ] && [ -d "$WS4" ] && rest="$rest workspace-kvar"
-git worktree list --porcelain 2>/dev/null | grep -q "t4" && rest="$rest worktree-kvar"
-[ "$gf" != "$ge" ] && rest="$rest gren-kvar"
-if [ -z "$rest" ]; then
-  ok "K7 avbrott mitt i create lämnar ingen rest"
+# K7: SIGINT INUTI create → ingen rest. Tredje ledet i exit_criterion.
+# Mätt 2026-08-08: create tar 0,09-0,22 s på denna maskin. Ett enkelt
+# sleep 0.3 signalerar EFTER att arbetet är klart och prövar ingen kod —
+# städningen görs då av det efterföljande destroy. Signalen skickas därför
+# på fem punkter över fönstret, och med setsid så processgruppen får
+# signalen; skalets bakgrundsjobb sätter annars SIGINT till SIG_IGN.
+k7fel=""
+for f in 0.02 0.05 0.09 0.14 0.20; do
+  "$CLI" destroy t4 >/dev/null 2>&1
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$CLI" create t4 "$SHA" >/dev/null 2>&1 &
+  else
+    "$CLI" create t4 "$SHA" >/dev/null 2>&1 &
+  fi
+  bg=$!
+  sleep "$f"
+  kill -INT -"$bg" 2>/dev/null || kill -INT "$bg" 2>/dev/null
+  wait $bg 2>/dev/null
+  "$CLI" destroy t4 >/dev/null 2>&1
+  WS4=$("$CLI" path t4 2>/dev/null)
+  [ -n "$WS4" ] && [ -d "$WS4" ] && k7fel="$k7fel workspace@$f"
+  git worktree list --porcelain 2>/dev/null | grep -q "t4" && k7fel="$k7fel worktree@$f"
+done
+if [ -z "$k7fel" ]; then
+  ok "K7 avbrott inuti create lämnar ingen rest (5 signalpunkter 0.02-0.20 s)"
 else
-  no "K7 avbrottsstädning" "rest efter SIGINT:$rest"
+  no "K7 avbrottsstädning" "rest efter SIGINT:$k7fel"
 fi
 
 # K8: destroy städar helt — workspace, registrering och gren
-grenar_f=$(git branch --list | wc -l | tr -d ' ')
 "$CLI" destroy t1 >/dev/null 2>&1
 "$CLI" destroy t2 >/dev/null 2>&1
-grenar_e=$(git branch --list | wc -l | tr -d ' ')
+GRENAR1=$(git branch --list | wc -l | tr -d ' ')
 # Villkoren är INTE [ -n "$WS" ] && ... — en create som failar tyst gjorde
 # tidigare städningsproven gröna av frånvaro.
 if [ -z "$WS" ]; then
@@ -132,8 +143,8 @@ elif [ -d "$WS" ]; then
   no "K8 städning" "workspace finns kvar efter destroy"
 elif git worktree list --porcelain 2>/dev/null | grep -Fqx "worktree $WS"; then
   no "K8 städning" "kvarlämnad worktree-registrering efter destroy"
-elif [ "$grenar_f" != "$grenar_e" ]; then
-  no "K8 städning" "grenantalet ändrades av destroy: $grenar_f -> $grenar_e"
+elif [ "$GRENAR0" != "$GRENAR1" ]; then
+  no "K8 städning" "grenantalet ändrades under provet: $GRENAR0 -> $GRENAR1 — kvarlämnad gren"
 else
   ok "K8 destroy städar workspace, registrering och gren"
 fi
