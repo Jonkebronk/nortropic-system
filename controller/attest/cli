@@ -1,0 +1,105 @@
+#!/usr/bin/env python3.12
+"""controller/attest/cli — skiva 3: attestationer + stale-markering.
+
+Ett verifierat resultat binds till den candidate-SHA det gällde. Attestationen
+är därför aldrig en allmän utsaga om en task, utan om en task PÅ ett commit.
+
+    <dir> write <task> <sha>          skriver attestation bunden till candidate-SHA
+    <dir> read <task> [--require-valid]   läser attestationen; flaggan kräver giltig
+    <dir> invalidate <sha>            markerar attestationer som SHA:t träffar stale
+
+Katalogen anges av anroparen (h-001-formen). Utelämnas den används
+controller/attest/state/ under reporoten.
+
+Exit 0 = ok. Exit 1 = fel. En stale attestation kan aldrig läsas som giltig.
+"""
+
+import json
+import re
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/attest/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+FIL = "attestations.json"
+KOMMANDON = ("write", "read", "invalidate")
+SHA_FORM = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+
+
+def fel(text: str) -> int:
+    print(text, file=sys.stderr)
+    return 1
+
+
+def las(kat: Path) -> dict:
+    p = kat / FIL
+    if not p.exists():
+        return {"attestations": {}, "omtest_ko": []}
+    with p.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def skriv(kat: Path, state: dict) -> None:
+    kat.mkdir(parents=True, exist_ok=True)
+    with (kat / FIL).open("w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+def kmd_write(kat: Path, task: str, sha: str) -> int:
+    if not SHA_FORM.match(sha):
+        return fel(f"write: {sha} är ingen candidate-SHA (40 hex)")
+    state = las(kat)
+    # En ny attestation ersätter den gamla och är giltig igen: den gäller ett
+    # annat commit. Utan det hade en stale markering överlevt sitt eget commit.
+    state["attestations"][task] = {
+        "task": task,
+        "candidate_sha": sha.lower(),
+        "invalidates_on": [sha.lower()],
+        "stale": False,
+    }
+    state["omtest_ko"] = [t for t in state["omtest_ko"] if t != task]
+    skriv(kat, state)
+    return 0
+
+
+def kmd_read(kat: Path, task: str, kraver_giltig: bool) -> int:
+    post = las(kat)["attestations"].get(task)
+    if post is None:
+        return fel(f"read: ingen attestation för {task}")
+    if kraver_giltig and post["stale"]:
+        return fel(f"read: attestationen för {task} är stale — kan inte läsas som giltig")
+    print(json.dumps(post, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        return fel("användning: cli [<dir>] write <task> <sha> | read <task> [--require-valid]")
+    # Katalogen är första argumentet. Är den utelämnad börjar argumenten
+    # direkt med ett kommandonamn.
+    if argv[1] in KOMMANDON:
+        kat, arg = ROT / "controller" / "attest" / "state", argv[1:]
+    else:
+        kat, arg = Path(argv[1]), argv[2:]
+    if not arg:
+        return fel("användning: cli [<dir>] write <task> <sha> | read <task> [--require-valid]")
+
+    kommando = arg[0]
+    if kommando == "write":
+        if len(arg) != 3:
+            return fel("användning: cli [<dir>] write <task> <sha>")
+        return kmd_write(kat, arg[1], arg[2])
+    if kommando == "read":
+        if len(arg) == 2:
+            return kmd_read(kat, arg[1], False)
+        if len(arg) == 3 and arg[2] == "--require-valid":
+            return kmd_read(kat, arg[1], True)
+        return fel("användning: cli [<dir>] read <task> [--require-valid]")
+    return fel(f"okänt kommando: {kommando}")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
