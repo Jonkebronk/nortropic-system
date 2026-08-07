@@ -95,4 +95,51 @@ if "$CLI" "$D" owner h-dod >/dev/null 2>&1 && [ -n "$("$CLI" "$D" owner h-dod 2>
 else
   no "K6 kill -9" "ingen lease registrerad för h-dod — kontrollen mätte ingenting"
 fi
+# K7: klockskev. Två klockor, båda som absoluta ankare vid beviljandet;
+# reclaim kräver att BÅDA är överens om att tiden gått. Den farliga riktningen
+# är att den LÄSANDE processens väggklocka hoppar FRAMÅT — då ser leasen
+# utgången ut medan innehavaren tror sig äga den, och två processer äger samma
+# task. Prövas genom preparerade ankare, aldrig genom att röra systemklockan.
+# time.monotonic() har odefinierad nollpunkt PER PROCESS — ett ankare räknat
+# i ett fristående python-anrop är inte jämförbart med CLI:ts bas och blir
+# lätt negativt, vilket träffar omstartsundantaget i stället för det avsedda
+# fallet. Leasen skapas därför av komponenten själv, och endast fälten som
+# ska skevas skrivs om.
+prep() {  # $1 = task, $2 = vagg_alder_s, $3 = mono_alder_s ("neg" = före omstart)
+  rm -f "$D/$1.lease"
+  "$CLI" "$D" acquire "$1" --ttl 30 >/dev/null 2>&1
+  python3 -c '
+import json,sys,time
+task,va,ma,d = sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4]
+f = d+"/"+task+".lease"
+o = json.load(open(f))
+o["beviljad_vagg"] = time.time()-float(va)
+o["beviljad_mono"] = -1.0 if ma=="neg" else o["beviljad_mono"]-float(ma)
+o["ttl"] = 30.0
+json.dump(o, open(f,"w"))' "$1" "$2" "$3" "$D"
+}
+tar() { "$CLI" "$D" acquire "$1" --ttl 60 >/dev/null 2>&1; }
+
+fel=""
+# båda ankarna måste skrivas vid beviljande — mono=0 vore spärren avstängd
+"$CLI" "$D" acquire h-ankare --ttl 60 >/dev/null 2>&1
+python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+sys.exit(0 if isinstance(d.get("beviljad_mono"),(int,float)) and d["beviljad_mono"]!=0
+              and isinstance(d.get("beviljad_vagg"),(int,float)) and d["beviljad_vagg"]>0 else 1)'   "$D/h-ankare.lease" 2>/dev/null || fel="$fel ankare-saknas"
+
+prep h-s1 60 1   ; tar h-s1 && fel="$fel vagghopp-framat-gav-reclaim"
+prep h-s2 60 60  ; tar h-s2 || fel="$fel eniga-klockor-gav-ingen-reclaim"
+prep h-s3 1  60  ; tar h-s3 && fel="$fel vaggen-ej-utgangen-gav-reclaim"
+prep h-s4 60 neg ; tar h-s4 || fel="$fel omstart-med-utgangen-vagg-blockerade"
+prep h-s5 1  neg ; tar h-s5 && fel="$fel omstart-med-fardsk-vagg-gav-reclaim"
+printf 'inte json' > "$D/h-s6.lease"
+                   tar h-s6 && fel="$fel olasbar-lease-gav-reclaim"
+
+if [ -z "$fel" ]; then
+  ok "K7 klockskev: reclaim kräver att båda klockorna är överens"
+else
+  no "K7 klockskev" "misslyckade fall:$fel"
+fi
 summera
