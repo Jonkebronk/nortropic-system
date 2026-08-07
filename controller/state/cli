@@ -1,0 +1,103 @@
+#!/usr/bin/env python3.12
+"""controller/state/cli — skiva 1: SQLite-state + append-only eventlogg.
+
+Loggen är sanningen; SQLite är projektionen.
+
+    init <dir>           skapar state.db + events.jsonl i <dir>
+    append <dir> <json>  lägger till event, uppdaterar projektionen
+
+Alla artefakter skrivs under <dir> och ingen annanstans; komponenten har
+ingen inbyggd sökväg och väljer aldrig var loggen hamnar.
+
+Exit 0 = ok. Exit 1 = fel.
+"""
+
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/state/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+LOGG = "events.jsonl"
+DB = "state.db"
+
+
+def fel(text: str) -> int:
+    print(text, file=sys.stderr)
+    return 1
+
+
+def giltigt_event(objekt: object) -> bool:
+    """Ett event är en JSON-dict med icke-tomma strängfälten task och status."""
+    return (
+        isinstance(objekt, dict)
+        and isinstance(objekt.get("task"), str)
+        and isinstance(objekt.get("status"), str)
+        and objekt["task"] != ""
+        and objekt["status"] != ""
+    )
+
+
+def kmd_init(kat: Path) -> int:
+    kat.mkdir(parents=True, exist_ok=True)
+    (kat / LOGG).touch()
+    db = sqlite3.connect(kat / DB)
+    try:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS task_state ("
+            " task TEXT PRIMARY KEY,"
+            " status TEXT NOT NULL)"
+        )
+        db.commit()
+    finally:
+        db.close()
+    return 0
+
+
+def kmd_append(kat: Path, rå: str) -> int:
+    logg, dbfil = kat / LOGG, kat / DB
+    if not logg.exists() or not dbfil.exists():
+        return fel(f"append: {kat} är inte initierad — kör init först")
+    try:
+        händelse = json.loads(rå)
+    except json.JSONDecodeError as e:
+        return fel(f"append: argumentet är inte giltig JSON — {e}")
+    if not giltigt_event(händelse):
+        return fel("append: event kräver icke-tomma strängfälten task och status")
+
+    # Loggen först: den är sanningen. Kanonisk enradsform, så ett event
+    # alltid är exakt en rad — annars kan projektionen inte rekonstrueras.
+    rad = json.dumps(händelse, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    with logg.open("a", encoding="utf-8") as f:
+        f.write(rad + "\n")
+
+    db = sqlite3.connect(dbfil)
+    try:
+        db.execute(
+            "INSERT INTO task_state (task, status) VALUES (?, ?)"
+            " ON CONFLICT(task) DO UPDATE SET status = excluded.status",
+            (händelse["task"], händelse["status"]),
+        )
+        db.commit()
+    finally:
+        db.close()
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 3:
+        return fel("användning: cli init <dir> | append <dir> <json>")
+    kommando, kat = argv[1], Path(argv[2])
+    if kommando == "init":
+        return kmd_init(kat)
+    if kommando == "append":
+        if len(argv) != 4:
+            return fel("användning: cli append <dir> <json>")
+        return kmd_append(kat, argv[3])
+    return fel(f"okänt kommando: {kommando}")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
