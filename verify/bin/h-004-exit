@@ -1,42 +1,98 @@
 #!/usr/bin/env bash
 # h-004-exit — skiva 4 (exklusiv lease)
-# Kontrakt: controller/lease/cli acquire <task> --ttl <sek> | release <task> | owner <task>
+# Kontrakt: controller/lease/cli [<dir>] acquire <task> --ttl <sek>
+#           controller/lease/cli [<dir>] release <task>
+#           controller/lease/cli [<dir>] owner <task>
+# Katalogen är valfri och ligger först; utelämnad ger controller/lease/state/.
+# Provet kör alltid mot temp_kat så inget tillstånd ärvs mellan körningar.
 . "$(dirname "$0")/_lib.sh"
 CLI="controller/lease/cli"
 krav_komponent "$CLI"
 
-# K1: 100 samtidiga acquire → exakt 1 lyckas
-"$CLI" release h-race >/dev/null 2>&1
-tmp=$(mktemp -d)
+WORK="$(temp_kat)" || { echo "FAIL  harness — temp-katalog kunde inte skapas"; exit 2; }
+trap 'rm -rf "$WORK"' EXIT
+D="$WORK/state"
+
+# K1: acquire på fri task MÅSTE lyckas. Utan positiv kontroll är varje
+# efterföljande "misslyckades" meningslöst — en CLI som alltid failar
+# hade passerat K2, K3 och K6.
+if "$CLI" "$D" acquire h-pos --ttl 60 >/dev/null 2>&1; then
+  ok "K1 acquire på fri task lyckas"
+else
+  no "K1 positiv kontroll" "acquire misslyckades på en helt fri task"
+fi
+
+# K2: 100 samtidiga acquire → exakt 1 lyckas
+tmp="$WORK/race"
+mkdir -p "$tmp"
 for i in $(seq 1 100); do
-  ( "$CLI" acquire h-race --ttl 60 >/dev/null 2>&1 && touch "$tmp/$i" ) &
+  ( "$CLI" "$D" acquire h-race --ttl 60 >/dev/null 2>&1 && touch "$tmp/$i" ) &
 done
 wait
 antal=$(ls "$tmp" | wc -l | tr -d ' ')
-rm -rf "$tmp"
 if [ "$antal" = "1" ]; then
-  ok "K1 100 samtidiga starter → exakt 1 ägare"
+  ok "K2 100 samtidiga starter → exakt 1 ägare"
 else
-  no "K1 exklusivitet" "$antal av 100 fick lease"
+  no "K2 exklusivitet" "$antal av 100 fick lease"
 fi
 
-# K2: reclaim sker INTE före TTL
-"$CLI" release h-ttl >/dev/null 2>&1
-"$CLI" acquire h-ttl --ttl 30 >/dev/null 2>&1
-if "$CLI" acquire h-ttl --ttl 30 >/dev/null 2>&1; then
-  no "K2 TTL respekteras" "andra acquire lyckades medan lease var giltig"
+# K3: owner namnger innehavaren, och något annat efter release
+o1=$("$CLI" "$D" owner h-pos 2>/dev/null)
+"$CLI" "$D" release h-pos >/dev/null 2>&1
+o2=$("$CLI" "$D" owner h-pos 2>/dev/null)
+if [ -z "$o1" ]; then
+  no "K3 owner" "owner gav tomt svar på en hållen lease"
+elif [ "$o1" = "$o2" ]; then
+  no "K3 owner" "owner oförändrad efter release — rapporterar inte verkligt ägarskap"
 else
-  ok "K2 lease kan inte tas över före TTL"
+  ok "K3 owner namnger innehavaren och ändras vid release"
 fi
 
-# K3: reclaim sker EFTER TTL
-"$CLI" release h-kort >/dev/null 2>&1
-"$CLI" acquire h-kort --ttl 1 >/dev/null 2>&1
+# K4: release frigör på riktigt
+if "$CLI" "$D" acquire h-pos --ttl 60 >/dev/null 2>&1; then
+  ok "K4 release frigör leasen"
+  "$CLI" "$D" release h-pos >/dev/null 2>&1
+else
+  no "K4 release" "task gick inte att ta efter release — release är no-op eller läcker"
+fi
+
+# K5: TALET i --ttl styr, inte en hårdkodad utgång.
+# Två leases i SAMMA körning: kort går ut, lång gör det inte.
+# Sessionens bevis mot stub: acquire --ttl 99999 kunde tas över efter 3 s.
+"$CLI" "$D" acquire h-kort --ttl 1    >/dev/null 2>&1
+"$CLI" "$D" acquire h-lang --ttl 3600 >/dev/null 2>&1
 sleep 3
-if "$CLI" acquire h-kort --ttl 30 >/dev/null 2>&1; then
-  ok "K3 utgången lease kan reclaimas"
-  "$CLI" release h-kort >/dev/null 2>&1
+kort=1; lang=1
+"$CLI" "$D" acquire h-kort --ttl 60 >/dev/null 2>&1 && kort=0
+"$CLI" "$D" acquire h-lang --ttl 60 >/dev/null 2>&1 && lang=0
+if [ "$kort" -ne 0 ]; then
+  no "K5 TTL styr" "lease med --ttl 1 gick inte att ta över efter 3 s"
+elif [ "$lang" -eq 0 ]; then
+  no "K5 TTL styr" "lease med --ttl 3600 togs över efter 3 s — talet läses aldrig"
 else
-  no "K3 reclaim efter TTL" "utgången lease gick inte att ta över"
+  ok "K5 talet i --ttl styr utgången, inte en hårdkodad tid"
+fi
+
+# K6: kill -9 på ägaren. Leasen får INTE tas över före TTL trots död process,
+# och SKA gå att ta över efter. Det är hela skälet till TTL framför processkontroll.
+( "$CLI" "$D" acquire h-dod --ttl 4 >/dev/null 2>&1; sleep 30 ) &
+bg=$!
+sleep 1
+kill -9 $bg 2>/dev/null
+wait $bg 2>/dev/null
+if "$CLI" "$D" owner h-dod >/dev/null 2>&1 && [ -n "$("$CLI" "$D" owner h-dod 2>/dev/null)" ]; then
+  if "$CLI" "$D" acquire h-dod --ttl 60 >/dev/null 2>&1; then
+    no "K6 kill -9" "lease togs över före TTL bara för att processen dog"
+  else
+    sleep 5
+    if "$CLI" "$D" acquire h-dod --ttl 60 >/dev/null 2>&1; then
+      ok "K6 död ägare: reclaim efter TTL, aldrig före"
+      "$CLI" "$D" release h-dod >/dev/null 2>&1
+    else
+      no "K6 kill -9" "lease efter död ägare gick aldrig att reclaima"
+    fi
+  fi
+else
+  no "K6 kill -9" "ingen lease registrerad för h-dod — kontrollen mätte ingenting"
 fi
 summera
