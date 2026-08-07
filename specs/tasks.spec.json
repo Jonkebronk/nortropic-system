@@ -51,10 +51,10 @@
       "slice": 1,
       "title": "SQLite-state + append-only eventlogg",
       "summary": "Controllerns tillstånd i SQLite, varje övergång även som rad i events.jsonl. Loggen är sanningen; SQLite är projektionen.",
-      "allowed_write": ["controller/state/**", "tests/controller/state/**"],
+      "allowed_write": ["controller/state/**", "tests/controller/state/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-001-exit",
       "exit_criterion": "Rekonstruera statustabellen enbart ur events.jsonl, diffa mot SQLite → noll avvikelse. Trunkerad logg → rekonstruktion vägrar, aldrig tyst partiell.",
-      "docs_impact": "beslutslogg-rad",
+      "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": []
     },
     {
@@ -62,10 +62,10 @@
       "slice": 2,
       "title": "Verifier-runner med förgodkänt register",
       "summary": "Verifierare körs ur ett register med SHA per fil, argv utan shell. Registrera de BEFINTLIGA grindarna — check-invariants.mjs och nortropic-verify-suite.js — bygg ingen ny verifierare.",
-      "allowed_write": ["controller/verify/**", "tests/controller/verify/**"],
+      "allowed_write": ["controller/verify/**", "tests/controller/verify/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-002-exit",
       "exit_criterion": "Manipulerad verifierarfil → hash_mismatch FÖRE körning. Fri text i verifier-fältet kan inte exekvera. Registret pekar på befintliga grindar, inte kopior.",
-      "docs_impact": "beslutslogg-rad",
+      "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001"]
     },
     {
@@ -73,10 +73,10 @@
       "slice": 3,
       "title": "Attestationer + stale-markering",
       "summary": "Varje verifierat resultat binds till candidate-SHA. Commit som matchar invalidates_on gör attestationen stale och köar omtest.",
-      "allowed_write": ["controller/attest/**", "tests/controller/attest/**"],
+      "allowed_write": ["controller/attest/**", "tests/controller/attest/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-003-exit",
       "exit_criterion": "Verifiera task A → commit som matchar invalidates_on → A blir stale, omtest köas automatiskt. Stale attestation kan aldrig läsas som giltig.",
-      "docs_impact": "beslutslogg-rad",
+      "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-002"]
     },
     {
@@ -84,10 +84,10 @@
       "slice": 4,
       "title": "Exklusiv lease",
       "summary": "Exakt en controller äger en task åt gången. Lease har TTL; död process reclaimas efter TTL, aldrig före.",
-      "allowed_write": ["controller/lease/**", "tests/controller/lease/**"],
+      "allowed_write": ["controller/lease/**", "tests/controller/lease/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-004-exit",
       "exit_criterion": "100 samtidiga starter → exakt 1 ägare. kill -9 på ägaren → reclaim efter TTL, aldrig före. Klockskev åt fel håll → vägrar hellre än dubbelägande.",
-      "docs_impact": "beslutslogg-rad",
+      "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001"]
     },
     {
@@ -95,10 +95,10 @@
       "slice": 5,
       "title": "Isolerat workspace per försök",
       "summary": "Varje attempt får ren checkout på beordrad base-SHA i eget worktree. Workern arbetar aldrig i den levande arbetskopian.",
-      "allowed_write": ["controller/workspace/**", "tests/controller/workspace/**"],
+      "allowed_write": ["controller/workspace/**", "tests/controller/workspace/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-005-exit",
       "exit_criterion": "Ren checkout på beordrad base-SHA. Skrivförsök mot denied_write stoppas av OS, inte av prompt. Ctrl-C mitt i → rest städas, ingen kvarlämnad gren eller lås.",
-      "docs_impact": "beslutslogg-rad",
+      "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-004"]
     },
     {
@@ -106,10 +106,10 @@
       "slice": 6,
       "title": "Worker-launch med strikt utdatakontrakt",
       "summary": "Workern startas med en task och ett kuvert. Svaret parsas mekaniskt; prosa är ett fel, inte något att tolka.",
-      "allowed_write": ["controller/worker/**", "tests/controller/worker/**"],
+      "allowed_write": ["controller/worker/**", "tests/controller/worker/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-006-exit",
       "exit_criterion": "Prosa-svar → unparseable_output, aldrig tolkningsförsök. Påstådd CANDIDATE_SHA som inte finns i repot → failure, inte krasch. Tomt svar → failure, aldrig tyst PASS.",
-      "docs_impact": "beslutslogg-rad",
+      "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-005"]
     },
     {
@@ -117,10 +117,10 @@
       "slice": 7,
       "title": "Diffpolicy — mekanisk §A-vakt",
       "summary": "Kandidatens diff prövas mot §A-mängden, LOC-budget och docs-kravet innan den ens föreslås. Detta blir systemets första verkligt mekaniska §A-skydd.",
-      "allowed_write": ["controller/policy/**", "tests/controller/policy/**"],
+      "allowed_write": ["controller/policy/**", "tests/controller/policy/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-007-exit",
       "exit_criterion": "Kandidat som rör §A-mängden avvisas med sparat evidence. 3× LOC-budget avvisas. Task med docs_impact ≠ ingen utan docs-ändring i samma commit avvisas (regel 17 + 22).",
-      "docs_impact": "docs/00-borja-har.md + beslutslogg-rad",
+      "docs_impact": ["docs/00-borja-har.md", "docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-003", "h-006"]
     }
   ],
