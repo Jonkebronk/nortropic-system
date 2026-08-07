@@ -117,13 +117,15 @@ grep -rn "doctor #5\|doctor#5" . --include=*.js --include=*.mjs --include=*.md |
 
 | Task | Skiva | Exit-test |
 |---|---|---|
-| h-001 | 1 SQLite-state + eventlogg | Rekonstruera statustabell enbart ur `events.jsonl`, diffa mot SQLite → noll avvikelse |
+| h-001 **byggd** | 1 SQLite-state + eventlogg | Rekonstruera statustabell enbart ur `events.jsonl`, diffa mot SQLite → noll avvikelse |
 | h-002 | 2 Verifier-runner | Manipulerad verifierarfil → `hash_mismatch` före körning · fri text i verifier-fält kan inte exekvera. **Registrera befintliga grindar** (`check-invariants.mjs`, `nortropic-verify-suite.js`) — bygg ingen ny verifierare |
 | h-003 | 3 Attestation + stale | Verifiera task A · commit som matchar `invalidates_on` → A blir `stale`, omtest köas |
 | h-004 | 4 Lease | 100 samtidiga starter → exakt 1 ägare · `kill -9` → reclaim efter TTL, aldrig före |
 | h-005 | 5 Workspace per attempt | Ren checkout på beordrad base-SHA · §A-skrivning stoppas av OS · Ctrl-C → rest städas · ingen kvarlämnad gren/lås |
 | h-006 | 6 Worker-launch | Prosa-svar → `unparseable_output` · påstådd `CANDIDATE_SHA` som saknas → failure, inte krasch |
 | h-007 | 7 Diffpolicy | Kandidat som rör §A-mängden avvisas med sparat evidence · 3× LOC-budget avvisas · docs-krav ouppfyllt avvisas |
+
+**Byggt hittills:** h-001 — `controller/state/cli` (Python 3.12 stdlib, `init`/`append`/`dump`/`rebuild`), `./verify/bin/h-001-exit` 6 PASS 0 FAIL. Skivorna 2–7 obyggda.
 
 ### 7.1 Doctor #5-luckan — tre invarianter, egen HÖGRISK-commit
 

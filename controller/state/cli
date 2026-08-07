@@ -5,11 +5,15 @@ Loggen är sanningen; SQLite är projektionen.
 
     init <dir>           skapar state.db + events.jsonl i <dir>
     append <dir> <json>  lägger till event, uppdaterar projektionen
+    dump <dir>           skriver statustabellen ur SQLite till stdout
+    rebuild <dir>        rekonstruerar statustabellen ENBART ur events.jsonl,
+                         rör aldrig state.db
 
 Alla artefakter skrivs under <dir> och ingen annanstans; komponenten har
 ingen inbyggd sökväg och väljer aldrig var loggen hamnar.
 
-Exit 0 = ok. Exit 1 = fel.
+Exit 0 = ok. Exit 1 = fel. En trunkerad eller ogiltig logg vägras — hellre
+ingen rekonstruktion än en tyst partiell.
 """
 
 import json
@@ -29,6 +33,19 @@ def fel(text: str) -> int:
     return 1
 
 
+def kanonisk(tabell: dict[str, str]) -> str:
+    """Enda serialiseringen av statustabellen.
+
+    dump läser SQLite, rebuild läser loggen, och båda måste ge samma bytes.
+    Två serialiseringar hade gjort exit-testets diff till en formateringsfråga.
+    """
+    return json.dumps(
+        [{"task": t, "status": tabell[t]} for t in sorted(tabell)],
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def giltigt_event(objekt: object) -> bool:
     """Ett event är en JSON-dict med icke-tomma strängfälten task och status."""
     return (
@@ -41,6 +58,10 @@ def giltigt_event(objekt: object) -> bool:
 
 
 def kmd_init(kat: Path) -> int:
+    # En andra init hade skapat en tom projektion bredvid en full logg, och
+    # dump hade då tyst motsagt rebuild. Hellre vägran än två sanningar.
+    if (kat / LOGG).exists() or (kat / DB).exists():
+        return fel(f"init: {kat} är redan initierad — init skriver aldrig över en befintlig logg")
     kat.mkdir(parents=True, exist_ok=True)
     (kat / LOGG).touch()
     db = sqlite3.connect(kat / DB)
@@ -86,9 +107,55 @@ def kmd_append(kat: Path, rå: str) -> int:
     return 0
 
 
+def kmd_dump(kat: Path) -> int:
+    dbfil = kat / DB
+    if not dbfil.exists():
+        return fel(f"dump: {dbfil} saknas")
+    db = sqlite3.connect(dbfil)
+    try:
+        tabell = dict(db.execute("SELECT task, status FROM task_state").fetchall())
+    finally:
+        db.close()
+    print(kanonisk(tabell))
+    return 0
+
+
+def kmd_rebuild(kat: Path) -> int:
+    """Rekonstruerar tabellen ur loggen. Öppnar aldrig state.db."""
+    logg = kat / LOGG
+    if not logg.exists():
+        return fel(f"rebuild: {logg} saknas")
+    try:
+        innehåll = logg.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        return fel(f"rebuild: loggen är inte läsbar UTF-8 ({e}) — vägrar rekonstruera")
+
+    # En hel logg slutar med radbrytning. Slutar den mitt i en rad är den
+    # trunkerad, och den sista händelsen kan inte skiljas från en halv.
+    if innehåll and not innehåll.endswith("\n"):
+        return fel("rebuild: loggen slutar utan radbrytning — trunkerad, vägrar rekonstruera")
+
+    # Hela loggen valideras före en enda rad skrivs ut: en partiell
+    # rekonstruktion får aldrig kunna läsas som en fullständig.
+    tabell: dict[str, str] = {}
+    for nr, rad in enumerate(innehåll.splitlines(), start=1):
+        if not rad.strip():
+            return fel(f"rebuild: rad {nr} är tom — vägrar rekonstruera")
+        try:
+            händelse = json.loads(rad)
+        except json.JSONDecodeError as e:
+            return fel(f"rebuild: rad {nr} är inte giltig JSON ({e}) — vägrar rekonstruera")
+        if not giltigt_event(händelse):
+            return fel(f"rebuild: rad {nr} saknar task eller status — vägrar rekonstruera")
+        tabell[händelse["task"]] = händelse["status"]
+
+    print(kanonisk(tabell))
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
-        return fel("användning: cli init <dir> | append <dir> <json>")
+        return fel("användning: cli init|append|dump|rebuild <dir> [json]")
     kommando, kat = argv[1], Path(argv[2])
     if kommando == "init":
         return kmd_init(kat)
@@ -96,6 +163,10 @@ def main(argv: list[str]) -> int:
         if len(argv) != 4:
             return fel("användning: cli append <dir> <json>")
         return kmd_append(kat, argv[3])
+    if kommando == "dump":
+        return kmd_dump(kat)
+    if kommando == "rebuild":
+        return kmd_rebuild(kat)
     return fel(f"okänt kommando: {kommando}")
 
 
