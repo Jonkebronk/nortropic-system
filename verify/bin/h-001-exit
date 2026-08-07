@@ -88,6 +88,31 @@ else
   no "K5 loggen är sanningen" "rebuild misslyckades utan state.db"
 fi
 
+# ---- K6: init mot befintlig logg VÄGRAR, nollställer aldrig ------------------
+# Fynd 2026-08-07: init på redan initierad katalog skrev tom projektion bredvid
+# full logg. dump sa [], rebuild sa sanningen. En strökörning får aldrig kunna
+# nollställa en append-only logg.
+W6="$WORK/k6"
+mkdir -p "$W6"
+"$CLI" init "$W6" >/dev/null 2>&1
+"$CLI" append "$W6" '{"task":"h-001","status":"leased"}' >/dev/null 2>&1
+f6=$(wc -l < "$W6/events.jsonl" | tr -d ' ')
+
+if "$CLI" init "$W6" >/dev/null 2>&1; then
+  no "K6 init mot befintlig logg" "init returnerade 0 på redan initierad katalog"
+else
+  e6=$(wc -l < "$W6/events.jsonl" | tr -d ' ')
+  d6=$("$CLI" dump "$W6" 2>/dev/null)
+  r6=$("$CLI" rebuild "$W6" 2>/dev/null)
+  if [ "$e6" != "$f6" ]; then
+    no "K6 init mot befintlig logg" "init vägrade men loggen ändrades: $f6 -> $e6 rader"
+  elif [ -z "$d6" ] || [ "$d6" != "$r6" ]; then
+    no "K6 init mot befintlig logg" "projektionen skiljer sig från loggen efter vägrad init"
+  else
+    ok "K6 init mot befintlig logg vägrar, logg och projektion orörda"
+  fi
+fi
+
 echo
 echo "$pass PASS, $fail FAIL"
 [ "$fail" -eq 0 ] || exit 1
