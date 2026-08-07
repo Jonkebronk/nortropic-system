@@ -1,39 +1,68 @@
 #!/usr/bin/env bash
 # h-003-exit — skiva 3 (attestationer + stale-markering)
-# Kontrakt: controller/attest/cli write <task> <sha> | read <task> | invalidate <sha>
+# Kontrakt: controller/attest/cli <dir> write <task> <sha>
+#           controller/attest/cli <dir> read <task> [--require-valid]
+#           controller/attest/cli <dir> invalidate <sha>
+# Katalogen anges av anroparen, aldrig av komponenten (h-001-formen).
 . "$(dirname "$0")/_lib.sh"
 CLI="controller/attest/cli"
 krav_komponent "$CLI"
 
-SHA=$(git rev-parse HEAD)
+WORK="$(temp_kat)" || { echo "FAIL  harness — temp-katalog kunde inte skapas"; exit 2; }
+trap 'rm -rf "$WORK"' EXIT
+D="$WORK/state"
 
-# K1: attestation binds till candidate-SHA
-"$CLI" write h-test "$SHA" >/dev/null 2>&1
-if "$CLI" read h-test 2>/dev/null | grep -q "$SHA"; then
-  ok "K1 attestation bunden till candidate-SHA"
+# Fabricerat SHA — finns inte i repot, kan inte härledas ur git.
+# Ett prov som använder HEAD mäter bara att strängen finns i utdata.
+SHA="a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+ANNAT="fedcba9876543210fedcba9876543210fedcba98"
+
+# K1: attestation binds till candidate-SHA och PERSISTERAS
+"$CLI" "$D" write h-test "$SHA" >/dev/null 2>&1
+if "$CLI" "$D" read h-test 2>/dev/null | grep -q "$SHA"; then
+  ok "K1 attestation bunden till candidate-SHA och läsbar ur state"
 else
-  no "K1 SHA-bindning" "attestationen bär inte candidate-SHA"
+  no "K1 SHA-bindning" "attestationen bär inte candidate-SHA efter skrivning"
 fi
 
 # K2: attestation utan SHA avvisas
-if "$CLI" write h-test-2 >/dev/null 2>&1; then
+if "$CLI" "$D" write h-test-2 >/dev/null 2>&1; then
   no "K2 SHA obligatorisk" "attestation skrevs utan SHA"
 else
   ok "K2 attestation utan SHA avvisas"
 fi
 
-# K3: invalidering → stale
-"$CLI" invalidate "$SHA" >/dev/null 2>&1
-if "$CLI" read h-test 2>/dev/null | grep -qi "stale"; then
-  ok "K3 invalidering markerar attestationen stale"
+# K3: POSITIV kontroll — giltig attestation måste passera --require-valid.
+# Utan denna är "stale spärrar" och "läsning failar alltid" samma utfall.
+if "$CLI" "$D" read h-test --require-valid >/dev/null 2>&1; then
+  ok "K3 giltig attestation passerar --require-valid"
 else
-  no "K3 stale-markering" "attestationen står kvar som giltig efter invalidering"
+  no "K3 positiv kontroll" "--require-valid avvisade en GILTIG attestation — flaggan oimplementerad eller läsningen trasig"
 fi
 
-# K4: stale kan inte läsas som giltig
-if "$CLI" read h-test --require-valid >/dev/null 2>&1; then
-  no "K4 stale spärrar" "--require-valid accepterade en stale attestation"
+# K4: orelaterad invalidering rör inte attestationen
+"$CLI" "$D" invalidate "$ANNAT" >/dev/null 2>&1
+if "$CLI" "$D" read h-test --require-valid >/dev/null 2>&1; then
+  ok "K4 orelaterad invalidering lämnar attestationen giltig"
 else
-  ok "K4 stale attestation kan inte läsas som giltig"
+  no "K4 träffsäkerhet" "invalidering av annat SHA gjorde attestationen ogiltig"
+fi
+
+# K5: invalidering → stale. Grep mot VÄRDE, aldrig fältnamn —
+# {"stale":false} innehåller ordet stale och hade passerat en fältnamnsmatchning.
+"$CLI" "$D" invalidate "$SHA" >/dev/null 2>&1
+ut=$("$CLI" "$D" read h-test 2>/dev/null)
+if echo "$ut" | grep -Eqi '"stale"[[:space:]]*:[[:space:]]*true|(^|[^-[:alnum:]])stale([^"[:alnum:]]|$)' \
+   && ! echo "$ut" | grep -Eqi '"stale"[[:space:]]*:[[:space:]]*false'; then
+  ok "K5 invalidering markerar attestationen stale"
+else
+  no "K5 stale-markering" "attestationen står inte som stale efter invalidering"
+fi
+
+# K6: stale kan inte läsas som giltig
+if "$CLI" "$D" read h-test --require-valid >/dev/null 2>&1; then
+  no "K6 stale spärrar" "--require-valid accepterade en stale attestation"
+else
+  ok "K6 stale attestation kan inte läsas som giltig"
 fi
 summera
