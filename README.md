@@ -1,6 +1,6 @@
 # nortropic-system
 
-Senast verifierad mot systemet: 2026-07-31 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-08-07 · v17 (denna commit)
 Verifieringsomfång: fullverifierad — 27 påståenden mot HEAD (2135d0e) plus denna batchs design-reviewer-ändring; 1 avvikelse funnen och rättad i denna commit (scripts/-raden saknade check-invariants.mjs), 0 avvikelser utanför deltat. Basstämpeln 2026-07-30 sattes av [AUTO-N1] 64acf9f och är inte oberoende granskad.
 
 Nortropic är ett system av Claude Code-agenter, skills och workflows som planerar, bygger, granskar och lanserar konverterande webbplatser för svenska egenföretagare och lokala småföretag — hantverkare, frisörer, hunddagis, blomsterhandlare... (kalibrering per kund via briefens §7 Kalibreringsprofil; scope-gränserna i [docs/06-scope.md](docs/06-scope.md)). Det är byggt för en operatör som kör en sajt i taget: människan fattar besluten vid de hårda stoppen, agenterna gör arbetet däremellan. Kvaliteten mäts med en versionerad eval-rubrik, och systemet förbättrar sig självt via en steward som föreslår — och som sedan v15 dessutom självapplicerar en strikt avgränsad ändringsklass under konstitutionen ([docs/07-konstitution.md](docs/07-konstitution.md)), grindat av kill-switchen `AUTOPILOT` (default `off`); allt annat kräver mänskligt godkännande.
@@ -39,6 +39,7 @@ Detaljerad nodkarta med agent, modell och effort per nod finns i [docs/01-oversi
 - **`AUTOPILOT`** — trappans kill-switch: `off` | `n1` | `on` (saknad fil = `off`). Skrivs endast av människa; nivåbyte är en commit.
 - **`CLAUDE.md`** — versionerad rot-pekare (v17), laddas varje tur: en rad som pekar till det enkla dokumentationslagret så lagren aldrig glider isär.
 - **`docs/`** — dokumentationen (denna leverans). Beskriver det systemet ÄR; varje påstående ska gå att spåra till en fil.
+- **`docs/loop/`** — kontrollplanet: byggplan v3, v4.1-arkitekturen, granskningsrubriken, loop-reglerna och arkivet (5Z-inventeringen + Post-Workspace-paketet som kravinput). Loopen bygger och förbättrar fabriken; den rör aldrig kundflödet, och §A-ytan i konstitutionen ändras bara av människa.
 
 ## Dokumentation
 
