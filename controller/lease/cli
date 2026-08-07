@@ -1,0 +1,126 @@
+#!/usr/bin/env python3.12
+"""controller/lease/cli — skiva 4: exklusiv lease.
+
+Exakt en controller äger en task åt gången. Exklusiviteten vilar på
+O_CREAT|O_EXCL — en atomär operation i filsystemet, inte på en läs-sen-skriv
+som 100 samtidiga starter hade sluppit förbi.
+
+    [<dir>] acquire <task> --ttl <sek>   tar leasen om den är fri
+    [<dir>] release <task>               släpper leasen
+    [<dir>] owner <task>                 skriver innehavaren, tomt om ingen
+
+Katalogen är valfri och ligger först; utelämnad ger controller/lease/state/.
+
+Exit 0 = leasen är din / kommandot lyckades. Exit 1 = den ägs av någon annan,
+eller fel.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/lease/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+KOMMANDON = ("acquire", "release", "owner")
+# Tasknamnet blir ett filnamn. Utan denna spärr är ../../ ett giltigt tasknamn.
+TASK_FORM = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def fel(text: str) -> int:
+    print(text, file=sys.stderr)
+    return 1
+
+
+def lease_fil(kat: Path, task: str) -> Path:
+    return kat / f"{task}.lease"
+
+
+def jag() -> str:
+    return f"{os.uname().nodename}:{os.getpid()}"
+
+
+def las_lease(p: Path) -> dict | None:
+    try:
+        with p.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def skapa_exklusivt(p: Path, data: dict) -> bool:
+    """Enda vägen till ägarskap. O_EXCL gör att exakt en process vinner."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, sort_keys=True)
+        f.write("\n")
+    return True
+
+
+def kmd_acquire(kat: Path, task: str, ttl: float) -> int:
+    data = {
+        "task": task,
+        "agare": jag(),
+        "ttl": ttl,
+        "beviljad_vagg": time.time(),
+        "beviljad_mono": time.monotonic(),
+    }
+    if skapa_exklusivt(lease_fil(kat, task), data):
+        return 0
+    return fel(f"acquire: {task} ägs redan")
+
+
+def kmd_release(kat: Path, task: str) -> int:
+    lease_fil(kat, task).unlink(missing_ok=True)
+    return 0
+
+
+def kmd_owner(kat: Path, task: str) -> int:
+    lease = las_lease(lease_fil(kat, task))
+    if lease is None:
+        return fel(f"owner: {task} ägs inte")
+    print(lease["agare"])
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        return fel("användning: cli [<dir>] acquire <task> --ttl <sek> | release <task> | owner <task>")
+    if argv[1] in KOMMANDON:
+        kat, arg = ROT / "controller" / "lease" / "state", argv[1:]
+    else:
+        kat, arg = Path(argv[1]), argv[2:]
+    if len(arg) < 2:
+        return fel("användning: cli [<dir>] acquire <task> --ttl <sek> | release <task> | owner <task>")
+
+    kommando, task = arg[0], arg[1]
+    if not TASK_FORM.match(task):
+        return fel(f"otillåtet tasknamn: {task}")
+
+    if kommando == "acquire":
+        if len(arg) != 4 or arg[2] != "--ttl":
+            return fel("användning: cli [<dir>] acquire <task> --ttl <sek>")
+        try:
+            ttl = float(arg[3])
+        except ValueError:
+            return fel(f"--ttl kräver ett tal, fick {arg[3]}")
+        if ttl <= 0:
+            return fel(f"--ttl måste vara positiv, fick {ttl}")
+        return kmd_acquire(kat, task, ttl)
+    if kommando == "release":
+        return kmd_release(kat, task)
+    if kommando == "owner":
+        return kmd_owner(kat, task)
+    return fel(f"okänt kommando: {kommando}")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
