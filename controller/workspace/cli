@@ -15,14 +15,20 @@ med avsikt: ett workspace inuti repot hade delat arbetsträd med controllern.
 Utcheckningen är detached (`worktree add --detach`). Kandidaten är ett SHA,
 aldrig en gren — så finns det heller ingen gren att lämna kvar.
 
-Exit 0 = kommandot lyckades. Exit 1 = fel.
+Ett avbrutet create städar efter sig självt: SIGINT och SIGTERM river det
+halvskapade workspacet innan processen dör. Utan det vore ett avbrott mitt i
+utcheckningen samma sak som en kvarlämnad worktree-registrering.
+
+Exit 0 = kommandot lyckades. Exit 1 = fel. Exit 128+signal = avbrutet.
 """
 
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 if sys.version_info < (3, 12):
@@ -32,6 +38,11 @@ ROT = Path(__file__).resolve().parents[2]
 KOMMANDON = ("create", "path", "destroy")
 # attempt-id blir ett katalognamn. Utan denna spärr är ../../ ett giltigt id.
 ID_FORM = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Vad som ska rivas om processen dör mitt i create, och git-barnet som i så
+# fall måste dödas först. Sätts endast under create.
+_pagaende: tuple[Path, str] | None = None
+_barn: subprocess.Popen | None = None
 
 
 def fel(text: str) -> int:
@@ -47,6 +58,61 @@ def git(*argv: str) -> subprocess.CompletedProcess:
         text=True,
         check=False,
     )
+
+
+def git_avbrytbar(*argv: str) -> subprocess.CompletedProcess:
+    """Som git(), men barnet är åtkomligt för signalhanteraren.
+
+    `worktree add` är det enda kommandot som hinner avbrytas mitt i. Ett
+    rmtree medan git fortfarande skriver hade lämnat rest efter sig — barnet
+    dödas därför först, städningen sker sedan.
+
+    Egen processgrupp (`start_new_session`): `worktree add` startar en egen
+    utcheckningsprocess, och att döda enbart git lämnade barnbarnet skrivande
+    i katalogen medan rmtree gick igenom den. Mätt: rest kvar i 2 av 13
+    signalkörningar innan gruppen dödades i stället för processen.
+    """
+    global _barn
+    p = subprocess.Popen(
+        ["git", "-C", str(ROT), *argv],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    _barn = p
+    try:
+        ut, err = p.communicate()
+    finally:
+        _barn = None
+    return subprocess.CompletedProcess(p.args, p.returncode, ut, err)
+
+
+def _doda_gruppen(p: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(os.getpgid(p.pid), sig)
+    except (ProcessLookupError, PermissionError):
+        (p.terminate if sig == signal.SIGTERM else p.kill)()
+
+
+def _doda_barnet() -> None:
+    p = _barn
+    if p is None or p.poll() is not None:
+        return
+    _doda_gruppen(p, signal.SIGTERM)
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _doda_gruppen(p, signal.SIGKILL)
+        p.wait()
+
+
+def _avbryt(signum: int, _frame) -> None:
+    """SIGINT/SIGTERM mitt i create: döda git, riv resten, dö med rätt kod."""
+    _doda_barnet()
+    if _pagaende is not None:
+        riv(*_pagaende)
+    sys.exit(128 + signum)
 
 
 def giltigt_id(attempt: str) -> bool:
@@ -76,20 +142,32 @@ def registrerad(ws: Path) -> bool:
     return any(rad == f"worktree {ws}" for rad in r.stdout.splitlines())
 
 
-def riv(rot: Path, attempt: str) -> None:
+def riv(rot: Path, attempt: str) -> bool:
     """Idempotent städning: katalog, registrering, prune. Aldrig ett undantag.
 
     Ordningen är avsiktlig. `worktree remove` först, så git får städa sitt eget
     register. Faller den (halvskapat workspace) tar rmtree katalogen, och prune
     plockar bort registreringen som pekar på en sökväg som inte finns längre.
+
+    Utfallet KONTROLLERAS. `rmtree(ignore_errors=True)` sväljer sitt eget
+    misslyckande — en städning som tyst inte städade är samma defekt som ingen
+    städning. Tre försök, sedan sant eller falskt om det som faktiskt står kvar.
     """
     ws = workspace(rot, attempt)
-    git("worktree", "remove", "--force", str(ws))
-    shutil.rmtree(ws, ignore_errors=True)
-    git("worktree", "prune")
+    for försök in range(3):
+        git("worktree", "remove", "--force", str(ws))
+        shutil.rmtree(ws, ignore_errors=True)
+        git("worktree", "prune")
+        if not ws.exists() and not registrerad(ws):
+            return True
+        if försök < 2:
+            time.sleep(0.05)
+    return not ws.exists() and not registrerad(ws)
 
 
 def gor_create(rot: Path, attempt: str, base: str) -> int:
+    global _pagaende
+
     sha = los_upp_sha(base)
     if sha is None:
         return fel(f"okänt base-SHA: {base}")
@@ -98,8 +176,21 @@ def gor_create(rot: Path, attempt: str, base: str) -> int:
     if ws.exists():
         return fel(f"workspace finns redan: {ws} — kör destroy {attempt} först")
 
-    rot.mkdir(parents=True, exist_ok=True)
-    r = git("worktree", "add", "--detach", str(ws), sha)
+    # Städningsansvaret tas FÖRE första skrivningen. Sätts det efteråt finns
+    # ett fönster där ett avbrott lämnar rest.
+    _pagaende = (rot, attempt)
+    try:
+        rot.mkdir(parents=True, exist_ok=True)
+        r = git_avbrytbar("worktree", "add", "--detach", str(ws), sha)
+    except BaseException:
+        # Allt annat som kan slå av processen mitt i — diskfel, KeyboardInterrupt
+        # som hann före hanteraren — får inte lämna ett halvskapat workspace.
+        _doda_barnet()
+        riv(rot, attempt)
+        raise
+    finally:
+        _pagaende = None
+
     if r.returncode != 0:
         riv(rot, attempt)
         return fel(f"worktree add misslyckades: {r.stderr.strip()}")
@@ -117,14 +208,18 @@ def gor_path(rot: Path, attempt: str) -> int:
 
 
 def gor_destroy(rot: Path, attempt: str) -> int:
-    riv(rot, attempt)
-    ws = workspace(rot, attempt)
-    if ws.exists() or registrerad(ws):
-        return fel(f"workspace kunde inte städas helt: {ws}")
+    if not riv(rot, attempt):
+        return fel(f"workspace kunde inte städas helt: {workspace(rot, attempt)}")
     return 0
 
 
 def main(argv: list[str]) -> int:
+    # Hanterarna installeras före allt arbete. Installerades de först inne i
+    # create dog processen med en rå KeyboardInterrupt-traceback om signalen
+    # kom under SHA-uppslaget — mätt i sveptet, exit -2 med stackspår.
+    signal.signal(signal.SIGINT, _avbryt)
+    signal.signal(signal.SIGTERM, _avbryt)
+
     if not argv:
         return fel(__doc__ or "")
 
@@ -154,4 +249,14 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        # Fönstret innan main() hunnit installera hanterarna: Pythons egen
+        # default höjer KeyboardInterrupt. Utan detta dör processen med ett
+        # stackspår i stället för en exitkod. Ingenting är skrivet så tidigt,
+        # men städningen görs ändå — den är idempotent.
+        _doda_barnet()
+        if _pagaende is not None:
+            riv(*_pagaende)
+        sys.exit(130)
