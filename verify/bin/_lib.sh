@@ -1,5 +1,5 @@
 # Delad hjälpkod för exit-testerna. Källas av varje h-00N-exit.
-# Odömbart räknas ALLTID som FAIL — aldrig tyst grönt.
+# Odömbart räknas ALDRIG som grönt. exit 0 = PASS, 1 = FAIL, 2 = ODÖMBART.
 set -u
 pass=0; fail=0
 ok() { echo "PASS  $1"; pass=$((pass+1)); }
@@ -15,4 +15,24 @@ krav_komponent() {
 summera() {
   echo; echo "$pass PASS, $fail FAIL"
   [ "$fail" -eq 0 ] || exit 1
+}
+
+# Mekanismkontroll. Ett test som förväntar sig ett STOPP måste först belägga
+# att stoppmekanismen är aktiv — annars är "nekade" och "fanns inte" samma
+# utfall. Odömbart är varken PASS eller FAIL: exit 2.
+#   $1 = mekanismens namn
+#   $2 = kommando som lyckas (exit 0) om och endast om mekanismen är aktiv
+krav_mekanism() {
+  if ! eval "$2" >/dev/null 2>&1; then
+    echo "SKIP  K1 mekanism — $1 ej aktiv, testet är odömbart"
+    echo; echo "$pass PASS, $fail FAIL, ODÖMBART"
+    exit 2
+  fi
+  ok "K1 mekanism aktiv: $1"
+}
+
+# Temp-katalog. verify/ ligger i denyWrite — ett test som skriver bredvid sig
+# själv fallerar på skrivförbud och rapporterar rött av fel skäl.
+temp_kat() {
+  mktemp -d "${TMPDIR:-/tmp}/nortropic-exit.XXXXXX"
 }
