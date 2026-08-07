@@ -54,7 +54,7 @@
       "allowed_write": ["controller/state/**", "tests/controller/state/**"],
       "exit_test": "verify/bin/h-001-exit",
       "exit_criterion": "Rekonstruera statustabellen enbart ur events.jsonl, diffa mot SQLite → noll avvikelse. Trunkerad logg → rekonstruktion vägrar, aldrig tyst partiell.",
-      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "docs_impact": "beslutslogg-rad",
       "depends_on": []
     },
     {
@@ -65,7 +65,7 @@
       "allowed_write": ["controller/verify/**", "tests/controller/verify/**"],
       "exit_test": "verify/bin/h-002-exit",
       "exit_criterion": "Manipulerad verifierarfil → hash_mismatch FÖRE körning. Fri text i verifier-fältet kan inte exekvera. Registret pekar på befintliga grindar, inte kopior.",
-      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "docs_impact": "beslutslogg-rad",
       "depends_on": ["h-001"]
     },
     {
@@ -76,7 +76,7 @@
       "allowed_write": ["controller/attest/**", "tests/controller/attest/**"],
       "exit_test": "verify/bin/h-003-exit",
       "exit_criterion": "Verifiera task A → commit som matchar invalidates_on → A blir stale, omtest köas automatiskt. Stale attestation kan aldrig läsas som giltig.",
-      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "docs_impact": "beslutslogg-rad",
       "depends_on": ["h-001", "h-002"]
     },
     {
@@ -87,7 +87,7 @@
       "allowed_write": ["controller/lease/**", "tests/controller/lease/**"],
       "exit_test": "verify/bin/h-004-exit",
       "exit_criterion": "100 samtidiga starter → exakt 1 ägare. kill -9 på ägaren → reclaim efter TTL, aldrig före. Klockskev åt fel håll → vägrar hellre än dubbelägande.",
-      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "docs_impact": "beslutslogg-rad",
       "depends_on": ["h-001"]
     },
     {
@@ -98,7 +98,7 @@
       "allowed_write": ["controller/workspace/**", "tests/controller/workspace/**"],
       "exit_test": "verify/bin/h-005-exit",
       "exit_criterion": "Ren checkout på beordrad base-SHA. Skrivförsök mot denied_write stoppas av OS, inte av prompt. Ctrl-C mitt i → rest städas, ingen kvarlämnad gren eller lås.",
-      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "docs_impact": "beslutslogg-rad",
       "depends_on": ["h-001", "h-004"]
     },
     {
@@ -109,7 +109,7 @@
       "allowed_write": ["controller/worker/**", "tests/controller/worker/**"],
       "exit_test": "verify/bin/h-006-exit",
       "exit_criterion": "Prosa-svar → unparseable_output, aldrig tolkningsförsök. Påstådd CANDIDATE_SHA som inte finns i repot → failure, inte krasch. Tomt svar → failure, aldrig tyst PASS.",
-      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "docs_impact": "beslutslogg-rad",
       "depends_on": ["h-001", "h-005"]
     },
     {
@@ -120,7 +120,7 @@
       "allowed_write": ["controller/policy/**", "tests/controller/policy/**"],
       "exit_test": "verify/bin/h-007-exit",
       "exit_criterion": "Kandidat som rör §A-mängden avvisas med sparat evidence. 3× LOC-budget avvisas. Task med docs_impact ≠ ingen utan docs-ändring i samma commit avvisas (regel 17 + 22).",
-      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + docs/00-borja-har.md + beslutslogg-rad",
+      "docs_impact": "docs/00-borja-har.md + beslutslogg-rad",
       "depends_on": ["h-001", "h-003", "h-006"]
     }
   ],
