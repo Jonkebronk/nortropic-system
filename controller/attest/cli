@@ -75,6 +75,26 @@ def kmd_read(kat: Path, task: str, kraver_giltig: bool) -> int:
     return 0
 
 
+def kmd_invalidate(kat: Path, sha: str) -> int:
+    if not SHA_FORM.match(sha):
+        return fel(f"invalidate: {sha} är ingen candidate-SHA (40 hex)")
+    sha = sha.lower()
+    state = las(kat)
+    traffade = []
+    for task, post in state["attestations"].items():
+        # Träffar bara attestationer som SHA:t faktiskt invaliderar. En
+        # orelaterad commit lämnar attestationen giltig.
+        if sha in post["invalidates_on"] and not post["stale"]:
+            post["stale"] = True
+            traffade.append(task)
+            if task not in state["omtest_ko"]:
+                state["omtest_ko"].append(task)
+    if traffade:
+        skriv(kat, state)
+    print(f"invaliderade {len(traffade)}: {' '.join(traffade) if traffade else '-'}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return fel("användning: cli [<dir>] write <task> <sha> | read <task> [--require-valid]")
@@ -98,6 +118,10 @@ def main(argv: list[str]) -> int:
         if len(arg) == 3 and arg[2] == "--require-valid":
             return kmd_read(kat, arg[1], True)
         return fel("användning: cli [<dir>] read <task> [--require-valid]")
+    if kommando == "invalidate":
+        if len(arg) != 2:
+            return fel("användning: cli [<dir>] invalidate <sha>")
+        return kmd_invalidate(kat, arg[1])
     return fel(f"okänt kommando: {kommando}")
 
 
