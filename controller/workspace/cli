@@ -1,0 +1,157 @@
+#!/usr/bin/env python3.12
+"""controller/workspace/cli — skiva 5: isolerat workspace per försök.
+
+Varje attempt får en ren utcheckning på beordrad base-SHA i ett eget
+git-worktree. Workern arbetar aldrig i den levande arbetskopian.
+
+    [<rot>] create <attempt-id> <base-sha>   skapar workspacet, skriver sökvägen
+    [<rot>] path <attempt-id>                skriver sökvägen, tomt om det saknas
+    [<rot>] destroy <attempt-id>             river workspacet, registreringen och resten
+
+Roten är valfri och ligger först; utelämnad ger <repo>/../worktrees — alltså
+`~/nortropic/worktrees` i drift. Den ligger UTANFÖR den levande arbetskopian
+med avsikt: ett workspace inuti repot hade delat arbetsträd med controllern.
+
+Utcheckningen är detached (`worktree add --detach`). Kandidaten är ett SHA,
+aldrig en gren — så finns det heller ingen gren att lämna kvar.
+
+Exit 0 = kommandot lyckades. Exit 1 = fel.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/workspace/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+KOMMANDON = ("create", "path", "destroy")
+# attempt-id blir ett katalognamn. Utan denna spärr är ../../ ett giltigt id.
+ID_FORM = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def fel(text: str) -> int:
+    print(text, file=sys.stderr)
+    return 1
+
+
+def git(*argv: str) -> subprocess.CompletedProcess:
+    """Git utan skal. argv är en lista — fri text kan aldrig bli ett kommando."""
+    return subprocess.run(
+        ["git", "-C", str(ROT), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def giltigt_id(attempt: str) -> bool:
+    return bool(ID_FORM.match(attempt)) and attempt not in (".", "..")
+
+
+def workspace(rot: Path, attempt: str) -> Path:
+    return rot / attempt
+
+
+def los_upp_sha(sha: str) -> str | None:
+    """Full commit-SHA, eller None om referensen inte finns i repot.
+
+    ^{commit} gör att ett giltigt blob- eller tree-SHA inte duger — base måste
+    vara en commit att checka ut.
+    """
+    r = git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+    ut = r.stdout.strip()
+    return ut if r.returncode == 0 and ut else None
+
+
+def registrerad(ws: Path) -> bool:
+    """Står workspacet i repots worktree-register?"""
+    r = git("worktree", "list", "--porcelain")
+    if r.returncode != 0:
+        return False
+    return any(rad == f"worktree {ws}" for rad in r.stdout.splitlines())
+
+
+def riv(rot: Path, attempt: str) -> None:
+    """Idempotent städning: katalog, registrering, prune. Aldrig ett undantag.
+
+    Ordningen är avsiktlig. `worktree remove` först, så git får städa sitt eget
+    register. Faller den (halvskapat workspace) tar rmtree katalogen, och prune
+    plockar bort registreringen som pekar på en sökväg som inte finns längre.
+    """
+    ws = workspace(rot, attempt)
+    git("worktree", "remove", "--force", str(ws))
+    shutil.rmtree(ws, ignore_errors=True)
+    git("worktree", "prune")
+
+
+def gor_create(rot: Path, attempt: str, base: str) -> int:
+    sha = los_upp_sha(base)
+    if sha is None:
+        return fel(f"okänt base-SHA: {base}")
+
+    ws = workspace(rot, attempt)
+    if ws.exists():
+        return fel(f"workspace finns redan: {ws} — kör destroy {attempt} först")
+
+    rot.mkdir(parents=True, exist_ok=True)
+    r = git("worktree", "add", "--detach", str(ws), sha)
+    if r.returncode != 0:
+        riv(rot, attempt)
+        return fel(f"worktree add misslyckades: {r.stderr.strip()}")
+
+    print(ws)
+    return 0
+
+
+def gor_path(rot: Path, attempt: str) -> int:
+    ws = workspace(rot, attempt)
+    if not ws.is_dir():
+        return 1
+    print(ws)
+    return 0
+
+
+def gor_destroy(rot: Path, attempt: str) -> int:
+    riv(rot, attempt)
+    ws = workspace(rot, attempt)
+    if ws.exists() or registrerad(ws):
+        return fel(f"workspace kunde inte städas helt: {ws}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        return fel(__doc__ or "")
+
+    if argv[0] in KOMMANDON:
+        rot = ROT.parent / "worktrees"
+    else:
+        rot = Path(argv[0]).expanduser().resolve()
+        argv = argv[1:]
+
+    if not argv or argv[0] not in KOMMANDON:
+        return fel(f"okänt kommando; välj ett av {', '.join(KOMMANDON)}")
+    kommando, argv = argv[0], argv[1:]
+
+    if not argv:
+        return fel(f"{kommando} kräver ett attempt-id")
+    attempt, argv = argv[0], argv[1:]
+    if not giltigt_id(attempt):
+        return fel(f"ogiltigt attempt-id: {attempt!r}")
+
+    if kommando == "create":
+        if len(argv) != 1:
+            return fel("create kräver <attempt-id> <base-sha>")
+        return gor_create(rot, attempt, argv[0])
+    if kommando == "path":
+        return gor_path(rot, attempt)
+    return gor_destroy(rot, attempt)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
