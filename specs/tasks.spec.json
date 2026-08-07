@@ -40,9 +40,9 @@
       "~/.claude/debug/**",
       "~/.claude/projects/**"
     ],
-    "max_changed_files": null,
-    "max_added_lines": null,
-    "note_on_limits": "Trösklarna sätts i Pass 1 ur uppmätt diffstorlek i batch 001–007. Null tills dess: odömbart, aldrig tyst grönt."
+    "max_changed_files": 8,
+    "max_added_lines": 600,
+    "note_on_limits": "Räknade 2026-08-08 ur fem byggda h-tasks (n=5): h-001 2 filer/175 rader, h-002 3/161, h-003 2/130, h-004 2/178, h-005 2/263. Median 2 filer/178 rader, max 3/263. Taket ligger drygt två gånger över max — marginalen är bedömning, inte mätning, och avser h-006 och h-007 som inte är byggda. Pass 0 och Pass 1 ingår INTE i nämnaren: de är ägarhandspass med dokument och konfiguration, inte worker-byggda tasks under allowed_write. v4.1 §16 öppnar circuit vid 2x budget = 16 filer/1200 rader."
   },
 
   "tasks": [
