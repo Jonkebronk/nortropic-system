@@ -6,12 +6,17 @@ och bara om filens SHA-256 fortfarande är den som godkändes.
 
     list              listar registret: id, sökväg, SHA, startbar
     check <id>        jämför filens SHA mot registret, kör ingenting
+    run <id>          hash-kontroll FÖRE start, sedan körning med argv utan shell
+
+Fri text är aldrig ett kommando. Ett okänt id avvisas — det tolkas inte,
+och ingenting exekveras på vägen dit.
 
 Exit 0 = ok. Exit 1 = fel.
 """
 
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,9 +83,41 @@ def kmd_check(register: dict, vid: str) -> int:
     return 0
 
 
+def kmd_run(register: dict, vid: str) -> int:
+    # Okänt id avvisas här, före allt annat. Fri text i verifier-fältet är
+    # bara ett id som inte finns — det tolkas aldrig, det körs aldrig.
+    if vid not in register:
+        return fel(f"okänt verifier-id: {vid} — verifierare körs bara ur registret")
+
+    post = register[vid]
+    p = sakra_sokvag(post)
+    if p is None:
+        return fel(f"osäker eller saknad sökväg för {vid}: {post['path']}")
+
+    # Hash-kontrollen ligger FÖRE starten. En manipulerad verifierare får
+    # aldrig hinna köra en enda rad.
+    nu = sha256(p)
+    if nu != post["sha256"]:
+        return fel(
+            f"hash_mismatch: {post['path']} ändrad sedan registreringen — körning stoppad\n"
+            f"  registrerad: {post['sha256']}\n"
+            f"  på disk:     {nu}"
+        )
+
+    if not post.get("startbar"):
+        return fel(f"ej startbar: {vid} — {post.get('skal_ej_startbar', 'ingen subprocess-ingång')}")
+
+    runner = RUNNERS.get(post.get("runner"))
+    if runner is None:
+        return fel(f"okänd runner för {vid}: {post.get('runner')}")
+
+    # argv, aldrig shell.
+    return subprocess.run([runner, str(p)], cwd=ROT, shell=False).returncode
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        return fel("användning: cli list | check <verifier-id>")
+        return fel("användning: cli list | check <verifier-id> | run <verifier-id>")
     kommando = argv[1]
     try:
         register = las_register()
@@ -89,10 +126,10 @@ def main(argv: list[str]) -> int:
 
     if kommando == "list":
         return kmd_list(register)
-    if kommando == "check":
+    if kommando in ("check", "run"):
         if len(argv) != 3:
-            return fel("användning: cli check <verifier-id>")
-        return kmd_check(register, argv[2])
+            return fel(f"användning: cli {kommando} <verifier-id>")
+        return kmd_check(register, argv[2]) if kommando == "check" else kmd_run(register, argv[2])
     return fel(f"okänt kommando: {kommando}")
 
 
