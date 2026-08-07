@@ -1,0 +1,147 @@
+{
+  "spec_version": "1.0.0",
+  "written": "2026-08-07",
+  "base_sha": "a6639d719c13b430265186bf823efa828d89ebb1",
+  "authority": {
+    "plan": "docs/loop/byggplan-v3.md",
+    "architecture": "docs/loop/implementation-v4.1.md",
+    "rules": "docs/loop/regler.md",
+    "backlog": "docs/100-dagar/programregister.md",
+    "note": "Backloggen är programregistret. Denna spec beskriver kontrollplanets sju skivor — den är inte och blir aldrig en andra uppgiftslista."
+  },
+
+  "defaults": {
+    "branch_pattern": "nortropic/loop-<id>",
+    "allowed_write": [
+      "controller/**",
+      "tests/controller/**"
+    ],
+    "denied_write": [
+      "docs/07-konstitution.md",
+      "docs/03-regelverk.md",
+      "skills/nortropic-eval/references/eval-rubric.md",
+      "skills/nortropic-plan/references/juridikflaggor.md",
+      "workflows/**",
+      "tests/fixtures/**",
+      "agents/nortropic-steward.md",
+      "AUTOPILOT",
+      "scripts/check-invariants.mjs",
+      "specs/**",
+      "verify/**",
+      "CLAUDE.md"
+    ],
+    "denied_read": [
+      "~/.ssh/**",
+      "~/.aws/**",
+      "~/.config/gh/**",
+      "~/.claude/sessions/**",
+      "~/.claude/session-env/**",
+      "~/.claude/backups/**",
+      "~/.claude/debug/**",
+      "~/.claude/projects/**"
+    ],
+    "max_changed_files": null,
+    "max_added_lines": null,
+    "note_on_limits": "Trösklarna sätts i Pass 1 ur uppmätt diffstorlek i batch 001–007. Null tills dess: odömbart, aldrig tyst grönt."
+  },
+
+  "tasks": [
+    {
+      "id": "h-001",
+      "slice": 1,
+      "title": "SQLite-state + append-only eventlogg",
+      "summary": "Controllerns tillstånd i SQLite, varje övergång även som rad i events.jsonl. Loggen är sanningen; SQLite är projektionen.",
+      "allowed_write": ["controller/state/**", "tests/controller/state/**"],
+      "exit_test": "verify/bin/h-001-exit",
+      "exit_criterion": "Rekonstruera statustabellen enbart ur events.jsonl, diffa mot SQLite → noll avvikelse. Trunkerad logg → rekonstruktion vägrar, aldrig tyst partiell.",
+      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "depends_on": []
+    },
+    {
+      "id": "h-002",
+      "slice": 2,
+      "title": "Verifier-runner med förgodkänt register",
+      "summary": "Verifierare körs ur ett register med SHA per fil, argv utan shell. Registrera de BEFINTLIGA grindarna — check-invariants.mjs och nortropic-verify-suite.js — bygg ingen ny verifierare.",
+      "allowed_write": ["controller/verify/**", "tests/controller/verify/**"],
+      "exit_test": "verify/bin/h-002-exit",
+      "exit_criterion": "Manipulerad verifierarfil → hash_mismatch FÖRE körning. Fri text i verifier-fältet kan inte exekvera. Registret pekar på befintliga grindar, inte kopior.",
+      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "depends_on": ["h-001"]
+    },
+    {
+      "id": "h-003",
+      "slice": 3,
+      "title": "Attestationer + stale-markering",
+      "summary": "Varje verifierat resultat binds till candidate-SHA. Commit som matchar invalidates_on gör attestationen stale och köar omtest.",
+      "allowed_write": ["controller/attest/**", "tests/controller/attest/**"],
+      "exit_test": "verify/bin/h-003-exit",
+      "exit_criterion": "Verifiera task A → commit som matchar invalidates_on → A blir stale, omtest köas automatiskt. Stale attestation kan aldrig läsas som giltig.",
+      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "depends_on": ["h-001", "h-002"]
+    },
+    {
+      "id": "h-004",
+      "slice": 4,
+      "title": "Exklusiv lease",
+      "summary": "Exakt en controller äger en task åt gången. Lease har TTL; död process reclaimas efter TTL, aldrig före.",
+      "allowed_write": ["controller/lease/**", "tests/controller/lease/**"],
+      "exit_test": "verify/bin/h-004-exit",
+      "exit_criterion": "100 samtidiga starter → exakt 1 ägare. kill -9 på ägaren → reclaim efter TTL, aldrig före. Klockskev åt fel håll → vägrar hellre än dubbelägande.",
+      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "depends_on": ["h-001"]
+    },
+    {
+      "id": "h-005",
+      "slice": 5,
+      "title": "Isolerat workspace per försök",
+      "summary": "Varje attempt får ren checkout på beordrad base-SHA i eget worktree. Workern arbetar aldrig i den levande arbetskopian.",
+      "allowed_write": ["controller/workspace/**", "tests/controller/workspace/**"],
+      "exit_test": "verify/bin/h-005-exit",
+      "exit_criterion": "Ren checkout på beordrad base-SHA. Skrivförsök mot denied_write stoppas av OS, inte av prompt. Ctrl-C mitt i → rest städas, ingen kvarlämnad gren eller lås.",
+      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "depends_on": ["h-001", "h-004"]
+    },
+    {
+      "id": "h-006",
+      "slice": 6,
+      "title": "Worker-launch med strikt utdatakontrakt",
+      "summary": "Workern startas med en task och ett kuvert. Svaret parsas mekaniskt; prosa är ett fel, inte något att tolka.",
+      "allowed_write": ["controller/worker/**", "tests/controller/worker/**"],
+      "exit_test": "verify/bin/h-006-exit",
+      "exit_criterion": "Prosa-svar → unparseable_output, aldrig tolkningsförsök. Påstådd CANDIDATE_SHA som inte finns i repot → failure, inte krasch. Tomt svar → failure, aldrig tyst PASS.",
+      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + beslutslogg-rad",
+      "depends_on": ["h-001", "h-005"]
+    },
+    {
+      "id": "h-007",
+      "slice": 7,
+      "title": "Diffpolicy — mekanisk §A-vakt",
+      "summary": "Kandidatens diff prövas mot §A-mängden, LOC-budget och docs-kravet innan den ens föreslås. Detta blir systemets första verkligt mekaniska §A-skydd.",
+      "allowed_write": ["controller/policy/**", "tests/controller/policy/**"],
+      "exit_test": "verify/bin/h-007-exit",
+      "exit_criterion": "Kandidat som rör §A-mängden avvisas med sparat evidence. 3× LOC-budget avvisas. Task med docs_impact ≠ ingen utan docs-ändring i samma commit avvisas (regel 17 + 22).",
+      "docs_impact": "docs/loop/byggplan-v3.md §7-raden + docs/00-borja-har.md + beslutslogg-rad",
+      "depends_on": ["h-001", "h-003", "h-006"]
+    }
+  ],
+
+  "human_only": {
+    "note": "Byggs ALDRIG genom loopen. Människohand, HÖGRISK-märkt commit.",
+    "items": [
+      {
+        "id": "m-001",
+        "title": "INV-007 till INV-009 i check-invariants.mjs",
+        "after": "h-007",
+        "summary": "Doctor #5 tillskrivs tre mekaniska uppdrag och utför inget av dem. En invariant per uppdrag: §A-fällning oavsett commit-tagg, disable-model-invocation-vakt, semver-kontroll av profilKontraktVersion.",
+        "surface": "scripts/check-invariants.mjs (§A-nära, regressionsnätsfamiljen)"
+      },
+      {
+        "id": "m-002",
+        "title": "Avveckling av /usr/local/libexec/nortropic",
+        "after": "när det passar",
+        "summary": "Konton, hemkataloger och sudoers-regel borttagna 2026-08-07. Kvar: 122 binärer och tre tomma grupper, arkiverade i ~/Arkiv/nortropic-systeminstallation-2026-08-07.tar.gz. Ofarliga utan konton.",
+        "surface": "utanför repot"
+      }
+    ]
+  }
+}

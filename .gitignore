@@ -10,6 +10,9 @@
 !/workflows/
 !/scripts/
 !/tests/
+!/specs/
+!/verify/
+!/controller/
 !/AUTOPILOT
 !/vendored-skills/
 !/skills/
