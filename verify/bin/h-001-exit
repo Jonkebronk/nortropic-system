@@ -11,13 +11,13 @@
 #   rebuild <dir>              rekonstruerar statustabellen ENBART ur events.jsonl,
 #                              skriver som JSON till stdout, rör aldrig state.db
 #
-# Exit: 0 = alla kontroller PASS. 1 = minst en FAIL. Odömbart räknas som FAIL.
+# Exit: 0 = alla kontroller PASS. 1 = minst en FAIL. 2 = ODÖMBART (harness).
 # Kör från reporoten.
 
 set -u
 
 CLI="controller/state/cli"
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/nortropic-exit.XXXXXX")" || { echo "FAIL  K0 harness — temp-katalog kunde inte skapas"; exit 2; }
 trap 'rm -rf "$WORK"' EXIT
 
 pass=0; fail=0
