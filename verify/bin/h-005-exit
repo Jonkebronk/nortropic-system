@@ -5,7 +5,10 @@
 CLI="controller/workspace/cli"
 krav_komponent "$CLI"
 
-SHA=$(git rev-parse HEAD)
+# Base-SHA skilt från HEAD tvingar fram en verklig utcheckning.
+# git -C <underkatalog> rev-parse HEAD besvaras av repot och ger HEAD för
+# varje katalog i arbetskopian — en stub hade passerat.
+SHA=$(git rev-parse HEAD~1)
 "$CLI" destroy t1 >/dev/null 2>&1
 
 # K1: ren checkout på BEORDRAD base-SHA
@@ -17,22 +20,39 @@ else
   no "K1 base-SHA" "workspace saknas eller står på fel SHA"
 fi
 
-# K2: workspace är INTE den levande arbetskopian
-if [ -n "$WS" ] && [ "$(cd "$WS" && pwd -P)" != "$(pwd -P)" ]; then
-  ok "K2 workspace är skilt från den levande arbetskopian"
+# K2: workspacet ligger utanför den levande arbetskopians träd.
+# pwd -P-olikhet bevisar inget — varje underkatalog skiljer sig från roten.
+if [ -z "$WS" ]; then
+  no "K2 isolering" "ingen workspace-sökväg"
+elif [ "$(cd "$WS" && pwd -P)" = "$(git rev-parse --show-toplevel)" ]; then
+  no "K2 isolering" "workspace ÄR den levande arbetskopian"
+elif case "$(cd "$WS" && pwd -P)/" in "$(git rev-parse --show-toplevel)/"*) true;; *) false;; esac; then
+  no "K2 isolering" "workspace ligger inuti den levande arbetskopian"
 else
-  no "K2 isolering" "workspace pekar på den levande arbetskopian"
+  ok "K2 workspace ligger utanför den levande arbetskopians träd"
 fi
 
-# K3: skrivförsök mot §A-yta stoppas
-if [ -n "$WS" ] && [ -e "$WS/AUTOPILOT" ]; then
-  if (echo on > "$WS/AUTOPILOT") 2>/dev/null; then
-    no "K3 §A-skydd" "AUTOPILOT gick att skriva i workspace"
-  else
-    ok "K3 skrivförsök mot §A-yta stoppas av filsystemet"
-  fi
+# K3: workspacet är ett VERKLIGT git-worktree med egen HEAD, inte en katalog
+# som råkar ligga i arbetskopian. Prövar inte längre §A-skrivskydd: mätt
+# 2026-08-07 att denyWrite nekar hela sökvägsgrenen ovanför sitt mål, så en
+# katalog kan inte samtidigt vara skapbar och innehålla skyddade filer.
+# §A i workspacet vaktas av skiva 7:s diffpolicy — svagare, och känt svagare.
+if [ -z "$WS" ]; then
+  no "K3 verkligt worktree" "ingen workspace-sökväg att pröva"
 else
-  no "K3 §A-skydd" "kunde inte pröva — AUTOPILOT saknas i workspace"
+  gd=$(git -C "$WS" rev-parse --git-dir 2>/dev/null)
+  gcd=$(git -C "$WS" rev-parse --git-common-dir 2>/dev/null)
+  topp=$(git -C "$WS" rev-parse --show-toplevel 2>/dev/null)
+  egen=$(cd "$WS" && pwd -P)
+  if [ -z "$gd" ] || [ -z "$gcd" ]; then
+    no "K3 verkligt worktree" "workspace är inte ett git-arbetsträd alls"
+  elif [ "$gd" = "$gcd" ]; then
+    no "K3 verkligt worktree" "git-dir = common-dir — huvudarbetskopian, inget worktree"
+  elif [ "$topp" != "$egen" ]; then
+    no "K3 verkligt worktree" "workspace är en underkatalog i ett annat arbetsträd"
+  else
+    ok "K3 workspace är ett eget git-worktree med egen git-dir"
+  fi
 fi
 
 # K4: destroy städar helt
@@ -42,7 +62,7 @@ if [ -n "$WS" ] && [ -d "$WS" ]; then
 else
   ok "K4 destroy städar workspace"
 fi
-if git worktree list 2>/dev/null | grep -q "t1"; then
+if [ -n "$WS" ] && git worktree list --porcelain 2>/dev/null | grep -Fqx "worktree $WS"; then
   no "K4b städning" "kvarlämnad worktree efter destroy"
 else
   ok "K4b ingen kvarlämnad worktree"
