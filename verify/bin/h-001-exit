@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# h-001-exit — exit-test för skiva 1 (SQLite-state + append-only eventlogg)
+#
+# Skrivet FÖRE komponenten. Detta test DEFINIERAR kontraktet:
+#   controller/state/cli <kommando> [argument]
+#
+# Kommandon som h-001 måste implementera:
+#   init <dir>                 skapar state.db + events.jsonl i <dir>
+#   append <dir> <json>        lägger till event, uppdaterar projektionen
+#   dump <dir>                 skriver statustabellen som JSON till stdout
+#   rebuild <dir>              rekonstruerar statustabellen ENBART ur events.jsonl,
+#                              skriver som JSON till stdout, rör aldrig state.db
+#
+# Exit: 0 = alla kontroller PASS. 1 = minst en FAIL. Odömbart räknas som FAIL.
+# Kör från reporoten.
+
+set -u
+
+CLI="controller/state/cli"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+pass=0; fail=0
+ok()   { echo "PASS  $1"; pass=$((pass+1)); }
+no()   { echo "FAIL  $1 — $2"; fail=$((fail+1)); }
+
+# ---- K0: komponenten finns och är körbar -------------------------------------
+if [ ! -x "$CLI" ]; then
+  no "K0 komponent" "$CLI saknas eller är inte körbar"
+  echo; echo "$pass PASS, $fail FAIL"
+  exit 1
+fi
+ok "K0 komponent finns och är körbar"
+
+# ---- K1: init skapar båda artefakterna ---------------------------------------
+"$CLI" init "$WORK" >/dev/null 2>&1
+if [ -f "$WORK/state.db" ] && [ -f "$WORK/events.jsonl" ]; then
+  ok "K1 init skapar state.db + events.jsonl"
+else
+  no "K1 init" "state.db eller events.jsonl saknas efter init"
+fi
+
+# ---- K2: rekonstruktion ur loggen matchar projektionen -----------------------
+"$CLI" append "$WORK" '{"task":"h-001","status":"leased"}'   >/dev/null 2>&1
+"$CLI" append "$WORK" '{"task":"h-001","status":"building"}' >/dev/null 2>&1
+"$CLI" append "$WORK" '{"task":"h-002","status":"queued"}'   >/dev/null 2>&1
+"$CLI" append "$WORK" '{"task":"h-001","status":"verified"}' >/dev/null 2>&1
+
+dump=$("$CLI" dump "$WORK" 2>/dev/null)
+rebuild=$("$CLI" rebuild "$WORK" 2>/dev/null)
+
+if [ -z "$dump" ] || [ -z "$rebuild" ]; then
+  no "K2 rekonstruktion" "dump eller rebuild gav tomt svar — odömbart, räknas som FAIL"
+elif [ "$dump" = "$rebuild" ]; then
+  ok "K2 rekonstruktion ur events.jsonl = projektionen, noll avvikelse"
+else
+  no "K2 rekonstruktion" "dump och rebuild skiljer sig"
+  diff <(echo "$dump") <(echo "$rebuild") | head -10
+fi
+
+# ---- K3: loggen är append-only ------------------------------------------------
+# Fyra append ska ge exakt fyra rader. Färre = tidigare event skrevs över.
+rader=$(wc -l < "$WORK/events.jsonl" | tr -d ' ')
+if [ "$rader" = "4" ]; then
+  ok "K3 append-only — fyra event gav fyra rader"
+else
+  no "K3 append-only" "förväntade 4 rader, fick $rader"
+fi
+
+# ---- K4: trunkerad logg → rebuild VÄGRAR, aldrig tyst partiell ---------------
+cp "$WORK/events.jsonl" "$WORK/events.jsonl.bak"
+head -2 "$WORK/events.jsonl.bak" > "$WORK/events.jsonl"
+printf '{"task":"h-003","stat' >> "$WORK/events.jsonl"   # halv rad, ingen newline
+
+if "$CLI" rebuild "$WORK" >/dev/null 2>&1; then
+  no "K4 trunkerad logg" "rebuild returnerade 0 på trunkerad logg — tyst partiell rekonstruktion"
+else
+  ok "K4 trunkerad logg → rebuild vägrar (exit≠0)"
+fi
+mv "$WORK/events.jsonl.bak" "$WORK/events.jsonl"
+
+# ---- K5: state.db kan kastas och byggas om ------------------------------------
+# Loggen är sanningen. Utan db ska rebuild fortfarande fungera.
+rm -f "$WORK/state.db"
+if "$CLI" rebuild "$WORK" >/dev/null 2>&1; then
+  ok "K5 loggen är sanningen — rebuild fungerar utan state.db"
+else
+  no "K5 loggen är sanningen" "rebuild misslyckades utan state.db"
+fi
+
+echo
+echo "$pass PASS, $fail FAIL"
+[ "$fail" -eq 0 ] || exit 1

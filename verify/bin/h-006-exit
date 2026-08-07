@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# h-006-exit — skiva 6 (worker-launch med strikt utdatakontrakt)
+# Kontrakt: controller/worker/cli parse <fil>  → 0 vid giltigt kuvert, ≠0 annars
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/worker/cli"
+krav_komponent "$CLI"
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+SHA=$(git rev-parse HEAD)
+
+# K1: giltigt kuvert accepteras
+printf '{"status":"candidate","candidate_sha":"%s","files":["controller/state/cli"]}\n' "$SHA" > "$tmp/ok.json"
+if "$CLI" parse "$tmp/ok.json" >/dev/null 2>&1; then
+  ok "K1 giltigt kuvert accepteras"
+else
+  no "K1 giltigt kuvert" "välformat kuvert avvisades"
+fi
+
+# K2: prosa → unparseable_output, aldrig tolkningsförsök
+printf 'Jag har nu byggt komponenten och allt fungerar bra!\n' > "$tmp/prosa.txt"
+ut=$("$CLI" parse "$tmp/prosa.txt" 2>&1); kod=$?
+if [ "$kod" -ne 0 ] && echo "$ut" | grep -qi "unparseable"; then
+  ok "K2 prosa → unparseable_output"
+else
+  no "K2 prosa" "prosa gav kod=$kod utan unparseable_output"
+fi
+
+# K3: påstådd SHA som inte finns → failure
+printf '{"status":"candidate","candidate_sha":"0000000000000000000000000000000000000000","files":["x"]}\n' > "$tmp/falsk.json"
+if "$CLI" parse "$tmp/falsk.json" >/dev/null 2>&1; then
+  no "K3 SHA-verifiering" "obefintlig candidate_sha accepterades"
+else
+  ok "K3 obefintlig candidate_sha → failure"
+fi
+
+# K4: tomt svar → failure, aldrig tyst PASS
+: > "$tmp/tom.json"
+if "$CLI" parse "$tmp/tom.json" >/dev/null 2>&1; then
+  no "K4 tomt svar" "tomt kuvert gav exit 0"
+else
+  ok "K4 tomt svar → failure"
+fi
+summera
