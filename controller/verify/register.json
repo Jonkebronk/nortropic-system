@@ -1,0 +1,23 @@
+{
+  "register_version": "1.0.0",
+  "written": "2026-08-07",
+  "note": "Förgodkänt register. En verifierare körs bara om dess id står här. SHA binder den fil som godkändes: ändras filen stoppas körningen med hash_mismatch FÖRE start. Registret pekar på systemets BEFINTLIGA grindar — inga kopior, ingen ny verifierare (specs/tasks.spec.json h-002).",
+  "runner_note": "runner är ett uppslag i en fast tabell i controller/verify/cli, aldrig ett kommando ur denna fil. Inget fält här kan bli namnet på en process.",
+  "verifiers": {
+    "check-invariants": {
+      "path": "scripts/check-invariants.mjs",
+      "sha256": "bbe5ef8ee02f8f50401db40b0da9341499c82580d85865c724f6fcd42568f50d",
+      "runner": "node",
+      "startbar": true,
+      "beskrivning": "Deterministisk invariantgrind INV-001–005. Exit 0/1, inga natanrop, körs från reporoten."
+    },
+    "nortropic-verify-suite": {
+      "path": "workflows/nortropic-verify-suite.js",
+      "sha256": "ac1e21d1c5097c2b087054ef44ca7339e1a4aa78b8f3f8dc207b17633e5983ab",
+      "runner": null,
+      "startbar": false,
+      "skal_ej_startbar": "Workflow-skript för Claude Codes runtime: börjar med 'export const meta' och anropar phase()/agent()/log() på toppnivå. Varken shebang eller argv-ingång, alltså ingen subprocess-ingång. SHA-registrerad så att drift upptäcks — aldrig tyst utesluten, aldrig tyst grön.",
+      "beskrivning": "Regressionsnätet för självförbättringstrappan (konstitutionen §A6, §B6). Startas av Claude Code, inte av controllern."
+    }
+  }
+}
