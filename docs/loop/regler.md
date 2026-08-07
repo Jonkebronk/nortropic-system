@@ -1,0 +1,21 @@
+# Loop-reglerna — bindande för allt kontrollplansbygge
+
+**Beslutade 2026-08-07 · ändras endast av Johnny · gäller `controller/`, `specs/`, `verify/` och loop-PR:er**
+
+Dessa regler styr bygget av kontrollplanet. De ersätter inte
+[docs/03-regelverk.md](../03-regelverk.md) eller [docs/07-konstitution.md](../07-konstitution.md) —
+systemets 22 regler och konstitutionens §A/§B gäller oförändrat och står över dessa.
+
+1. Inget bygge utan spec-rad i `specs/tasks.spec.json` och exit-test definierat före start.
+2. Allt arbete i repot, på gren `nortropic/loop-<id>`, committat per delsteg.
+3. Komponenter använder planens namn (skiva 1–7, §-referenser). Inga nya kodnamn.
+4. Vid fel: fixa och kör om samma test. Bygg aldrig en ny klassificerare eller checkpoint.
+5. Ingen sudo. Kontrollplanet körs som användare.
+6. §A-mängden i [byggplan-v3.md](byggplan-v3.md) §3.1 rörs aldrig av en loop-task.
+   Ändringar där är alltid människa, alltid HÖGRISK-märkt commit.
+7. Docs uppdateras i samma commit som systemändringen (regel 17 + 22).
+8. Bevisregeln: varje rapporterat påstående pekar på verktygsbevis ur samma session.
+   Overifierat märks OVERIFIERAT. "Klart" sägs aldrig utan kört exit-test.
+9. Scope: gör det enklaste som uppfyller exit-testet. Inga oombedda skyddslager,
+   frysled, auktorisationskedjor eller framtidssäkring.
+10. Kontrollplanet rör aldrig kundflödet. Regel 16 står orörd.
