@@ -108,7 +108,7 @@
       "summary": "Workern startas med en task och ett kuvert. Svaret parsas mekaniskt; prosa är ett fel, inte något att tolka.",
       "allowed_write": ["controller/worker/**", "tests/controller/worker/**", "docs/05-beslutslogg.md"],
       "exit_test": "verify/bin/h-006-exit",
-      "exit_criterion": "Prosa-svar → unparseable_output, aldrig tolkningsförsök. Påstådd CANDIDATE_SHA som inte finns i repot → failure, inte krasch. Tomt svar → failure, aldrig tyst PASS.",
+      "exit_criterion": "Välformad rapport parsas och CANDIDATE_SHA returneras ur den — en komponent som klassar allt som failure är ingen parser. Prosa-svar → unparseable_output, aldrig tolkningsförsök. Påstådd CANDIDATE_SHA som inte finns i repot → failure, inte krasch. Tomt svar → failure, aldrig tyst PASS.",
       "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-005"]
     },
