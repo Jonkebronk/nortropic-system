@@ -65,4 +65,34 @@ if "$CLI" "$D" read h-test --require-valid >/dev/null 2>&1; then
 else
   ok "K6 stale attestation kan inte läsas som giltig"
 fi
+
+# K7: omtest köas, och kön töms av en ny attestation på nytt SHA.
+# Exit-kriteriet säger "A blir stale, omtest köas automatiskt" — utan kö är
+# stale dekoration; utan tömning kan en gammal invalidering spärra en färsk
+# verifiering.
+NYTT="0f1e2d3c4b5a69788796a5b4c3d2e1f009182736"
+# Kön ligger på toppnivå i state, inte i attestationsobjektet — read h-test
+# returnerar bara attestationen. Prövas därför mot state-filen, och parsas
+# som JSON: ett fältnamn i utdata får aldrig kunna räknas som en kö.
+i_ko() {
+  python3 -c 'import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(2)
+sys.exit(0 if "h-test" in d.get("omtest_ko",[]) else 1)' "$1"
+}
+if ! i_ko "$D/attestations.json"; then
+  no "K7 omtest-kö" "stale attestation står inte i omtest-kön"
+else
+  "$CLI" "$D" write h-test "$NYTT" >/dev/null 2>&1
+  ef=$("$CLI" "$D" read h-test 2>/dev/null)
+  if echo "$ef" | grep -Eqi '"stale"[[:space:]]*:[[:space:]]*true'; then
+    no "K7 omtest-kö" "ny attestation på nytt SHA lämnade tasken stale"
+  elif ! "$CLI" "$D" read h-test --require-valid >/dev/null 2>&1; then
+    no "K7 omtest-kö" "ny attestation på nytt SHA passerar inte --require-valid"
+  elif i_ko "$D/attestations.json"; then
+    no "K7 omtest-kö" "kön är inte tömd efter ny attestation på nytt SHA"
+  else
+    ok "K7 omtest köas vid stale och töms av ny attestation"
+  fi
+fi
 summera
