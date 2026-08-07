@@ -55,16 +55,86 @@ else
   fi
 fi
 
-# K4: destroy städar helt
-"$CLI" destroy t1 >/dev/null 2>&1
-if [ -n "$WS" ] && [ -d "$WS" ]; then
-  no "K4 städning" "workspace finns kvar efter destroy"
+# K4: innehållet är verkligen utcheckat, inte --no-checkout.
+# HEAD kan peka rätt på ett tomt träd; "ren checkout" är spec-radens ord.
+if [ -z "$WS" ]; then
+  no "K4 ren checkout" "ingen workspace-sökväg"
 else
-  ok "K4 destroy städar workspace"
+  n=$(git -C "$WS" ls-files 2>/dev/null | wc -l | tr -d ' ')
+  fys=$(find "$WS" -maxdepth 1 -mindepth 1 ! -name '.git' 2>/dev/null | wc -l | tr -d ' ')
+  smuts=$(git -C "$WS" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$n" -lt 100 ] || [ "$fys" -lt 5 ]; then
+    no "K4 ren checkout" "trädet är tomt eller nästan tomt: $n indexposter, $fys toppobjekt"
+  elif [ "$smuts" != "0" ]; then
+    no "K4 ren checkout" "arbetsträdet är smutsigt direkt efter create: $smuts poster"
+  else
+    ok "K4 ren checkout med verkligt innehåll ($n filer, rent träd)"
+  fi
 fi
-if [ -n "$WS" ] && git worktree list --porcelain 2>/dev/null | grep -Fqx "worktree $WS"; then
-  no "K4b städning" "kvarlämnad worktree efter destroy"
+
+# K5: base-SHA läses per anrop, och två attempts får skilda workspace.
+# Provet skickade tidigare ett enda SHA en enda gång — en cli som ignorerar
+# argumentet passerade, och "isolerat per försök" var omätt.
+SHA2=$(git rev-parse HEAD~2)
+"$CLI" destroy t2 >/dev/null 2>&1
+"$CLI" create t2 "$SHA2" >/dev/null 2>&1
+WS2=$("$CLI" path t2 2>/dev/null)
+if [ -z "$WS2" ] || [ ! -d "$WS2" ]; then
+  no "K5 per försök" "andra attempt fick inget workspace"
+elif [ "$WS2" = "$WS" ]; then
+  no "K5 per försök" "två attempts fick SAMMA sökväg — ingen isolering"
+elif [ "$(git -C "$WS2" rev-parse HEAD 2>/dev/null)" != "$SHA2" ]; then
+  no "K5 per försök" "andra workspace står inte på beordrat SHA — argumentet läses inte"
 else
-  ok "K4b ingen kvarlämnad worktree"
+  ok "K5 eget workspace per attempt, base-SHA läses per anrop"
+fi
+
+# K6: ogiltigt SHA ger failure, aldrig tyst tom katalog
+"$CLI" destroy t3 >/dev/null 2>&1
+if "$CLI" create t3 0000000000000000000000000000000000000000 >/dev/null 2>&1; then
+  no "K6 ogiltigt SHA" "create lyckades på ett SHA som inte finns"
+else
+  ok "K6 ogiltigt base-SHA avvisas"
+fi
+
+# K7: SIGINT mitt i create → ingen rest. Tredje ledet i exit_criterion,
+# tidigare helt oprövat.
+"$CLI" destroy t4 >/dev/null 2>&1
+gf=$(git branch --list | wc -l | tr -d ' ')
+( "$CLI" create t4 "$SHA" >/dev/null 2>&1 ) &
+bg=$!
+sleep 0.3
+kill -INT $bg 2>/dev/null
+wait $bg 2>/dev/null
+"$CLI" destroy t4 >/dev/null 2>&1
+WS4=$("$CLI" path t4 2>/dev/null)
+ge=$(git branch --list | wc -l | tr -d ' ')
+rest=""
+[ -n "$WS4" ] && [ -d "$WS4" ] && rest="$rest workspace-kvar"
+git worktree list --porcelain 2>/dev/null | grep -q "t4" && rest="$rest worktree-kvar"
+[ "$gf" != "$ge" ] && rest="$rest gren-kvar"
+if [ -z "$rest" ]; then
+  ok "K7 avbrott mitt i create lämnar ingen rest"
+else
+  no "K7 avbrottsstädning" "rest efter SIGINT:$rest"
+fi
+
+# K8: destroy städar helt — workspace, registrering och gren
+grenar_f=$(git branch --list | wc -l | tr -d ' ')
+"$CLI" destroy t1 >/dev/null 2>&1
+"$CLI" destroy t2 >/dev/null 2>&1
+grenar_e=$(git branch --list | wc -l | tr -d ' ')
+# Villkoren är INTE [ -n "$WS" ] && ... — en create som failar tyst gjorde
+# tidigare städningsproven gröna av frånvaro.
+if [ -z "$WS" ]; then
+  no "K8 städning" "ingen sökväg att pröva — create gav inget workspace"
+elif [ -d "$WS" ]; then
+  no "K8 städning" "workspace finns kvar efter destroy"
+elif git worktree list --porcelain 2>/dev/null | grep -Fqx "worktree $WS"; then
+  no "K8 städning" "kvarlämnad worktree-registrering efter destroy"
+elif [ "$grenar_f" != "$grenar_e" ]; then
+  no "K8 städning" "grenantalet ändrades av destroy: $grenar_f -> $grenar_e"
+else
+  ok "K8 destroy städar workspace, registrering och gren"
 fi
 summera
