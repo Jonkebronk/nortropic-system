@@ -1,0 +1,100 @@
+#!/usr/bin/env python3.12
+"""controller/verify/cli — skiva 2: verifier-runner med förgodkänt register.
+
+En verifierare körs bara om dess id står i controller/verify/register.json,
+och bara om filens SHA-256 fortfarande är den som godkändes.
+
+    list              listar registret: id, sökväg, SHA, startbar
+    check <id>        jämför filens SHA mot registret, kör ingenting
+
+Exit 0 = ok. Exit 1 = fel.
+"""
+
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/verify/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+# controller/verify/cli → reporoten. Registrets sökvägar är repo-relativa, så
+# de betyder samma sak oavsett var kommandot körs ifrån.
+ROT = Path(__file__).resolve().parents[2]
+REGISTER = Path(__file__).resolve().parent / "register.json"
+
+# Fast tabell. Registret väljer nyckel, aldrig kommandonamn — ett fält i en
+# JSON-fil får inte kunna bli namnet på en process.
+RUNNERS = {"node": "node"}
+
+
+def fel(text: str) -> int:
+    print(text, file=sys.stderr)
+    return 1
+
+
+def las_register() -> dict:
+    with REGISTER.open(encoding="utf-8") as f:
+        return json.load(f)["verifiers"]
+
+
+def sakra_sokvag(post: dict) -> Path | None:
+    """Registrets sökväg måste peka på en vanlig fil inne i repot.
+
+    Symlänk eller väg ut ur repot ger None — en registerpost får aldrig kunna
+    peka om en godkänd verifierare till något annat.
+    """
+    p = (ROT / post["path"]).resolve()
+    if not p.is_relative_to(ROT) or p.is_symlink() or not p.is_file():
+        return None
+    return p
+
+
+def sha256(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def kmd_list(register: dict) -> int:
+    for vid, post in register.items():
+        p = ROT / post["path"]
+        lage = "startbar" if post.get("startbar") else "EJ STARTBAR"
+        print(f"{vid}\t{post['path']}\t{post['sha256']}\t{lage}")
+        if not p.exists():
+            print(f"{vid}\tVARNING: filen saknas på disk", file=sys.stderr)
+    return 0
+
+
+def kmd_check(register: dict, vid: str) -> int:
+    if vid not in register:
+        return fel(f"okänt verifier-id: {vid}")
+    post = register[vid]
+    p = sakra_sokvag(post)
+    if p is None:
+        return fel(f"osäker eller saknad sökväg för {vid}: {post['path']}")
+    nu = sha256(p)
+    if nu != post["sha256"]:
+        return fel(f"hash_mismatch: {post['path']}\n  registrerad: {post['sha256']}\n  på disk:     {nu}")
+    print(f"ok: {vid} {post['path']} {nu}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        return fel("användning: cli list | check <verifier-id>")
+    kommando = argv[1]
+    try:
+        register = las_register()
+    except (OSError, ValueError) as e:
+        return fel(f"registret kunde inte läsas ({REGISTER}): {e}")
+
+    if kommando == "list":
+        return kmd_list(register)
+    if kommando == "check":
+        if len(argv) != 3:
+            return fel("användning: cli check <verifier-id>")
+        return kmd_check(register, argv[2])
+    return fel(f"okänt kommando: {kommando}")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
