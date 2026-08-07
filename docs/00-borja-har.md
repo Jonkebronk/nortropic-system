@@ -1,6 +1,6 @@
 # Börja här — Nortropic från noll
 
-Senast verifierad mot systemet: 2026-07-31 · v17 (denna commit)
+Senast verifierad mot systemet: 2026-08-07 · v17 (denna commit)
 Verifieringsomfång: delta-verifierad mot systemändringarna sedan 2026-07-30 (BATCH-001–004BE: check-invariants.mjs INV-001–005, verify-suite doctor 1–13 + OGILTIG-status, design-reviewer Bash→BLOCKED, NRT-007-blocket i agenterna, docs/100-dagar); 0 påståenden i denna fil ogiltigförklarade. Basstämpeln 2026-07-30 sattes av [AUTO-N1] 64acf9f och är inte oberoende granskad.
 
 Det här är ingången för dig som aldrig sett systemet förut. Läs den i ett svep, så förstår du vad Nortropic är och hur det hänger ihop — utan en enda insider-term. Det här dokumentet ersätter inte den tekniska dokumentationen (docs/01–07 och README); det är kartan du läser innan du dyker ner i den. Vill du veta exakt hur något fungerar finns länkar sist.
@@ -49,6 +49,16 @@ Fabriken kan förbättra sig själv lite i taget — den "städar på natten": r
 ## Fabriken kan bygga själv (v16)
 
 För enkla eller gratis-jobb kan fabriken köra hela vägen på egen hand — från kundpapper till en färdig förhandsversion — utan att stanna och fråga dig vid varje steg. Den samlar i stället ihop alla frågor och saknade fakta till EN slutlista som du betar av. Men den **publicerar aldrig själv**: juridiksigneringen och den sista publicera-knappen trycker alltid en människa. Och stöter den på något som påverkar riktningen eller kräver ett juridiskt beslut, stannar den och lämnar över till dig.
+
+## Förmannen som inte är en robot (loopen)
+
+Fabriken bygger hemsidor, men kan inte förbättra sig själv utan att du står bredvid och
+puttar vid varje steg. Loopen är ett litet program — inte en robot — som tar bort
+puttandet: det läser nästa uppgift ur 100-dagarsprogrammet, startar en färsk robot som
+gör exakt den uppgiften i ett eget rum, kontrollerar mekaniskt att den höll sig innanför
+ramarna, och lägger fram resultatet för dig att godkänna. Det bygger och förbättrar bara
+fabriken — kundflödet rör det aldrig, och grundlagen ([07-konstitution.md](07-konstitution.md))
+rör bara du. Planen står i [docs/loop/byggplan-v3.md](loop/byggplan-v3.md).
 
 ## Vill du djupare?
 
