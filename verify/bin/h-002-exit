@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# h-002-exit — skiva 2 (verifier-runner med förgodkänt register)
+# Kontrakt: controller/verify/cli run <verifier-id> | list | check <verifier-id>
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/verify/cli"
+krav_komponent "$CLI"
+
+# K1: registret pekar på BEFINTLIGA grindar, inte kopior
+lista=$("$CLI" list 2>/dev/null)
+if echo "$lista" | grep -q "scripts/check-invariants.mjs"; then
+  ok "K1 registret pekar på befintlig grind (check-invariants.mjs)"
+else
+  no "K1 register" "check-invariants.mjs saknas i registret — ny verifierare byggd i stället för registrerad?"
+fi
+
+# K2: manipulerad verifierarfil → hash_mismatch FÖRE körning
+tmp=$(mktemp); cp scripts/check-invariants.mjs "$tmp"
+printf '\n// manipulerad av h-002-exit\n' >> scripts/check-invariants.mjs
+ut=$("$CLI" run check-invariants 2>&1); kod=$?
+cp "$tmp" scripts/check-invariants.mjs; rm -f "$tmp"
+if [ "$kod" -ne 0 ] && echo "$ut" | grep -qi "hash_mismatch"; then
+  ok "K2 manipulerad fil → hash_mismatch, körning stoppad"
+else
+  no "K2 hash-bindning" "manipulerad fil gav kod=$kod utan hash_mismatch"
+fi
+
+# K3: fri text i verifier-fältet kan inte exekvera
+ut=$("$CLI" run 'echo INJEKTION > /tmp/h002-bevis' 2>&1); kod=$?
+if [ -f /tmp/h002-bevis ]; then
+  rm -f /tmp/h002-bevis
+  no "K3 ingen shell-exekvering" "fri text kördes som kommando"
+elif [ "$kod" -ne 0 ]; then
+  ok "K3 fri text i verifier-fältet exekverar inte"
+else
+  no "K3 ingen shell-exekvering" "okänt verifier-id gav exit 0"
+fi
+
+# K4: okänt id → avvisas, aldrig tyst PASS
+if "$CLI" run finns-inte-i-registret >/dev/null 2>&1; then
+  no "K4 okänt id" "okänt verifier-id gav exit 0"
+else
+  ok "K4 okänt verifier-id avvisas"
+fi
+summera

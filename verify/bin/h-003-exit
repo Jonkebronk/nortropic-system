@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# h-003-exit — skiva 3 (attestationer + stale-markering)
+# Kontrakt: controller/attest/cli write <task> <sha> | read <task> | invalidate <sha>
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/attest/cli"
+krav_komponent "$CLI"
+
+SHA=$(git rev-parse HEAD)
+
+# K1: attestation binds till candidate-SHA
+"$CLI" write h-test "$SHA" >/dev/null 2>&1
+if "$CLI" read h-test 2>/dev/null | grep -q "$SHA"; then
+  ok "K1 attestation bunden till candidate-SHA"
+else
+  no "K1 SHA-bindning" "attestationen bär inte candidate-SHA"
+fi
+
+# K2: attestation utan SHA avvisas
+if "$CLI" write h-test-2 >/dev/null 2>&1; then
+  no "K2 SHA obligatorisk" "attestation skrevs utan SHA"
+else
+  ok "K2 attestation utan SHA avvisas"
+fi
+
+# K3: invalidering → stale
+"$CLI" invalidate "$SHA" >/dev/null 2>&1
+if "$CLI" read h-test 2>/dev/null | grep -qi "stale"; then
+  ok "K3 invalidering markerar attestationen stale"
+else
+  no "K3 stale-markering" "attestationen står kvar som giltig efter invalidering"
+fi
+
+# K4: stale kan inte läsas som giltig
+if "$CLI" read h-test --require-valid >/dev/null 2>&1; then
+  no "K4 stale spärrar" "--require-valid accepterade en stale attestation"
+else
+  ok "K4 stale attestation kan inte läsas som giltig"
+fi
+summera

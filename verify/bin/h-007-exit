@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# h-007-exit — skiva 7 (diffpolicy, mekanisk §A-vakt)
+# Kontrakt: controller/policy/cli check <task-id> <base-sha> <candidate-sha>
+#           → 0 om kandidaten får föreslås, ≠0 annars. Orsak på stdout.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/policy/cli"
+krav_komponent "$CLI"
+
+BASE=$(git rev-parse HEAD)
+GREN="h007-prov-$$"
+git branch -f "$GREN" "$BASE" >/dev/null 2>&1
+WS=$(mktemp -d); trap 'rm -rf "$WS"; git worktree remove --force "$WS" 2>/dev/null; git branch -D "$GREN" >/dev/null 2>&1' EXIT
+git worktree add --force "$WS" "$GREN" >/dev/null 2>&1 || { no "uppsättning" "kunde inte skapa provworktree"; summera; }
+
+commit_i_ws() { git -C "$WS" add -A >/dev/null 2>&1; git -C "$WS" commit -q -m "$1" >/dev/null 2>&1; git -C "$WS" rev-parse HEAD; }
+
+# K1: kandidat som rör §A-yta avvisas
+echo "on" > "$WS/AUTOPILOT"
+KAND=$(commit_i_ws "prov: rör AUTOPILOT")
+ut=$("$CLI" check h-001 "$BASE" "$KAND" 2>&1); kod=$?
+if [ "$kod" -ne 0 ] && echo "$ut" | grep -qi "AUTOPILOT"; then
+  ok "K1 §A-yta avvisas, orsaken namnger filen"
+else
+  no "K1 §A-vakt" "kandidat som rörde AUTOPILOT gav kod=$kod"
+fi
+git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1
+
+# K2: kandidat utanför allowed_write avvisas
+mkdir -p "$WS/agents" && printf '\n# prov\n' >> "$WS/agents/qa-launcher.md"
+KAND=$(commit_i_ws "prov: rör agents/")
+if "$CLI" check h-001 "$BASE" "$KAND" >/dev/null 2>&1; then
+  no "K2 allowed_write" "skrivning utanför taskens allowed_write accepterades"
+else
+  ok "K2 skrivning utanför allowed_write avvisas"
+fi
+git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1
+
+# K3: kandidat inom allowed_write accepteras
+mkdir -p "$WS/controller/state" && echo "prov" > "$WS/controller/state/prov.txt"
+KAND=$(commit_i_ws "prov: inom allowed_write")
+if "$CLI" check h-001 "$BASE" "$KAND" >/dev/null 2>&1; then
+  ok "K3 kandidat inom allowed_write accepteras"
+else
+  no "K3 falsk positiv" "laglig kandidat avvisades"
+fi
+git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1
+
+# K4: evidence sparas vid avslag
+echo "on" > "$WS/AUTOPILOT"
+KAND=$(commit_i_ws "prov: evidence")
+"$CLI" check h-001 "$BASE" "$KAND" >/dev/null 2>&1
+if ls controller/policy/evidence/* >/dev/null 2>&1; then
+  ok "K4 evidence sparas vid avslag"
+else
+  no "K4 evidence" "inget evidence skrevs vid avslag"
+fi
+summera

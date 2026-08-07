@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# h-004-exit — skiva 4 (exklusiv lease)
+# Kontrakt: controller/lease/cli acquire <task> --ttl <sek> | release <task> | owner <task>
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/lease/cli"
+krav_komponent "$CLI"
+
+# K1: 100 samtidiga acquire → exakt 1 lyckas
+"$CLI" release h-race >/dev/null 2>&1
+tmp=$(mktemp -d)
+for i in $(seq 1 100); do
+  ( "$CLI" acquire h-race --ttl 60 >/dev/null 2>&1 && touch "$tmp/$i" ) &
+done
+wait
+antal=$(ls "$tmp" | wc -l | tr -d ' ')
+rm -rf "$tmp"
+if [ "$antal" = "1" ]; then
+  ok "K1 100 samtidiga starter → exakt 1 ägare"
+else
+  no "K1 exklusivitet" "$antal av 100 fick lease"
+fi
+
+# K2: reclaim sker INTE före TTL
+"$CLI" release h-ttl >/dev/null 2>&1
+"$CLI" acquire h-ttl --ttl 30 >/dev/null 2>&1
+if "$CLI" acquire h-ttl --ttl 30 >/dev/null 2>&1; then
+  no "K2 TTL respekteras" "andra acquire lyckades medan lease var giltig"
+else
+  ok "K2 lease kan inte tas över före TTL"
+fi
+
+# K3: reclaim sker EFTER TTL
+"$CLI" release h-kort >/dev/null 2>&1
+"$CLI" acquire h-kort --ttl 1 >/dev/null 2>&1
+sleep 3
+if "$CLI" acquire h-kort --ttl 30 >/dev/null 2>&1; then
+  ok "K3 utgången lease kan reclaimas"
+  "$CLI" release h-kort >/dev/null 2>&1
+else
+  no "K3 reclaim efter TTL" "utgången lease gick inte att ta över"
+fi
+summera

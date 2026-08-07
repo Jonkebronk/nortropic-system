@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# h-005-exit — skiva 5 (isolerat workspace per försök)
+# Kontrakt: controller/workspace/cli create <attempt-id> <base-sha> | path <attempt-id> | destroy <attempt-id>
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/workspace/cli"
+krav_komponent "$CLI"
+
+SHA=$(git rev-parse HEAD)
+"$CLI" destroy t1 >/dev/null 2>&1
+
+# K1: ren checkout på BEORDRAD base-SHA
+"$CLI" create t1 "$SHA" >/dev/null 2>&1
+WS=$("$CLI" path t1 2>/dev/null)
+if [ -n "$WS" ] && [ -d "$WS" ] && [ "$(git -C "$WS" rev-parse HEAD 2>/dev/null)" = "$SHA" ]; then
+  ok "K1 workspace på beordrad base-SHA"
+else
+  no "K1 base-SHA" "workspace saknas eller står på fel SHA"
+fi
+
+# K2: workspace är INTE den levande arbetskopian
+if [ -n "$WS" ] && [ "$(cd "$WS" && pwd -P)" != "$(pwd -P)" ]; then
+  ok "K2 workspace är skilt från den levande arbetskopian"
+else
+  no "K2 isolering" "workspace pekar på den levande arbetskopian"
+fi
+
+# K3: skrivförsök mot §A-yta stoppas
+if [ -n "$WS" ] && [ -e "$WS/AUTOPILOT" ]; then
+  if (echo on > "$WS/AUTOPILOT") 2>/dev/null; then
+    no "K3 §A-skydd" "AUTOPILOT gick att skriva i workspace"
+  else
+    ok "K3 skrivförsök mot §A-yta stoppas av filsystemet"
+  fi
+else
+  no "K3 §A-skydd" "kunde inte pröva — AUTOPILOT saknas i workspace"
+fi
+
+# K4: destroy städar helt
+"$CLI" destroy t1 >/dev/null 2>&1
+if [ -n "$WS" ] && [ -d "$WS" ]; then
+  no "K4 städning" "workspace finns kvar efter destroy"
+else
+  ok "K4 destroy städar workspace"
+fi
+if git worktree list 2>/dev/null | grep -q "t1"; then
+  no "K4b städning" "kvarlämnad worktree efter destroy"
+else
+  ok "K4b ingen kvarlämnad worktree"
+fi
+summera
