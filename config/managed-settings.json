@@ -58,20 +58,7 @@
         "/Users/elinhaggstrom/nortropic/nortropic-system/skills/nortropic-plan/references/juridikflaggor.md",
         "/Users/elinhaggstrom/nortropic/nortropic-system/specs",
         "/Users/elinhaggstrom/nortropic/nortropic-system/verify",
-        "/Users/elinhaggstrom/nortropic/nortropic-system/.gitignore",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/docs/07-konstitution.md",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/docs/03-regelverk.md",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/AUTOPILOT",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/CLAUDE.md",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/workflows",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/tests/fixtures",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/agents/nortropic-steward.md",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/scripts/check-invariants.mjs",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/skills/nortropic-eval/references/eval-rubric.md",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/skills/nortropic-plan/references/juridikflaggor.md",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/specs",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/verify",
-        "/Users/elinhaggstrom/nortropic/worktrees/**/.gitignore"
+        "/Users/elinhaggstrom/nortropic/nortropic-system/.gitignore"
       ]
     },
     "credentials": {

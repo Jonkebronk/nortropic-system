@@ -28,8 +28,21 @@ Träder i kraft vid nästa sessionsstart.
 | `requiredMinimum/MaximumVersion` | Claude Code vägrar starta utanför 2.1.224 |
 | `env.DISABLE_AUTOUPDATER` | Bakgrundsuppdatering av — pinnen håller |
 
-### Känd begränsning
+### Mätt begränsning i denyWrite — subpath, inte filskydd
 
-Tretton av `denyWrite`-posterna pekar på `~/nortropic/worktrees/**`, en katalog som ännu inte finns. Deras verkan är **OVERIFIERAD** tills skiva 5 skapar ett worktree. Klonhalvan är verifierad 2026-08-07 med `EPERM` från Seatbelt.
+En `denyWrite`-post nekar **hela sökvägsgrenen ovanför sitt mål**, inte bara målet.
+Mätt 2026-08-07 med positiv kontroll: med provraden
+`/Users/elinhaggstrom/nortropic/wt/a1/AUTOPILOT` installerad gick `mkdir ~/nortropic/wt2`
+och `mkdir ~/nortropic/prov-igen` medan `mkdir ~/nortropic/wt` gav EPERM. Samma förälder,
+samma användare, samma session. Gäller lika för glob och konkret sökväg.
+
+Följd: `denyWrite` kan inte selektivt skydda filer i en katalog som också måste vara
+skrivbar. Mekanismen fungerar där trädet redan finns (klonhalvan, verifierad 2026-08-07),
+men inte där kontrollplanet självt måste skapa katalogen.
+
+De tretton `~/nortropic/worktrees/**`-posterna är därför **borttagna** — de gjorde
+worktree-roten oskapbar och skyddade ingenting. 26 → 13 denyWrite-poster.
+§A-skyddet i workspacet vaktas i stället av skiva 7:s diffpolicy. Det är svagare:
+diffpolicyn granskar resultatet, inte försöket.
 
 `Edit`-regler täcker alla filredigerande verktyg; `Write`-regler matchar inte och ska inte användas.
