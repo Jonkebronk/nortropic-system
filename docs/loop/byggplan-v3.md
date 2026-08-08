@@ -47,7 +47,9 @@ Scope: bygga och förbättra fabriken. **Aldrig kundflödet.** Regel 16 (`disabl
 | **§14** | Diffpolicyn får `docs`-kravet: task som rör fil med docs-hemvist utan docs-uppdatering i samma commit = policyfailure (regel 17 + 22) |
 | **§20** | §A-ytan är konstitutionens §A **plus** kontrollplanet. v4.1:s ursprungliga lista skyddar sökvägar som inte finns |
 
-### 3.1 §A-mängden — bindande för `denied_write` och sandbox
+### 3.1 §A-mängden — bindande för `denied_write`; sandbox täcker delmängden
+
+**Rubriken var bredare än verkligheten (rättat 2026-08-08).** `controller/**` står i mängden nedan men finns INTE i installerad `sandbox.filesystem.denyWrite` — och kan inte finnas, eftersom h-taskarnas `allowed_write` ÄR `controller/**`. Sandboxen bär tretton poster; mängden nedan är bindande för `denied_write` i specen, och stycket *Två mekanismer, olika ytor* nedan säger vilken mekanism som vaktar vad.
 
 ```
 docs/07-konstitution.md
