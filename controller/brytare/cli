@@ -1,0 +1,275 @@
+#!/usr/bin/env python3.12
+"""controller/brytare/cli — skiva 11, brytaren (failureklassning, budget, circuit).
+
+    kor <katalog> <task> <budget> <tröskel> <workspace> <kuvertfil> <timeout-s> -- <kommando...>
+    status <katalog>
+
+Brytaren är ett lager runt utforaren (h-012): den startar försöket via
+controller/utforare/cli och rör ALDRIG kandidatvägen — en lyckad rapport
+vidarebefordras OFÖRÄNDRAD, aldrig extra rader, så h-006 parse läser exakt
+de byte utforaren skrev.
+
+Failure normaliseras till en fingerprint: utforarens exitkod plus första
+felraden med sifferföljder ersatta av `#` och absoluta sökvägar av `‹väg›`.
+Samma fel i två varianter är EN klass, olika fel är TVÅ; identiteten mäts
+på tröskelbeteende, aldrig på brytarens egen utsaga. Samma fingerprint
+<tröskel> gånger öppnar brytaren, och en succé nollställer ingenting.
+
+<katalog>/kvot.monster är DRIFTKONFIGURATION: substrängsmönster, ett per
+rad, tomma rader ignoreras, matchas mot failuretexten för klasserna 3–8.
+Träff klassas kvot_slut — skilt från nonzero_exit, ty att modellkvoten tog
+slut är inte att workern misslyckades, och två fel med samma namn kan inte
+räknas isär. kvot_slut fingerprintas inte, öppnar brytaren omedelbart och
+förbrukar INGEN budget: körningen stannar rent och samma task har kvar
+sina försök efter återstart. Den verkliga kvotsignalen från Claude CLI är
+OVERIFIERAT och hårdkodas inte (LOOP-ÄGARHAND-33); utan mönsterfil, eller
+när inget mönster matchar, sker aldrig kvotklassning.
+
+Attempt-budgeten räknar varje startat försök, även lyckade. BUDGET PRÖVAS
+FÖRE ÖPPEN BRYTARE. Tillståndet ligger i <katalog>/tillstand.json och
+överlever processgränser — varje anrop är en ny process mot samma katalog.
+En trasig tillståndsfil är ett fel, aldrig ett färskt tillstånd: en öppen
+brytare får inte nollställas tyst av en skadad fil.
+
+Exitkoder: 0 kandidat, rapporten oförändrad · 1 anropsfel (eget eller
+utforarens; förbrukar inte, fingerprintas inte) · 3–8 utforarens failure
+vidarebefordrad ordagrant + sist raden "fingerprint: <fp>" · 9 brytaren
+är/blir öppen — vid öppning skrivs den klassade failuren FÖRST, sist
+"brytare öppen: <orsak>"; redan öppen startas INGET kommando · 10 budget
+slut eller noll, inget kommando startas. **2 används aldrig** —
+verify/bin/_lib.sh binder den till ODÖMBART.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/brytare/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+UTFORARE = ROT / "controller/utforare/cli"
+KANDIDAT, ANROP, INTERNT, OPPEN, BUDGET_SLUT = 0, 1, 8, 9, 10
+TILLSTANDSFIL = "tillstand.json"
+MONSTERFIL = "kvot.monster"
+
+BRUK = ("anropsfel: kor <katalog> <task> <budget> <tröskel> <workspace> "
+        "<kuvertfil> <timeout-s> -- <kommando...>  ·  status <katalog>")
+
+# Normaliseringen raderar det som varierar mellan två körningar av samma fel:
+# absoluta sökvägar först (de bär siffror och hade annars lämnat # -rester),
+# därefter sifferföljder. En följd blir ETT #, så "rad 17" och "rad 163" möts.
+# Gränsklassen finns för att /output i "input/output" INTE är en sökväg — men
+# git och Python CITERAR sina vägar (`fatal: … '/…'`, `File "/…"`), så klassen
+# rymmer även citat-, parentes- och avgränsartecken (granskningsfynd delsteg 1:
+# en citerad väg med bokstavsvarians hade annars splittrat fingerprinten).
+VAG = re.compile(r"""(?:^|(?<=[\s'"`(\[{<=:,;]))/\S+""")
+SIFFROR = re.compile(r"\d+")
+
+
+class TrasigtTillstand(ValueError):
+    """Tillståndsfilen finns men går inte att läsa som brytartillstånd.
+
+    Ett färskt tillstånd i stället vore att tyst nollställa en öppen brytare
+    och en förbrukad budget — exakt det överlevnaden över processgränser
+    (skiva 13:s återtag) inte tål.
+    """
+
+
+def anropsfel(text: str) -> int:
+    print(text)
+    return ANROP
+
+
+def farskt() -> dict:
+    return {"oppen": False, "orsak": None, "forbrukat": 0, "fingerprints": {}}
+
+
+def las_tillstand(kat: Path) -> dict:
+    fil = kat / TILLSTANDSFIL
+    if not fil.exists():
+        return farskt()
+    try:
+        d = json.loads(fil.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise TrasigtTillstand(f"{fil} kan inte läsas som JSON: {e}") from e
+    if (not isinstance(d, dict)
+            or not isinstance(d.get("oppen"), bool)
+            or not (d.get("orsak") is None or isinstance(d.get("orsak"), str))
+            or type(d.get("forbrukat")) is not int
+            or not isinstance(d.get("fingerprints"), dict)):
+        raise TrasigtTillstand(f"{fil} har inte brytartillståndets form")
+    return d
+
+
+def skriv_tillstand(kat: Path, t: dict) -> None:
+    ny = kat / (TILLSTANDSFIL + ".ny")
+    ny.write_text(json.dumps(t, ensure_ascii=False) + "\n", encoding="utf-8")
+    ny.replace(kat / TILLSTANDSFIL)
+
+
+def las_monster(kat: Path) -> list[str]:
+    fil = kat / MONSTERFIL
+    if not fil.exists():
+        return []
+    rader = fil.read_text(encoding="utf-8", errors="replace").splitlines()
+    return [r for r in rader if r.strip()]
+
+
+def fingerprint(kod: int, text: str) -> str:
+    rad = (text.splitlines() or [""])[0]
+    rad = VAG.sub("‹väg›", rad)
+    rad = SIFFROR.sub("#", rad)
+    return f"{kod}:{rad}"
+
+
+def vidarebefordra(ut: bytes) -> None:
+    """Utforarens stdout ordagrant, med radslut så nästa rad blir en egen rad.
+
+    Skrivs FÖRE varje print() — bytes direkt i buffer efter väntande text
+    hade kunnat gå om den, åt andra hållet kan de inte.
+    """
+    sys.stdout.buffer.write(ut)
+    if ut and not ut.endswith(b"\n"):
+        sys.stdout.buffer.write(b"\n")
+
+
+def gor_kor(fore: list[str], kommando: list[str]) -> int:
+    kat_arg, task, budget_arg, troskel_arg, ws, kuvert, timeout_s = fore
+    if not kat_arg:
+        return anropsfel("anropsfel: tillståndskatalogen får inte vara tom")
+    if not task:
+        return anropsfel("anropsfel: task får inte vara tom")
+    try:
+        budget = int(budget_arg)
+    except ValueError:
+        return anropsfel(f"anropsfel: budget {budget_arg!r} är inget heltal")
+    if budget < 0:
+        return anropsfel(f"anropsfel: budget måste vara ≥ 0, fick {budget_arg}")
+    try:
+        troskel = int(troskel_arg)
+    except ValueError:
+        return anropsfel(f"anropsfel: tröskel {troskel_arg!r} är inget heltal")
+    if troskel < 1:
+        return anropsfel(f"anropsfel: tröskel måste vara ≥ 1, fick {troskel_arg}")
+
+    kat = Path(kat_arg)
+    try:
+        kat.mkdir(parents=True, exist_ok=True)
+        t = las_tillstand(kat)
+        monster = las_monster(kat)
+    except TrasigtTillstand as e:
+        return anropsfel(f"anropsfel: {e}")
+    except OSError as e:
+        return anropsfel(f"anropsfel: tillståndskatalogen {kat_arg}: {e.strerror or e}")
+
+    # BUDGET PRÖVAS FÖRE ÖPPEN — så är kvotens icke-förbrukning mätbar på
+    # exitkod: 10 hade betytt att kvot_slut förbrukade, 9 att den inte gjorde det.
+    if t["forbrukat"] >= budget:
+        print(f"budget slut för {task}: {t['forbrukat']} av {budget} startade "
+              f"försök förbrukade — inget kommando startas")
+        return BUDGET_SLUT
+    if t["oppen"]:
+        print(f"brytare öppen: {t['orsak']}")
+        return OPPEN
+
+    r = subprocess.run([str(UTFORARE), "kor", ws, kuvert, timeout_s, "--", *kommando],
+                       stdout=subprocess.PIPE)
+    kod = r.returncode
+
+    if kod == KANDIDAT:
+        t["forbrukat"] += 1
+        skriv_tillstand(kat, t)
+        # Kandidatvägen rörs aldrig: exakt utforarens byte, aldrig extra rader.
+        sys.stdout.buffer.write(r.stdout)
+        return KANDIDAT
+
+    if kod == ANROP:
+        # Utforarens anropsfel: inget kommando startades — förbrukar inte,
+        # fingerprintas inte, orsaken vidarebefordras ordagrant.
+        sys.stdout.buffer.write(r.stdout)
+        return ANROP
+
+    if 3 <= kod <= 8:
+        text = r.stdout.decode("utf-8", "replace")
+        traff = next((m for m in monster if m in text), None)
+        vidarebefordra(r.stdout)
+        if traff is not None:
+            t["oppen"] = True
+            t["orsak"] = f"kvot_slut — mönstret {traff!r} matchade failuretexten"
+            skriv_tillstand(kat, t)
+            print(f"kvot_slut: mönstret {traff!r} matchade — budgeten förblir oförbrukad")
+            print(f"brytare öppen: {t['orsak']}")
+            return OPPEN
+        t["forbrukat"] += 1
+        fp = fingerprint(kod, text)
+        antal = t["fingerprints"].get(fp, 0) + 1
+        t["fingerprints"][fp] = antal
+        oppnar = antal >= troskel
+        if oppnar:
+            t["oppen"] = True
+            t["orsak"] = f"samma fingerprint {antal} gånger (tröskel {troskel}): {fp}"
+        skriv_tillstand(kat, t)
+        print(f"fingerprint: {fp}")
+        if oppnar:
+            print(f"brytare öppen: {t['orsak']}")
+            return OPPEN
+        return kod
+
+    # Utanför utforarens kontrakt (2 är bundet till ODÖMBART, signaler ger <0).
+    # Försöket startades och räknas; klassen är vår egen, aldrig exitkod 2.
+    t["forbrukat"] += 1
+    skriv_tillstand(kat, t)
+    vidarebefordra(r.stdout)
+    print(f"internt fel: utforaren gav exitkod {kod} utanför kontraktet 0/1/3–8")
+    return INTERNT
+
+
+def gor_status(kat_arg: str) -> int:
+    if not kat_arg:
+        return anropsfel("anropsfel: tillståndskatalogen får inte vara tom")
+    try:
+        t = las_tillstand(Path(kat_arg))
+    except TrasigtTillstand as e:
+        return anropsfel(f"anropsfel: {e}")
+    print(json.dumps(t, ensure_ascii=False))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] == "status":
+        if len(argv) != 2:
+            return anropsfel("anropsfel: status <katalog>")
+        return gor_status(argv[1])
+    if not argv or argv[0] != "kor" or "--" not in argv:
+        return anropsfel(BRUK)
+    delare = argv.index("--")
+    fore, kommando = argv[1:delare], argv[delare + 1:]
+    if len(fore) != 7 or not kommando:
+        return anropsfel(BRUK)
+    return gor_kor(fore, kommando)
+
+
+if __name__ == "__main__":
+    # Kriteriet kräver klassning, inte krasch. Inget stackspår når stderr.
+    try:
+        kod = main(sys.argv[1:])
+    except BrokenPipeError:
+        kod = INTERNT
+    except SystemExit:
+        raise
+    except BaseException as e:
+        try:
+            print(f"internt fel: {type(e).__name__}: {e}")
+            kod = INTERNT
+        except BrokenPipeError:
+            kod = INTERNT
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        kod = INTERNT
+    sys.exit(kod)
