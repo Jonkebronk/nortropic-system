@@ -1039,3 +1039,28 @@ produktionsheaders, Deployment Protection och produktionsbundlar, så Gate 2/7-k
 sker mot fel artefakt. Pre-existerande, annan klass än evalens (en enskild grindmätning blir fel;
 evalens siffra blir OBRUKBAR för jämförelse). Ägarbeslut 2026-08-06: fixas INTE i BATCH-007 —
 eget ärende, prioriteras separat.
+
+## Öppet ärende (registrerat ur kontrollplansarbetet 2026-08-07): doctor #5 är prosa, inte kod
+Doctor #5 tillskrivs TRE mekaniska uppdrag i tre dokument och utför inget av dem. Full grep över
+`*.js`/`*.mjs`/`*.md` ger noll kodträffar; enda träffen utanför `docs/` är prosa i
+`skills/nortropic-stack/SKILL.md:81`. De tre uppdragen: fälla `[AUTO-N1]`/`[AUTO-N2]`-commit som
+rört §A-yta (`docs/07-konstitution.md` §A, inledningen) · vakta `disable-model-invocation: true` i
+de tre pipeline-skillsens frontmatter (regel 16) · semver-kontrollera `profilKontraktVersion` mot
+v1.1.0 (`skills/nortropic-stack/SKILL.md:81`). Konstitutionen varnar själv i §A6 för nät som kan
+redigeras av det som ska fångas; här finns nätet inte alls. **Åtgärd: `INV-007`, `INV-008`,
+`INV-009` i `scripts/check-invariants.mjs` — en per uppdrag, plus att §A-fällningen ska gälla
+OAVSETT commit-tagg så att controller-commits täcks. Samma default-FAIL-semantik som `invalid`
+redan har. Människohand, HÖGRISK-märkt commit, byggs aldrig genom loopen.** Funnet 2026-08-07 i
+Pass 0 (beslutslogg `LOOP-PASS0`); registrerat här 2026-08-08 enligt beslut 9 — programregistret är
+den enda backloggen, och ett fynd som bara står i beslutsloggen är samma klass som doctor #5 självt:
+dokumenterat men inte där det räknas.
+
+## Öppet ärende (registrerat ur kontrollplansarbetet 2026-08-08): skiva 6:s launch-halva obyggd
+Taskens titel är *Worker-launch med strikt utdatakontrakt*. Byggd är utdatakontraktet
+(`controller/worker/cli parse`, exit-test `h-006-exit` 10 PASS). Launch-halvan — workerstart,
+kuvertgenerering enligt v4.1 §12, timeout — är INTE byggd, och `exit_criterion` innehåller inget
+dömbart krav för den. Producentsessionen byggde medvetet inte otestad spec-driven kod; den
+bedömningen står. **Konsekvens: kontrollplanet kan inte köra end-to-end.** De sju skivorna är delar,
+inte en loop: ingenting väljer nästa task, startar en worker eller binder delarna samman.
+Åtgärd kräver eget krav med eget exit-test före kod, enligt beslut 3. Ägarbeslut 2026-08-08: fixas
+inte inom h-006 — eget ärende, prioriteras separat.
