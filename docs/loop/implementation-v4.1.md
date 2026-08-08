@@ -263,8 +263,10 @@ Du får inte: ändra task-spec, verifierare, CLAUDE.md, KONSTITUTION.md,
 .claude eller controller-state · markera tasken klar · använda nätverk,
 GitHub, Slack, deploy eller produktion · bredda scope för framtidssäkring.
 
-Slutrapportera strukturerat:
-CANDIDATE_SHA · CHANGED_FILES · TESTS_RUN · TEST_RESULTS · OPEN_RISKS.
+Slutrapportera som EXAKT ETT JSON-objekt, inget före och inget efter:
+{"candidate_sha": "<40 hex>", "changed_files": [...], "tests_run": [...],
+ "test_results": "...", "open_risks": [...]}
+Prosa runt objektet gör rapporten oparsbar och tolkas aldrig välvilligt.
 Ett påstående utan verktygsbevis ska märkas OVERIFIERAT.
 ```
 

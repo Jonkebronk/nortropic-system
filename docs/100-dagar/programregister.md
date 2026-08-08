@@ -1080,3 +1080,17 @@ bedömningen står. **Konsekvens: kontrollplanet kan inte köra end-to-end.** De
 inte en loop: ingenting väljer nästa task, startar en worker eller binder delarna samman.
 Åtgärd kräver eget krav med eget exit-test före kod, enligt beslut 3. Ägarbeslut 2026-08-08: fixas
 inte inom h-006 — eget ärende, prioriteras separat.
+
+## Öppet ärende (registrerat ur kontrollplansarbetet 2026-08-08): h-009:s smoke-test och utföraragenten
+`h-009` startar en worker som ett KONFIGURERAT kommando, och dess exit-test kör hermetiska
+testprocesser — aldrig en riktig Claude Code-session. Skälet är mekaniskt: ett exit-test som startar
+en betald session vid varje regressionssvep kostar kvot och tar minuter, och ett prov man undviker
+att köra är ingen grind. Det som faktiskt kan gå fel — timeout som inte dödar processgruppen, rapport
+som aldrig fångas, hängd process som lämnar rest — är oberoende av vilken binär som körs (h-005:s
+`killpg`-lärdom). **Kvarstår därför som människomoment: ett engångs smoke-test mot riktig Claude Code**,
+som prövar att kommandot startar, att kuvertet når sessionen och att en verklig slutrapport fångas.
+**Andra halvan av samma post: utföraragenten finns inte som fil.** v4.1 §4 ritar
+`.claude/agents/utforare.md` och Fas B punkt 3 säger att den ska byggas; `agents/` har fabrikens sju,
+ingen utförare. Byggplan v3 §3 har redan förkastat v4.1:s filstruktur som en kundsajt. Vilket kommando
+som ska stå i h-009:s konfiguration i drift är alltså ännu obesvarat — komponenten är byggbar utan svaret,
+driften är det inte. Kräver spec-rad före kod enligt beslut 3.
