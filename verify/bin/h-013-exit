@@ -123,6 +123,19 @@ cat > "$tmp/fel-d.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "tillståndsfilen saknar ägare" >&2; exit 7
 EOF
+# Den verkliga workerns form: allt på STDOUT, TOM stderr (smoke-mätningen).
+# h-009 kastar stdout vid nonzero, så processens exitkod är allt som återstår —
+# två helt orelaterade fel som ENDAST skiljer sig i den. K15 läser dem.
+cat > "$tmp/fel-e1.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "3 tester föll"
+exit 1
+EOF
+cat > "$tmp/fel-e2.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "verktyget saknas i PATH"
+exit 127
+EOF
 cat > "$tmp/kvot.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "PROVKVOT uttömd för kontot" >&2; exit 7
@@ -295,6 +308,28 @@ if [ "$kod" -ne 10 ]; then no "K12 budget noll stoppar" "kod=$kod, väntade 10 [
 elif [ -e "$tmp/kan12" ]; then no "K12 inget kommando startas" "kanarien skrevs"
 elif ! echo "$ut" | grep -qi budget; then no "K12 orsaken namnger budgeten" "[$ut]"
 else ok "K12 budget noll → exit 10 utan att något kommando startas"; fi
+
+# K15 PROCESSENS EXITKOD ÖVERLEVER NORMALISERINGEN. Fixturerna ovan skriver
+# alla på STDERR — men den verkliga workern gör tvärtom: smoke-mätningen
+# 2026-08-08 gav TOM stderr och allt på stdout, och h-009 KASTAR sessionens
+# stdout vid nonzero. Kvar av failuren blir då bara "processen avslutade med
+# kod N", där N är felets ENDA bärare. Normaliseras N bort kollapsar varje
+# tänkbart fel till en klass, och brytaren öppnar på fel som inte hör ihop —
+# tvärtemot K6. v4.1 §378 kräver "failure class + exit code" i fingerprinten.
+# Placerad före K13 så dess koder kommer med i svepet.
+ut=$("$CLI" kor "$tmp/d15" h-001 9 2 "$FW" "$KUV" 60 -- "$tmp/fel-e1.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"; fp1=$(fprad "$ut")
+ut2=$("$CLI" kor "$tmp/d15" h-001 9 2 "$FW" "$KUV" 60 -- "$tmp/fel-e2.sh" 2>/dev/null); kod2=$?
+KODER="$KODER $kod2"; fp2=$(fprad "$ut2")
+if [ "$kod" -ne 4 ]; then no "K15 tom stderr ger ändå vidarebefordrad klass" "kod=$kod, väntade 4 [$ut]"
+elif [ -z "$fp1" ] || [ -z "$fp2" ]; then no "K15 fingerprint-raden bär en icke-tom fingerprint" "fp1=[$fp1] fp2=[$fp2]"
+elif [ "$kod2" -eq 9 ]; then
+  no "K15 processens exitkod överlever normaliseringen" \
+     "två fel som bara skiljer i exitkod smälte till EN klass och öppnade brytaren — fp=[$fp1]"
+elif [ "$fp1" = "$fp2" ]; then
+  no "K15 processens exitkod överlever normaliseringen" "samma fingerprint för olika exitkoder: [$fp1]"
+elif [ "$kod2" -ne 4 ]; then no "K15 andra felet vidarebefordras" "kod=$kod2, väntade 4 [$ut2]"
+else ok "K15 fel som bara skiljer i processens exitkod ger två fingerprints, ingen öppning"; fi
 
 # K13 EXIT 2 ANVÄNDS ALDRIG — svep över samtliga uppmätta koder.
 if echo " $KODER " | grep -q " 2 "; then
