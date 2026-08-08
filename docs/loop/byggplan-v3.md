@@ -130,9 +130,21 @@ grep -rn "doctor #5\|doctor#5" . --include=*.js --include=*.mjs --include=*.md |
 | h-009 | 6c Processtart | Konfigurerat argv-kommando med timeout · hela processgruppen dödas · rest mäts på EFFEKT |
 | h-010 | 8 Taskval + claim | Doneness ur attest (`--require-valid`), aldrig ur state · kodpunktsordning · claim = exakt ett event · trasig spec/state/attestbutik är fel, aldrig tomt svar |
 | h-011 | 9 Huvudloopen | v4.1 §13:s varv med kedjande base · failure attesterar aldrig · workspaces rivs · vägen gjord till utfall: arbetskopian orörd, plats+kuvert i kandidatinnehållet, kanarie-timeout, spärrtask, okänd verifierare |
+| h-012 | 10 Utföraren | Sessionen redigerar, SKALET stagar och committar · git avgör domen, utsagan kan aldrig vända failure till kandidat · noll ändrade filer + framgångsrapport = failure · orsak bärs vidare ordagrant |
+| h-013 | 11 Brytaren | Fingerprints: samma fel = en klass, olika fel = två · `kvot_slut` skilt från `nonzero_exit`, öppnar utan att förbruka budget · öppen brytare stoppar med orsak, aldrig tyst · budget noll startar inget kommando |
+| h-014 | 12 Notisen | Fyra händelser ger notis, vanligt varv ger ingen · controllern skickar, aldrig workern · trasig webhook lämnar körningen ostörd · URL:en läcker inte till stdout, stderr eller fel |
+| h-015 | 13 Återtaget | Attesterat väljs inte om · fallet blir valbart igen med bevarad historik · öppen brytare överlever omstart · lease återtas efter TTL, aldrig före · två återstarter = en ägare |
 
-Skivorna 6b, 6c, 8 och 9 tillkom efter planens skrivning (LOOP-ÄGARHAND-16–27). Specen och
-beslutsloggen är operativ ordning; kalenderns kvarvarande poster är smoke-momentet och piloten.
+Skivorna 6b, 6c, 8 och 9 tillkom efter planens skrivning (LOOP-ÄGARHAND-16–27), skivorna 10–13
+2026-08-08 efter smoke-momentet. Specen och beslutsloggen är operativ ordning.
+
+**Skivorna 10–13 bär slutmålets kvarvarande klausuler.** Skiva 10 gör försöket fullbordbart —
+mätt 2026-08-08: en session kan skriva i workspacet men inte committa, och kandidat-SHA:t hör
+hemma i controllerledet, inte i modellens verktygsdisciplin. Skiva 11 ersätter dagens
+attempt-budget-av-slump (en fallen task förblir claimed och är ovalbar resten av körningen).
+Skiva 12 är den enda vägen till "störs bara när en människa krävs". Skiva 13 är driftformen
+kör tills kvoten tar slut, börja om när den är tillbaka. Ordningen är bindande: 10 blockerar
+allt, 11 blockerar 12 och 13. Ingen kvotbokföring och inget veckotak byggs (ägarbeslut).
 
 ### 7.1 Doctor #5-luckan — tre invarianter, egen HÖGRISK-commit
 
@@ -169,7 +181,10 @@ Konstitutionen varnar själv i §A6 för nät som kan redigeras av det som ska f
 | Helg 3 | h-006 + h-007 + INV-007 + pilot | ~4 h |
 | Löpande | 100-dagarsbatchar för hand tills piloten är grön | per batch |
 
-**Kalenderns läge 2026-08-08:** h-001–h-011 levererade och grindade på main. Kvar: smoke-momentet (programregistret) och piloten.
+**Kalenderns läge 2026-08-08:** h-001–h-011 levererade och grindade på main. Smoke-momentet
+genomfört mot Claude Code 2.1.224 via launch: kommandot startar, kuvertet når sessionen helt,
+verklig slutrapport fångad och accepterad av h-006. Kvar: h-012–h-015 och piloten, som bör
+omdefinieras nu när fyra skivor ligger emellan.
 
 **Avvecklingen av systeminstallationen** (`/usr/local/libexec/nortropic`, sudoers-filen, sju konton) sker **före Pass 1:s gränstest**. Ett gränstest på en maskin med ett andra kontrollplan installerat bevisar ingenting. Ingen avinstallation finns i `rollback/` — planeras som eget moment.
 
