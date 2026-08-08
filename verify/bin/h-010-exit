@@ -158,4 +158,69 @@ else
   no "K9 tömning utan rest" "sekvens '$c2','$c3','$c4' (väntat dag-2, dag-9, tomt) exit $kod4, event-rader ${r3}→${r4} (väntat 3→3) — fel sekvens avslöjar också en select som muterar"
 fi
 
+# --- K10 (B1): "samtliga depends_on" är bindande — två beroenden, ett attesterat.
+SPEC4="$WORK/tvadep.json"
+cat > "$SPEC4" <<'JSON'
+{
+  "tasks": [
+    { "id": "aa-tva", "depends_on": ["rot-a", "rot-b"] },
+    { "id": "rot-a",  "depends_on": [] },
+    { "id": "rot-b",  "depends_on": [] }
+  ]
+}
+JSON
+G_ATT="$WORK/att-g"; G_ST="$WORK/st-g"; "$ST" init "$G_ST" >/dev/null 2>&1
+"$ATT" "$G_ATT" write rot-a "$S1" >/dev/null 2>&1
+val_g1="$("$CLI" select "$SPEC4" "$G_ATT" "$G_ST" 2>/dev/null)"
+"$ATT" "$G_ATT" write rot-b "$S2" >/dev/null 2>&1
+val_g2="$("$CLI" select "$SPEC4" "$G_ATT" "$G_ST" 2>/dev/null)"
+if [ "$val_g1" = "rot-b" ] && [ "$val_g2" = "aa-tva" ]; then
+  ok "K10 samtliga beroenden kravs (ett av tva attesterat ger rot-b, bada ger aa-tva)"
+else
+  no "K10 samtliga-kvantorn" "ett attesterat gav '${val_g1}' (vantat rot-b), bada gav '${val_g2}' (vantat aa-tva) — lases bara depends_on[0] valjs aa-tva for tidigt"
+fi
+
+# --- K11 (B2): explicit pending-status är valbar, inte diskvalificerande.
+H_ATT="$WORK/att-h"; H_ST="$WORK/st-h"; "$ST" init "$H_ST" >/dev/null 2>&1
+"$ATT" "$H_ATT" write dag-100 "$S1" >/dev/null 2>&1
+"$ST" append "$H_ST" '{"task":"dag-10","status":"pending"}' >/dev/null 2>&1
+val_h="$("$CLI" select "$SPEC1" "$H_ATT" "$H_ST" 2>/dev/null)"
+if [ "$val_h" = "dag-10" ]; then
+  ok "K11 pending-status diskvalificerar inte (dag-10 valbar med explicit pending)"
+else
+  no "K11 pending-semantik" "vantade dag-10, fick '${val_h}' — kontraktet sager franvarande ELLER pending"
+fi
+
+# --- K12 (B3): trasig spec är FEL (exit 1), aldrig tomt val — trasig backlog
+# och färdig backlog får inte bli samma utfall.
+TRASIG="$WORK/trasig.json"; printf '{ "tasks": [ trasig' > "$TRASIG"
+I_ATT="$WORK/att-i"; I_ST="$WORK/st-i"; "$ST" init "$I_ST" >/dev/null 2>&1
+"$ATT" "$I_ATT" write nagon "$S1" >/dev/null 2>&1
+ut_i="$("$CLI" select "$TRASIG" "$I_ATT" "$I_ST" 2>/dev/null)"; kod_i=$?
+if [ "$kod_i" -eq 1 ] && [ -z "$ut_i" ]; then
+  ok "K12 trasig spec ger exit 1, inte tomt val"
+else
+  no "K12 felvag spec" "trasig spec gav '${ut_i}' exit ${kod_i} (vantat tomt + exit 1) — trasig backlog ser ut som fardig"
+fi
+
+# --- K13 (B4): oinitierad state-katalog är FEL, inte tom.
+J_ATT="$WORK/att-j"; "$ATT" "$J_ATT" write dag-100 "$S1" >/dev/null 2>&1
+ut_j="$("$CLI" select "$SPEC1" "$J_ATT" "$WORK/aldrig-init" 2>/dev/null)"; kod_j=$?
+if [ "$kod_j" -eq 1 ] && [ -z "$ut_j" ]; then
+  ok "K13 oinitierad state ger exit 1, inte tom tolkning"
+else
+  no "K13 felvag state" "oinitierad state gav '${ut_j}' exit ${kod_j} (vantat tomt + exit 1)"
+fi
+
+# --- K14 (femte fyndet): trasig attestbutik är FEL — en krasch får aldrig
+# läsas som "inget attesterat"; det vore tyst omval av redan klart arbete.
+L_ATT="$WORK/att-l"; mkdir -p "$L_ATT"; printf 'inte json' > "$L_ATT/attestations.json"
+L_ST="$WORK/st-l"; "$ST" init "$L_ST" >/dev/null 2>&1
+ut_l="$("$CLI" select "$SPEC1" "$L_ATT" "$L_ST" 2>/dev/null)"; kod_l=$?
+if [ "$kod_l" -eq 1 ] && [ -z "$ut_l" ]; then
+  ok "K14 trasig attestbutik ger exit 1 — krasch lases inte som oattesterat"
+else
+  no "K14 felvag attest" "trasig butik gav '${ut_l}' exit ${kod_l} (vantat tomt + exit 1) — attest-krasch som nej-svar betyder tyst omval"
+fi
+
 summera
