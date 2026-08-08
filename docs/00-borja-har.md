@@ -60,6 +60,17 @@ ramarna, och lägger fram resultatet för dig att godkänna. Det bygger och för
 fabriken — kundflödet rör det aldrig, och grundlagen ([07-konstitution.md](07-konstitution.md))
 rör bara du. Planen står i [docs/loop/byggplan-v3.md](loop/byggplan-v3.md).
 
+## Vakten som läser förslaget innan du gör det
+
+Grundlagen har hittills skyddats av att den står skriven — inte av något som hindrar en
+maskin från att ändra den. Nu finns en vakt: innan loopen ens visar dig ett förslag läser
+den igenom exakt vilka filer förslaget rör. Rör det grundlagen, kvalitetsmåtten eller
+någon annan skyddad fil säger vakten nej på en gång, skriver ner vad som hände, och du får
+aldrig se förslaget som något att godkänna. Den säger också nej om ett förslag är mycket
+större än det ska vara, eller om det ändrar systemet utan att uppdatera beskrivningen av
+systemet i samma andetag. Vakten kan bara stoppa förslag — den kan aldrig släppa igenom
+något åt dig. Den sista knappen är fortfarande din.
+
 ## Vill du djupare?
 
 Det här var översikten. Vill du förstå exakt hur något fungerar, fortsätt till det tekniska lagret:
