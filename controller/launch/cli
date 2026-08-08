@@ -1,0 +1,196 @@
+#!/usr/bin/env python3.12
+"""controller/launch/cli — skiva 6c: worker-launch, processtart med timeout.
+
+    run <workspace> <kuvertfil> <timeout-s> -- <kommando...>
+        0   processens stdout OFÖRÄNDRAD
+        ≠0  failure-klass på stdout
+
+Kommandot är KONFIGURATION, aldrig hårdkodat. Komponenten startar vad den
+får efter `--`; att just Claude Code startar rätt är en konfigurationsfråga
+som prövas av människa. Det som är logik — workspace, kuvert, timeout,
+processgrupp och rest — prövas mekaniskt.
+
+**Processgruppen är hela poängen.** `subprocess.run(timeout=)` dödar barnet,
+inte gruppen. h-005 mätte samma klass av fel: `worktree add` startar en egen
+utcheckningsprocess, och att döda bara git lämnade barnbarnet skrivande i
+katalogen. Här startar workern lika gärna bakgrundsjobb. Därför
+`start_new_session` — barnet blir gruppledare — och `killpg` på HELA gruppen
+vid timeout: SIGTERM, nådetid, sedan SIGKILL.
+
+**Komponenten hänger aldrig.** Varje väntan har en frist. Går gruppen inte
+att skörda inom fristen lämnas rören och timeout-klassen rapporteras ändå —
+ett svar som dröjer för evigt är värre än ett svar som medger att det inte
+kunde städa.
+
+**Kuvertet når processen på två vägar**, ingen av dem via workspacet: miljö-
+variabeln `NORTROPIC_KUVERT` med absolut sökväg, och innehållet på stdin.
+Att lägga kuvertet i workspacet vore fel — workern kör `git add -A` där, och
+kuvertet hade följt med in i kandidaten.
+
+Failure-klasserna hålls isär för att controllern klassar och räknar fel
+(v4.1 §13 `classify`, §16 breaker). `timeout` och `nonzero_exit` är SKILDA:
+"processen dog" och "processen misslyckades" är olika utfall och kräver
+olika åtgärd.
+
+Exitkoden bär klassen: 0 rapport · 1 anropsfel · 3 launch_failed ·
+4 nonzero_exit · 5 timeout · 8 internt fel. **2 används aldrig** —
+`verify/bin/_lib.sh` rad 2 binder det till ODÖMBART.
+"""
+
+import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/launch/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ANROP, LAUNCH, NONZERO, TIMEOUT, INTERNT = 1, 3, 4, 5, 8
+
+# Nådetid mellan SIGTERM och SIGKILL, och frist för att skörda gruppen.
+NADETID = 2.0
+SKORDEFRIST = 5.0
+
+# v4.1 §10: worker-env får aldrig bära GH_*, GITHUB_* eller SLACK_*.
+# Exakt de tre prefixen, inget bredare: paragrafens vidare formulering om
+# deploy- och cloudcredentials kräver en allowlist som hör till sandbox-skivan,
+# och ett bredare filter här hade kunnat strypa workerns egna referenser.
+KANSLIGA_PREFIX = ("GH_", "GITHUB_", "SLACK_")
+
+
+def svar(text: str, kod: int) -> int:
+    print(text)
+    return kod
+
+
+def worker_miljo(kuvertfil: Path) -> dict[str, str]:
+    miljo = {n: v for n, v in os.environ.items()
+             if not n.startswith(KANSLIGA_PREFIX)}
+    miljo["NORTROPIC_KUVERT"] = str(kuvertfil)
+    return miljo
+
+
+def doda_gruppen(p: subprocess.Popen) -> str:
+    """Dödar HELA processgruppen och skördar den. Returnerar hur det gick.
+
+    Att döda p ensam räcker inte: bakgrundsjobb workern startat är egna
+    processer i samma grupp och överlever sin förälder.
+    """
+    try:
+        grupp = os.getpgid(p.pid)
+    except ProcessLookupError:
+        return "processen var redan borta"
+
+    for sig, namn, frist in ((signal.SIGTERM, "SIGTERM", NADETID),
+                             (signal.SIGKILL, "SIGKILL", SKORDEFRIST)):
+        try:
+            os.killpg(grupp, sig)
+        except (ProcessLookupError, PermissionError):
+            return f"gruppen var borta vid {namn}"
+        try:
+            p.communicate(timeout=frist)
+            return f"gruppen dog på {namn}"
+        except subprocess.TimeoutExpired:
+            continue
+    return "gruppen svarade inte ens på SIGKILL — rören lämnades"
+
+
+def kort(text: bytes | None, tecken: int = 200) -> str:
+    if not text:
+        return ""
+    rad = text.decode("utf-8", "replace").strip().replace("\n", " · ")
+    return rad[:tecken]
+
+
+def gor_run(ws_arg: str, kuvert_arg: str, timeout_arg: str, kommando: list[str]) -> int:
+    ws = Path(ws_arg).expanduser()
+    if not ws.is_dir():
+        return svar(f"anropsfel: workspace {ws_arg} är ingen katalog", ANROP)
+    ws = ws.resolve()
+
+    kuvertfil = Path(kuvert_arg).expanduser()
+    try:
+        ra = kuvertfil.read_bytes()
+        json.loads(ra)
+    except OSError as e:
+        return svar(f"anropsfel: kan inte läsa kuvertet {kuvert_arg}: {e.strerror or e}", ANROP)
+    except ValueError as e:
+        return svar(f"anropsfel: kuvertet {kuvert_arg} är inte giltig JSON: {e}", ANROP)
+    kuvertfil = kuvertfil.resolve()
+
+    try:
+        sekunder = float(timeout_arg)
+    except ValueError:
+        return svar(f"anropsfel: timeout {timeout_arg!r} är inget tal", ANROP)
+    if sekunder <= 0:
+        return svar(f"anropsfel: timeout måste vara större än noll, fick {timeout_arg}", ANROP)
+
+    try:
+        p = subprocess.Popen(
+            kommando, cwd=str(ws), env=worker_miljo(kuvertfil),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True,          # barnet blir gruppledare — se doda_gruppen
+        )
+    except OSError as e:
+        return svar(f"launch_failed: kunde inte starta {kommando[0]}: {e.strerror or e}", LAUNCH)
+
+    try:
+        ut, fel = p.communicate(input=ra, timeout=sekunder)
+    except subprocess.TimeoutExpired:
+        utfall = doda_gruppen(p)
+        return svar(f"timeout: processen överskred {timeout_arg} s och dödades "
+                    f"med hela sin processgrupp ({utfall})", TIMEOUT)
+    except BrokenPipeError:
+        # Processen läste aldrig kuvertet och dog innan vi skrivit klart.
+        # Det är inte ett fel i sig — utfallet avgörs av dess exitkod.
+        ut, fel = p.stdout.read() if p.stdout else b"", p.stderr.read() if p.stderr else b""
+        p.wait(timeout=SKORDEFRIST)
+
+    if p.returncode != 0:
+        anm = kort(fel)
+        return svar(f"nonzero_exit: processen avslutade med kod {p.returncode}"
+                    + (f" — stderr: {anm}" if anm else ""), NONZERO)
+
+    # Rapporten går ut OFÖRÄNDRAD. Ingen rad läggs till, ingen tas bort:
+    # h-006 parsar den mekaniskt och en enda extra byte gör den oparsbar.
+    sys.stdout.buffer.write(ut)
+    sys.stdout.buffer.flush()
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2 or argv[0] != "run":
+        return svar("anropsfel: run <workspace> <kuvertfil> <timeout-s> -- <kommando...>", ANROP)
+    if "--" not in argv:
+        return svar("anropsfel: kommandot måste stå efter --", ANROP)
+
+    delare = argv.index("--")
+    fore, kommando = argv[1:delare], argv[delare + 1:]
+    if len(fore) != 3:
+        return svar("anropsfel: run <workspace> <kuvertfil> <timeout-s> -- <kommando...>", ANROP)
+    if not kommando:
+        return svar("anropsfel: inget kommando efter --", ANROP)
+    return gor_run(fore[0], fore[1], fore[2], kommando)
+
+
+if __name__ == "__main__":
+    # Kriteriet kräver klassning, inte krasch. Inget stackspår når stderr.
+    try:
+        kod = main(sys.argv[1:])
+    except BrokenPipeError:
+        kod = INTERNT
+    except SystemExit:
+        raise
+    except BaseException as e:
+        try:
+            kod = svar(f"internt fel: {type(e).__name__}: {e}", INTERNT)
+        except BrokenPipeError:
+            kod = INTERNT
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        kod = INTERNT
+    sys.exit(kod)

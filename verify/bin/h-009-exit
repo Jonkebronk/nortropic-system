@@ -26,9 +26,14 @@ cat > "$tmp/las-kuvert.sh" <<'EOF'
 #!/usr/bin/env bash
 python3.12 -c "import json,sys;print(json.load(open(sys.argv[1]))['task_id'])" "$1"
 EOF
+# Barnbarnet TICKAR till en fil. Rest mäts på EFFEKT, inte på processtabellen:
+# pgrep/ps är blinda under Seatbelt (mätt 2026-08-08: ps ger 575 rader i vanlig
+# terminal, 0 i en Claude Code-session) — och sandboxen är den miljö kontrollplanet
+# ska köra i. En kontroll som bara fungerar där provet råkar köras är ingen kontroll.
+# Kanariefågeln räknar ner och dör av sig själv: ett prov får aldrig lämna rest.
 cat > "$tmp/haenger.sh" <<'EOF'
 #!/usr/bin/env bash
-sleep 120 &
+( for i in $(seq 1 300); do echo tick >> "$KANARIE"; sleep 0.2; done ) &
 sleep 120
 EOF
 cat > "$tmp/faller.sh" <<'EOF'
@@ -38,6 +43,7 @@ exit 42
 EOF
 chmod +x "$tmp"/*.sh 2>/dev/null
 SHA=$(git rev-parse HEAD)
+export KANARIE="$tmp/kanarie.txt"; : > "$KANARIE"
 
 # K1: välformad rapport → exit 0, stdout OFÖRÄNDRAD
 ut=$("$CLI" run "$WS" "$KUV" 30 -- "$tmp/rapport.sh" "$KUV" "$SHA" 2>/dev/null); kod=$?
@@ -77,14 +83,16 @@ fi
 
 # K4: INGEN REST efter timeout — hela processgruppen, inte bara barnet.
 # haenger.sh startar ett barnbarn i bakgrunden; dödas bara barnet lever det vidare.
-kvar=$(pgrep -f "$tmp/haenger.sh" 2>/dev/null | wc -l | tr -d ' ')
-sovande=$(ps -eo command 2>/dev/null | grep -c '[s]leep 120' || true)
-if [ "${kvar:-0}" -gt 0 ]; then
-  no "K4 rest efter timeout" "$kvar processer kvar ur haenger.sh"
-elif [ "${sovande:-0}" -gt 0 ]; then
-  no "K4 rest efter timeout" "$sovande kvarlämnade sleep 120 — processgruppen dödades inte"
+fore=$(wc -l < "$KANARIE" | tr -d ' ')
+sleep 2
+efter=$(wc -l < "$KANARIE" | tr -d ' ')
+if [ "${fore:-0}" -eq 0 ]; then
+  echo "SKIP  K4 mekanism — kanariefågeln skrev aldrig, resten är odömbar"
+  echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+elif [ "${efter:-0}" -gt "${fore:-0}" ]; then
+  no "K4 rest efter timeout" "barnbarnet lever: kanariefilen växte $fore → $efter rader"
 else
-  ok "K4 ingen rest efter timeout (processgruppen dödad)"
+  ok "K4 ingen rest efter timeout ($fore → $efter rader, barnbarnet dött)"
 fi
 
 # K5: nollskild exitkod bevaras, inte maskeras
@@ -121,5 +129,56 @@ if [ -n "$kras" ]; then
   no "K7 ingen krasch" "traceback för:$kras"
 else
   ok "K7 ingen krasch vid saknat kuvert, workspace eller kommando"
+fi
+
+# K8: WORKSPACE används faktiskt. Lögnstubben körde workern i den levande
+# arbetskopian — precis vad h-005 byggdes för att förhindra.
+cat > "$tmp/var-ar-jag.sh" <<'EOF'
+#!/usr/bin/env bash
+pwd -P
+EOF
+chmod +x "$tmp/var-ar-jag.sh" 2>/dev/null
+ut=$("$CLI" run "$WS" "$KUV" 30 -- "$tmp/var-ar-jag.sh" 2>/dev/null); kod=$?
+ws_p=$(cd "$WS" && pwd -P)
+if [ "$kod" -ne 0 ]; then
+  no "K8 workspace" "kod=$kod [$ut]"
+elif [ "$(echo "$ut" | tr -d '[:space:]')" != "$(echo "$ws_p" | tr -d '[:space:]')" ]; then
+  no "K8 workspace" "processen kördes i [$ut], inte i workspacet [$ws_p]"
+else
+  ok "K8 processen körs i workspacet"
+fi
+
+# K9: KUVERTET når processen utan att provet räcker sökvägen som argument.
+# K2 passerade lögnstubben eftersom provet självt skickade sökvägen vidare.
+cat > "$tmp/hittar-kuvert.sh" <<'EOF'
+#!/usr/bin/env bash
+if [ -n "${NORTROPIC_KUVERT:-}" ] && [ -s "${NORTROPIC_KUVERT}" ]; then
+  python3.12 -c "import json,sys;print(json.load(open(sys.argv[1]))['task_id'])" "$NORTROPIC_KUVERT"; exit 0
+fi
+indata=$(cat 2>/dev/null)
+if [ -n "$indata" ]; then
+  echo "$indata" | python3.12 -c "import json,sys;print(json.load(sys.stdin)['task_id'])" 2>/dev/null && exit 0
+fi
+echo "INGEN-KUVERTVAG"; exit 1
+EOF
+chmod +x "$tmp/hittar-kuvert.sh" 2>/dev/null
+ut=$("$CLI" run "$WS" "$KUV" 30 -- "$tmp/hittar-kuvert.sh" 2>/dev/null); kod=$?
+if [ "$kod" -eq 0 ] && echo "$ut" | grep -q 'h-001'; then
+  ok "K9 kuvertet levereras av komponenten, inte av provet"
+else
+  no "K9 kuvertleverans" "processen hittade inget kuvert: kod=$kod [$ut]"
+fi
+
+# K10: TIMEOUTEN respekteras. Lögnstubben tog 5 s på en begärd 1-sekunderstimeout.
+# Relativ mätning: två olika timeouts måste ge mätbart olika väggtid.
+a0=$(date +%s); perl -e 'alarm 20; exec @ARGV' "$CLI" run "$WS" "$KUV" 2 -- "$tmp/haenger.sh" >/dev/null 2>&1; a1=$(date +%s)
+b0=$(date +%s); perl -e 'alarm 30; exec @ARGV' "$CLI" run "$WS" "$KUV" 8 -- "$tmp/haenger.sh" >/dev/null 2>&1; b1=$(date +%s)
+ta=$((a1-a0)); tb=$((b1-b0)); diff=$((tb-ta))
+if [ "$ta" -gt 6 ]; then
+  no "K10 timeout respekteras" "timeout 2 tog ${ta}s"
+elif [ "$diff" -lt 3 ]; then
+  no "K10 timeout respekteras" "timeout 2 gav ${ta}s och timeout 8 gav ${tb}s — talet styr inte"
+else
+  ok "K10 timeoutvärdet styr väggtiden (${ta}s vs ${tb}s)"
 fi
 summera
