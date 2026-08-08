@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+# h-012-exit — skiva 10 (utföraren, fullbordat försök)
+# Kontrakt: controller/utforare/cli kor <workspace> <kuvertfil> <timeout-s> -- <kommando...>
+#           0 med {"status","candidate_sha","files"} på stdout, h-006-parsbar
+#           ≠0 med failure-klass på stdout
+#
+# DOMEN VILAR PÅ GIT. Sessionens text läses ENDAST vid failure och kan aldrig
+# vända ett failure till en kandidat (ÄGARHAND-29). K5, K6 och K7 bär det.
+#
+# WORKSPACET SKAPAS VIA h-005, aldrig som fristående temp-repo: h-006 slår upp
+# candidate-SHA:t med `git -C ROT` (worker/cli rad 111-118), och `worktree add`
+# delar objektdatabas med roten (workspace/cli rad 196). En fristående fixtur
+# gör h-006 strukturellt oförmögen att hitta kandidaten — mätt 2026-08-08, en
+# ärlig referens föll på candidate_sha_not_found. K17 mäter därför refs och
+# arbetsträd, INTE objekträkning: delade objekt är designen, inte ett brott.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/utforare/cli"
+krav_komponent "$CLI"
+for dep in controller/workspace/cli controller/worker/cli controller/launch/cli \
+           controller/envelope/cli; do
+  if [ ! -x "$dep" ]; then
+    echo "SKIP  harness — $dep saknas eller är inte körbar (h-012:s depends_on), testet är odömbart"
+    echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+  fi
+done
+
+WSROT="$(temp_kat)" || { echo "FAIL  harness — temp-katalog"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+tmp="$(temp_kat)"  || { echo "FAIL  harness — temp-katalog"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+WSROT_KANON="$(cd "$WSROT" && pwd -P)"
+WSP="controller/workspace/cli"
+# ORDNINGEN ÄR AVSIKTLIG: destroy FÖRST så git får städa sin egen registrering,
+# rm -rf sedan. Omvänd ordning lämnar föräldralösa poster i .git/worktrees som
+# fäller NÄSTA körnings create — mätt 2026-08-08, samma lärdom som h-005:s trap.
+# LÄSER DISKEN, inte en variabel: ws() körs i kommandosubstitution, så allt den
+# sätter stannar i subskalet. Katalogerna finns däremot kvar och kan räknas upp.
+stada() {
+  for d in "$WSROT"/*; do
+    [ -d "$d" ] && "$WSP" "$WSROT" destroy "$(basename "$d")" >/dev/null 2>&1
+  done
+  git worktree prune >/dev/null 2>&1
+  rm -rf "$tmp" "$WSROT"
+}
+trap stada EXIT
+
+BAS="$(git rev-parse HEAD)"
+readonly BAS
+KOR_ID="$$_$(date +%s)"
+KUV="$tmp/kuvert.json"
+./controller/envelope/cli build h012-prov h-001 "$BAS" > "$KUV" 2>/dev/null
+[ -s "$KUV" ] || { echo "FAIL  K0 kuvert — kunde inte bygga provkuvert"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+SPEC_SHA="$(python3 -c "import json;print(json.load(open('$KUV'))['spec_sha256'])")"
+# Tom SPEC_SHA hade gjort K14:s grep till `grep -qF "spec="` — vakuöst PASS.
+[ -n "$SPEC_SHA" ] || { echo "FAIL  harness — kuvertets spec_sha256 kunde inte läsas"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+
+# Reporotens läge FÖRE — K17 jämför mot detta.
+ROT_HEAD="$(git rev-parse HEAD)"
+ROT_STATUS="$(git status --porcelain)"
+ROT_REFS="$(git for-each-ref --format='%(refname) %(objectname)' | sort)"
+ROT_WT="$(git worktree list --porcelain | grep -c '^worktree ')"
+
+# ws() FÄLLER HÅRT. Ett tomt svar hade gett `git -C ""` → cwd → REPOROTEN, och
+# en fixtur som raderar spårade filer hade då träffat arbetskopian på riktigt.
+# Mätt 2026-08-08: fem kandidat-commits landade i reporoten och AUTOPILOT
+# raderades innan K17 fångade det. Riggen får aldrig degradera tyst.
+# IDENTITETEN KOMMER UR ARGUMENTET, aldrig ur delat tillstånd: en räknare hade
+# räknats upp i subskalets KOPIA och gett varje anrop samma attempt-id — mätt
+# 2026-08-08, andra create föll på "workspace finns redan". Anroparens $LINENO
+# expanderas i anroparen även i kommandosubstitution (mätt på bash 3.2.57).
+# INVARIANT: aldrig två ws-anrop på samma fysiska rad.
+ws() {
+  local id="p${KOR_ID}_${1:?anropsplats saknas}" w
+  w="$("$WSP" "$WSROT" create "$id" "$BAS" 2>&1)"
+  case "$w" in
+    "$WSROT"*|"$WSROT_KANON"*) ;;
+    *) echo "" ; return 1 ;;
+  esac
+  [ -d "$w" ] && [ -e "$w/.git" ] || { echo "" ; return 1 ; }
+  echo "$w"
+}
+# Anropas som: W=$(ws "$LINENO") || harnessfel "$LINENO" — subskalet kan inte
+# avsluta provet självt, så returkoden måste läsas av anroparen. Ett tomt $W
+# hade annars gett `git -C ""` → cwd → REPOROTEN; mätt 2026-08-08, fem commits
+# landade fel.
+harnessfel() {
+  echo "FAIL  harness — workspace kunde inte skapas inför $1"
+  echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+}
+# Bryter kaskaden vid FÖRSTA felet i stället för efter alla arton.
+vakt() {
+  if [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ] || [ "$(git status --porcelain)" != "$ROT_STATUS" ]; then
+    echo "FAIL  harness — REPOROTEN RÖRD efter $1. Provet avbryts innan mer skada sker."
+    echo "  HEAD: $ROT_HEAD → $(git rev-parse HEAD)"
+    echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+  fi
+}
+huvud() { git -C "$1" rev-parse HEAD 2>/dev/null; }
+antal() { git -C "$1" rev-list --count HEAD 2>/dev/null; }
+filer_i() { git -C "$1" show --name-only --format= "$2" 2>/dev/null | sed '/^$/d' | sort | tr '\n' ' '; }
+falt() { python3 -c "
+import json,sys
+try: d=json.loads(sys.stdin.read())
+except Exception: print('OPARSBAR'); raise SystemExit
+v=d.get(sys.argv[1])
+if v is None: print('SAKNAS')
+elif isinstance(v,list): print(' '.join(sorted(str(x) for x in v)))
+else: print(v)" "$1" 2>/dev/null || echo PYFEL; }
+
+# --- Testprocesser. Ingen är Claude Code; alla hermetiska.
+cat > "$tmp/arlig.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p tests/h012fix; echo "ett" > tests/h012fix/en.txt
+echo "klart"
+EOF
+# Skriver kuvertets spec_sha256 IN i kandidaten — K14 läser det ur git show.
+cat > "$tmp/kuvertlasare.sh" <<'EOF'
+#!/usr/bin/env bash
+kuv=$(cat)
+mkdir -p tests/h012fix
+python3 -c "
+import json,sys
+d=json.loads(sys.argv[1])
+open('tests/h012fix/kuvertspar.txt','w').write('spec='+d['spec_sha256']+'\n')" "$kuv"
+EOF
+# Ändrar OCH raderar spårade filer — K4.
+cat > "$tmp/andrar.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "andrad" >> README.md
+rm -f AUTOPILOT
+EOF
+cat > "$tmp/tva.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p tests/h012fix; echo a > tests/h012fix/en.txt; echo b > tests/h012fix/tva.txt
+echo "jag skrev en.txt"
+EOF
+# Ändrar filer OCH ljuger om bådadera — K6, spegelfallet.
+cat > "$tmp/ljuger-anda.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p tests/h012fix; echo x > tests/h012fix/sann.txt
+printf '{"status":"candidate","candidate_sha":"%s","files":["ljug.txt"]}\n' "$FALSKT_SHA"
+EOF
+# Rör INGENTING men ljuger trovärdigt: verkligt HEAD, fil som finns — K7.
+cat > "$tmp/ljuger-trovardigt.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '{"status":"candidate","candidate_sha":"%s","files":["README.md"]}\n' "$SANT_SHA"
+EOF
+cat > "$tmp/tyst.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p tests/h012fix; echo t > tests/h012fix/tyst.txt
+EOF
+cat > "$tmp/klagar.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "SESSIONSFEL: kvoten tog slut"
+EOF
+cat > "$tmp/stum.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$tmp/haenger.sh" <<'EOF'
+#!/usr/bin/env bash
+( for i in $(seq 1 300); do echo tick >> "$KANARIE"; sleep 0.2; done ) &
+sleep 120
+EOF
+cat > "$tmp/faller.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "detta kastas av h-009" ; echo "stderrtext" >&2 ; exit 42
+EOF
+chmod +x "$tmp"/*.sh 2>/dev/null
+export FALSKT_SHA="$(python3 -c "import random;print('%040x'%random.getrandbits(160))")"
+export SANT_SHA="$BAS"
+export KANARIE="$tmp/kanarie.txt"; : > "$KANARIE"
+
+# K1 POSITIV: ärlig session → kandidat som h-006 accepterar.
+W=$(ws "$LINENO") || harnessfel "$LINENO"; H0=$(huvud "$W")
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/arlig.sh" 2>/dev/null); kod=$?
+echo "$ut" > "$tmp/k1.json"; H1=$(huvud "$W")
+if [ "$kod" -ne 0 ]; then no "K1 ärlig session → kandidat" "kod=$kod [$ut]"
+elif ! ./controller/worker/cli parse "$tmp/k1.json" >/dev/null 2>&1; then
+  no "K1 h-006 accepterar rapporten" "parse avvisade [$ut]"
+else ok "K1 ärlig session → kandidat, h-006-parsbar"; fi
+
+# K2: candidate_sha ÄR workspacets nya HEAD (candidate_sha_ar_HEAD).
+r=$(echo "$ut" | falt candidate_sha)
+if [ "$H1" = "$H0" ]; then no "K2 candidate_sha_ar_HEAD" "ingen commit gjordes"
+elif [ "$r" != "$H1" ]; then no "K2 candidate_sha_ar_HEAD" "rapport=[$r] git=[$H1]"
+else ok "K2 candidate_sha_ar_HEAD: rapporten bär workspacets nya HEAD"; fi
+
+# K3: files är LIKHET mot git show, inte delmängd.
+f=$(echo "$ut" | falt files); g=$(filer_i "$W" "$H1")
+if [ "$(echo $f)" != "$(echo $g)" ]; then no "K3 files likhet mot git" "rapport=[$f] git=[$g]"
+else ok "K3 files är exakt commitens filer, varken mer eller mindre"; fi
+
+# K4: ändrade OCH raderade spårade filer kommer med.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/andrar.sh" 2>/dev/null); kod=$?
+f=$(echo "$ut" | falt files)
+if [ "$kod" -ne 0 ]; then no "K4 ändrad+raderad ger kandidat" "kod=$kod [$ut]"
+elif ! echo " $f " | grep -q " README.md " || ! echo " $f " | grep -q " AUTOPILOT "; then
+  no "K4 stagar allt som ändrats" "files=[$f], väntade README.md och AUTOPILOT"
+else ok "K4 ändrad och raderad spårad fil bärs båda in i kandidaten"; fi
+vakt "K4"
+
+# K5 ÄGARBESLUTET: noll ändringar + rapport → failure utan commit.
+W=$(ws "$LINENO") || harnessfel "$LINENO"; H0=$(huvud "$W"); N0=$(antal "$W")
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/ljuger-trovardigt.sh" 2>/dev/null); kod=$?
+if [ "$kod" -eq 0 ]; then no "K5 utsagan vänder aldrig failure" "exit 0 trots noll ändringar [$ut]"
+elif [ "$(huvud "$W")" != "$H0" ] || [ "$(antal "$W")" != "$N0" ]; then
+  no "K5 ingen commit vid noll ändringar" "HEAD/antal ändrades"
+else ok "K5 noll ändringar + trovärdig rapport → failure utan commit"; fi
+
+# K6 SPEGELFALLET: ändrar filer OCH ljuger — git vinner.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/ljuger-anda.sh" 2>/dev/null); kod=$?
+H1=$(huvud "$W"); r=$(echo "$ut" | falt candidate_sha); f=$(echo "$ut" | falt files)
+if [ "$kod" -ne 0 ]; then no "K6 ändring ger kandidat trots lögn" "kod=$kod [$ut]"
+elif [ "$r" = "$FALSKT_SHA" ] || [ "$r" != "$H1" ]; then
+  no "K6 sessionens SHA får aldrig gå igenom" "rapport=[$r] git=[$H1]"
+elif echo " $f " | grep -q " ljug.txt "; then
+  no "K6 sessionens files får aldrig gå igenom" "files=[$f]"
+else ok "K6 spegelfall: filer ändrade men lögnen ersatt av git"; fi
+vakt "K6"
+
+# K7: K5:s lögn var trovärdig — verkligt HEAD, fil som finns. Bindes här.
+if [ "$SANT_SHA" != "$BAS" ] || ! git cat-file -e "$SANT_SHA" 2>/dev/null; then
+  no "K7 K5:s lögn är trovärdig" "SANT_SHA är inte ett verkligt commit"
+elif ! git ls-files --error-unmatch README.md >/dev/null 2>&1; then
+  no "K7 K5:s lögn är trovärdig" "README.md är inte spårad"
+else ok "K7 K5:s lögn bar verkligt SHA och verklig fil — bara git kunde fälla den"; fi
+
+# K8: tyst session som ändrar → kandidat, files ur git.
+W=$(ws "$LINENO") || harnessfel "$LINENO"; H0=$(huvud "$W")
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/tyst.sh" 2>/dev/null); kod=$?
+f=$(echo "$ut" | falt files)
+if [ "$kod" -ne 0 ]; then no "K8 tyst session ger kandidat" "kod=$kod [$ut]"
+elif [ "$(huvud "$W")" = "$H0" ]; then no "K8 tyst session committas" "HEAD oförändrad"
+elif ! echo " $f " | grep -q "tyst.txt"; then no "K8 files ur git" "files=[$f]"
+else ok "K8 tyst session som ändrar → kandidat, files ur git"; fi
+vakt "K8"
+
+# K9: orsak ordagrant i den gren h-009 levererar den.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/klagar.sh" 2>/dev/null); kod=$?
+if [ "$kod" -eq 0 ]; then no "K9 orsak bärs vidare" "exit 0 trots noll ändringar [$ut]"
+elif ! echo "$ut" | grep -qF "SESSIONSFEL: kvoten tog slut"; then
+  no "K9 orsak ordagrant" "sessionens text saknas i [$ut]"
+else ok "K9 sessionens orsakstext bärs vidare ordagrant"; fi
+
+# K10: tom orsak sväljs inte — utfallet NAMNGER steget.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/stum.sh" 2>/dev/null); kod=$?
+if [ "$kod" -eq 0 ]; then no "K10 tom orsak" "exit 0 trots noll ändringar [$ut]"
+elif ! echo "$ut" | grep -Eqi 'ändr|andr|commit|kandidat|tom|utan'; then
+  no "K10 utfallet namnger steget" "ingen ledtråd om VAD som brast: [$ut]"
+else ok "K10 stum session → failure som namnger steget"; fi
+
+# K11: timeout och nonzero_exit — BÅDA namngivna, skilda koder.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut_t=$("$CLI" kor "$W" "$KUV" 2 -- "$tmp/haenger.sh" 2>/dev/null); kod_t=$?
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut_n=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/faller.sh" 2>/dev/null); kod_n=$?
+if [ "$kod_t" -eq 0 ] || [ "$kod_n" -eq 0 ]; then
+  no "K11 klasser bärs vidare" "timeout=$kod_t nonzero=$kod_n"
+elif ! echo "$ut_t" | grep -qi 'timeout'; then no "K11 timeout namnges" "[$ut_t]"
+elif ! echo "$ut_n" | grep -qi 'nonzero'; then no "K11 nonzero_exit namnges" "[$ut_n]"
+elif [ "$kod_t" = "$kod_n" ]; then no "K11 skilda exitkoder" "båda gav $kod_t"
+else ok "K11 timeout och nonzero_exit namngivna, skilda exitkoder"; fi
+vakt "K11"
+
+# K12: timeout mätt på EFFEKT — barnbarnet dog.
+sleep 1; f1=$(wc -l < "$KANARIE" | tr -d ' '); sleep 2; f2=$(wc -l < "$KANARIE" | tr -d ' ')
+if [ "$f1" = "0" ]; then
+  echo "SKIP  K12 kanariefågel skrev aldrig — odömbart"; echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+elif [ "$f2" != "$f1" ]; then no "K12 processgruppen dödas" "kanariefågeln tickade vidare: $f1 → $f2"
+else ok "K12 timeout dödade hela processgruppen, mätt på effekt"; fi
+
+# K13: ingen tom commit.
+W=$(ws "$LINENO") || harnessfel "$LINENO"; N0=$(antal "$W")
+"$CLI" kor "$W" "$KUV" 60 -- "$tmp/stum.sh" >/dev/null 2>&1
+if [ "$(antal "$W")" != "$N0" ]; then no "K13 ingen tom commit" "antal $N0 → $(antal "$W")"
+else ok "K13 ingen commit skapas när inget ändrats"; fi
+
+# K14: kuvertet vidarebefordras — spåret ligger i kandidatens INNEHÅLL.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/kuvertlasare.sh" 2>/dev/null); kod=$?
+inneh=$(git -C "$W" show "$(huvud "$W")":tests/h012fix/kuvertspar.txt 2>/dev/null)
+if [ "$kod" -ne 0 ]; then no "K14 kuvertet når sessionen" "kod=$kod [$ut]"
+elif ! echo "$inneh" | grep -qF "spec=$SPEC_SHA"; then
+  no "K14 kuvertet vidarebefordras" "kandidaten bär inte kuvertets spec_sha256: [$inneh]"
+else ok "K14 kuvertet nådde sessionen — spec_sha256 i kandidatens innehåll"; fi
+
+# K15: ingen kontaminering — bara sessionens filer i kandidaten.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+ut=$("$CLI" kor "$W" "$KUV" 60 -- "$tmp/arlig.sh" 2>/dev/null)
+g=$(filer_i "$W" "$(huvud "$W")")
+if [ "$(echo $g)" != "tests/h012fix/en.txt" ]; then
+  no "K15 ingen kontaminering" "kandidaten bär mer än sessionens fil: [$g]"
+else ok "K15 kandidaten bär exakt sessionens ändring, inget av komponentens eget"; fi
+vakt "K15"
+
+# K16: fast commit-identitet, inte ärvd från fixturen.
+namn=$(git -C "$W" log -1 --format='%an <%ae>' 2>/dev/null)
+rot_namn=$(git config user.name 2>/dev/null)
+if [ -z "$namn" ]; then no "K16 fast identitet" "ingen commit att läsa identitet ur"
+elif [ -n "$rot_namn" ] && echo "$namn" | grep -qF "$rot_namn"; then
+  no "K16 fast identitet" "committern ärvde reporotens identitet: [$namn]"
+else ok "K16 committen bär komponentens egen identitet: $namn"; fi
+
+# K17: reporoten — refs, arbetsträd, HEAD. Objekt delas by design.
+if [ "$BAS" != "$ROT_HEAD" ]; then
+  echo "FAIL  K17 basen flyttade sig — provet mätte mot ett rörligt mål"
+  echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+fi
+if [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ]; then no "K17 reporoten orörd" "HEAD ändrades"
+elif [ "$(git status --porcelain)" != "$ROT_STATUS" ]; then
+  no "K17 reporoten orörd" "arbetsträdet ändrades (innehåll, inte antal)"
+elif [ "$(git for-each-ref --format='%(refname) %(objectname)' | sort)" != "$ROT_REFS" ]; then
+  no "K17 reporoten orörd" "refs tillkom eller ändrades"
+else ok "K17 reporotens HEAD, arbetsträd och refs orörda"; fi
+
+# K18: exitkod 2 används aldrig — den är ODÖMBART.
+tva=0
+for k in "$kod" "$kod_t" "$kod_n"; do [ "$k" = "2" ] && tva=1; done
+if [ "$tva" = "1" ]; then no "K18 exitkod 2 används aldrig" "_lib.sh binder 2 till ODÖMBART"
+else ok "K18 ingen väg gav exitkod 2"; fi
+
+summera
