@@ -155,6 +155,17 @@
       "exit_criterion": "Mot en fixturspec med främmande namn och opaddade tal där kodpunktsordning skiljer sig från numerisk: väljer lägst id i kodpunktsordning bland behöriga; task med oattesterat beroende hoppas över trots lägst id; redan attesterad task väljs inte om; invaliderad dependency gör den beroende tasken obehörig igen; blandade namnscheman sorteras utan prefixantagande; claimad task återväljs inte; claim appendar exakt ett claimed-event, verifierat via state/cli rebuild; ingen behörig task ger tomt val med exit 0 och oförändrad state-logg.",
       "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-003"]
+    },
+    {
+      "id": "h-011",
+      "slice": 9,
+      "title": "Huvudloopen — kedjan",
+      "summary": "controller/loop/cli run <config.json> kör v4.1 §13:s varv deterministiskt över en godtycklig backlog-spec: lease runt körningen (h-004, vägrar före första varvet om upptagen), select/claim (h-010), workspace på aktuell base (h-005), kuvert mot config-specen (h-008), konfigurerat worker-kommando som argv-lista med timeout (h-009), strikt parse (h-006), diffpolicy mot config-specen (h-007), registrerad verifierare mot kandidatträdet (h-002), attestation vid grönt (h-003). Integration = kedjande base: nästa varv bygger på förra attesterade kandidat-SHA:t. Failure i ett varv attesterar aldrig; tasken förblir claimed och är ovalbar resten av körningen — retry, attempt-budget och circuit är senare skivor (fälten finns inte i specen), skrivs som kommentar. Workspacet rivs efter varvet — kandidatens commit är beviset. Drain tills ingen behörig task finns, leasen släpps, exit 0. Config och alla kataloger är indata; komponenten har ingen inbyggd sökväg och antar aldrig ett namnschema.",
+      "allowed_write": ["controller/loop/**", "tests/controller/loop/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-011-exit",
+      "exit_criterion": "Mot en fixturbacklog med två beroende tasks (steg-a, steg-b) och en konfigurerad testworker som gör riktiga commits i workspacet: kedjan tar lease, väljer, claimar, levererar kuvertet, parsar strikt, dömer diffen mot fixturspecens allowed_write, kör registrerad verifierare mot kandidatträdet och attesterar; varv två blir behörigt av varv etts attestation och bygger på dess kandidat-SHA — steg-b:s träd innehåller steg-a:s fil. Prosa-worker ger varv utan attestation och kedjan fortsätter till exit 0. Worker som skriver utanför allowed_write avvisas av policy utan attestation. Upptagen lease vägrar körningen före första varvet utan event. Efter drain är leasen släppt, och en redan attesterad backlog ger noll nya event.",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-001", "h-002", "h-003", "h-004", "h-005", "h-006", "h-007", "h-008", "h-009", "h-010"]
     }
   ],
 

@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# h-011-exit — skiva 9 (huvudloopen, kedjan)
+# Kontrakt: controller/loop/cli run <config.json>
+#   Config bär spec, attest_dir, state_dir, lease_dir, lease_resurs,
+#   workspace_rot, base_sha, worker_cmd (argv-lista), timeout_s, verifier_id,
+#   run_id. Exit 0 = körning slutförd (drain, även noll varv). Exit 1 = fel,
+#   inklusive upptagen lease FÖRE första varvet.
+# Varvet är v4.1 §13: select/claim → workspace på aktuell base → kuvert →
+# launch → strikt parse → policy → verifierare mot kandidatträdet → attest.
+# Integration = kedjande base. Failure attesterar aldrig; tasken förblir
+# claimed. Workspacet rivs efter varvet — kandidatens commit är beviset.
+# Effekter mäts via attest/state/git — aldrig via kedjans egen utsaga.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/loop/cli"
+ATT="controller/attest/cli"
+ST="controller/state/cli"
+LE="controller/lease/cli"
+krav_komponent "$CLI"
+for dep in controller/taskval/cli controller/attest/cli controller/state/cli \
+           controller/lease/cli controller/workspace/cli controller/worker/cli \
+           controller/policy/cli controller/envelope/cli controller/launch/cli \
+           controller/verify/cli; do
+  if [ ! -x "$dep" ]; then
+    echo "SKIP  harness — $dep saknas eller är inte körbar (h-011:s depends_on), testet är odömbart"
+    echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+  fi
+done
+
+WORK="$(temp_kat)" || { echo "FAIL  harness — temp-katalog kunde inte skapas"; exit 2; }
+trap 'rm -rf "$WORK"' EXIT
+# macOS: temp ligger under /var som är symlänk till /private/var — git worktree
+# list skriver den kanoniska formen, så matchning måste ske mot pwd -P.
+WORK_KANON="$(cd "$WORK" && pwd -P)"
+PY3="$(command -v python3)"
+BAS="$(git rev-parse HEAD)"
+
+# --- Fixturbacklogar. Främmande namn; formen är smoke-facitets.
+cat > "$WORK/backlog.json" <<'JSON'
+{
+  "spec_version": "fixtur",
+  "defaults": { "max_changed_files": 8, "max_added_lines": 600 },
+  "tasks": [
+    { "id": "steg-a", "slice": 0, "title": "a", "summary": "kedjefixtur a",
+      "allowed_write": ["tests/kedjefix/**"], "exit_test": "verify/bin/ingen",
+      "exit_criterion": "-", "docs_impact": [], "depends_on": [] },
+    { "id": "steg-b", "slice": 0, "title": "b", "summary": "kedjefixtur b",
+      "allowed_write": ["tests/kedjefix/**"], "exit_test": "verify/bin/ingen",
+      "exit_criterion": "-", "docs_impact": [], "depends_on": ["steg-a"] }
+  ]
+}
+JSON
+cat > "$WORK/prosa-backlog.json" <<'JSON'
+{
+  "spec_version": "fixtur",
+  "defaults": { "max_changed_files": 8, "max_added_lines": 600 },
+  "tasks": [
+    { "id": "prosa-1", "slice": 0, "title": "p", "summary": "prosafixtur",
+      "allowed_write": ["tests/kedjefix/**"], "exit_test": "verify/bin/ingen",
+      "exit_criterion": "-", "docs_impact": [], "depends_on": [] }
+  ]
+}
+JSON
+cat > "$WORK/rogue-backlog.json" <<'JSON'
+{
+  "spec_version": "fixtur",
+  "defaults": { "max_changed_files": 8, "max_added_lines": 600 },
+  "tasks": [
+    { "id": "rogue-1", "slice": 0, "title": "r", "summary": "roguefixtur",
+      "allowed_write": ["tests/kedjefix/**"], "exit_test": "verify/bin/ingen",
+      "exit_criterion": "-", "docs_impact": [], "depends_on": [] }
+  ]
+}
+JSON
+
+# --- Workers. Ärlig: fil inom allowed_write + riktig commit + giltig rapport.
+cat > "$WORK/arlig.py" <<'W'
+import json, os, subprocess, sys
+kuv = json.load(sys.stdin)
+tid = kuv["task_id"]
+os.makedirs("tests/kedjefix", exist_ok=True)
+fil = f"tests/kedjefix/{tid}.txt"
+open(fil, "w").write(f"kandidat for {tid}\n")
+subprocess.run(["git", "add", fil], check=True)
+subprocess.run(["git", "-c", "user.name=fixturworker", "-c", "user.email=fixtur@test",
+                "commit", "-q", "-m", f"kandidat {tid}"], check=True)
+sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+print(json.dumps({"status": "candidate", "candidate_sha": sha, "files": [fil]}))
+W
+cat > "$WORK/prosa.py" <<'W'
+print("Jag ar klar! Allt gick fint och jag har gjort ett utmarkt jobb.")
+W
+sed "s|@UT@|$WORK/rogue-sha.txt|" > "$WORK/rogue.py" <<'W'
+import json, os, subprocess, sys
+kuv = json.load(sys.stdin)
+os.makedirs("tests", exist_ok=True)
+fil = "tests/kedjefix-intrang.txt"
+open(fil, "w").write("utanfor allowed_write\n")
+subprocess.run(["git", "add", fil], check=True)
+subprocess.run(["git", "-c", "user.name=fixturworker", "-c", "user.email=fixtur@test",
+                "commit", "-q", "-m", "rogue"], check=True)
+sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+open("@UT@", "w").write(sha)
+print(json.dumps({"status": "candidate", "candidate_sha": sha, "files": [fil]}))
+W
+
+skriv_config() {
+cat > "$1" <<KONF
+{ "spec": "$2", "attest_dir": "$3", "state_dir": "$4",
+  "lease_dir": "$5", "lease_resurs": "kedjan", "workspace_rot": "$6",
+  "base_sha": "$BAS", "worker_cmd": ["$PY3", "$7"], "timeout_s": 60,
+  "verifier_id": "check-invariants", "run_id": "$8" }
+KONF
+}
+sha_ur_attest() { "$ATT" "$1" read "$2" 2>/dev/null | "$PY3" -c 'import json,sys; print(json.load(sys.stdin)["candidate_sha"])' 2>/dev/null; }
+har_status() { "$ST" rebuild "$1" 2>/dev/null | "$PY3" -c 'import json,sys
+d = {r["task"]: r["status"] for r in json.load(sys.stdin)}
+sys.exit(0 if d.get(sys.argv[1]) == sys.argv[2] else 1)' "$2" "$3"; }
+rader() { wc -l < "$1/events.jsonl" | tr -d ' '; }
+
+# --- A: solskensdrain över två beroende tasks.
+A_AT="$WORK/a-att"; A_ST="$WORK/a-st"; A_LE="$WORK/a-le"; A_WS="$WORK/a-ws"
+mkdir -p "$A_WS"; "$ST" init "$A_ST" >/dev/null 2>&1
+skriv_config "$WORK/config-a.json" "$WORK/backlog.json" "$A_AT" "$A_ST" "$A_LE" "$A_WS" "$WORK/arlig.py" kedja-a
+"$CLI" run "$WORK/config-a.json" >"$WORK/a-ut.txt" 2>"$WORK/a-fel.txt"; kod_a=$?
+if [ "$kod_a" -eq 0 ] && "$ATT" "$A_AT" read steg-a --require-valid >/dev/null 2>&1 \
+   && "$ATT" "$A_AT" read steg-b --require-valid >/dev/null 2>&1; then
+  ok "K1 drain attesterar båda: varv två blev behörigt av varv etts attestation"
+else
+  no "K1 kedjan" "exit ${kod_a} (väntat 0), attest steg-a/steg-b saknas eller ogiltig — kedjan binder inte varven"
+fi
+SHA_A="$(sha_ur_attest "$A_AT" steg-a)"; SHA_B="$(sha_ur_attest "$A_AT" steg-b)"
+if [ -n "$SHA_B" ] && [ "$SHA_A" != "$SHA_B" ] && git cat-file -e "$SHA_B" 2>/dev/null \
+   && [ -n "$(git ls-tree "$SHA_B" -- tests/kedjefix/steg-a.txt 2>/dev/null)" ]; then
+  ok "K2 kedjande base: steg-b:s kandidatträd innehåller steg-a:s fil"
+else
+  no "K2 kausalitet" "steg-b:s kandidat '${SHA_B}' saknar tests/kedjefix/steg-a.txt i trädet — integration bygger inte på förra kandidaten"
+fi
+if [ -n "$SHA_A" ] && git cat-file -e "$SHA_A" 2>/dev/null \
+   && [ -n "$(git diff --name-only "$BAS" "$SHA_A" 2>/dev/null)" ] \
+   && [ -z "$(git diff --name-only "$BAS" "$SHA_A" 2>/dev/null | grep -v '^tests/kedjefix/')" ]; then
+  ok "K3 riktiga commits inom allowed_write (diffen mot base är enbart tests/kedjefix/**)"
+else
+  no "K3 kandidatform" "steg-a:s kandidat '${SHA_A}' finns inte i git eller diffar utanför tests/kedjefix/**"
+fi
+if har_status "$A_ST" steg-a claimed && har_status "$A_ST" steg-b claimed; then
+  ok "K4 state bär claimed för båda varven (rebuild, loggen är sanningen)"
+else
+  no "K4 state-effekt" "rebuild visar inte steg-a och steg-b som claimed"
+fi
+
+# --- B: prosa-worker. Varvet får inte attestera; kedjan får inte krascha.
+B_AT="$WORK/b-att"; B_ST="$WORK/b-st"; B_LE="$WORK/b-le"; B_WS="$WORK/b-ws"
+mkdir -p "$B_WS"; "$ST" init "$B_ST" >/dev/null 2>&1
+skriv_config "$WORK/config-b.json" "$WORK/prosa-backlog.json" "$B_AT" "$B_ST" "$B_LE" "$B_WS" "$WORK/prosa.py" kedja-b
+"$CLI" run "$WORK/config-b.json" >/dev/null 2>&1; kod_b=$?
+if [ "$kod_b" -eq 0 ] && ! "$ATT" "$B_AT" read prosa-1 --require-valid >/dev/null 2>&1 \
+   && har_status "$B_ST" prosa-1 claimed; then
+  ok "K5 prosa-rapport ger varv utan attestation, kedjan fortsätter till exit 0"
+else
+  no "K5 parse-utfallet" "exit ${kod_b} (väntat 0) — prosa attesterades eller varvet claimade aldrig"
+fi
+
+# --- C: rogue-worker. Kandidaten SKA finnas i git men aldrig attesteras.
+C_AT="$WORK/c-att"; C_ST="$WORK/c-st"; C_LE="$WORK/c-le"; C_WS="$WORK/c-ws"
+mkdir -p "$C_WS"; "$ST" init "$C_ST" >/dev/null 2>&1
+skriv_config "$WORK/config-c.json" "$WORK/rogue-backlog.json" "$C_AT" "$C_ST" "$C_LE" "$C_WS" "$WORK/rogue.py" kedja-c
+"$CLI" run "$WORK/config-c.json" >/dev/null 2>&1; kod_c=$?
+ROGUE_SHA="$(cat "$WORK/rogue-sha.txt" 2>/dev/null)"
+if [ "$kod_c" -eq 0 ] && ! "$ATT" "$C_AT" read rogue-1 --require-valid >/dev/null 2>&1 \
+   && echo "$ROGUE_SHA" | grep -Eq '^[0-9a-f]{40}$' && git cat-file -e "$ROGUE_SHA" 2>/dev/null; then
+  ok "K6 policyavslag: kandidaten finns i git men attesterades aldrig"
+else
+  no "K6 policy-utfallet" "exit ${kod_c} (väntat 0), rogue-sha '${ROGUE_SHA}' — kandidat saknas (varvet nådde aldrig policy) eller attesterades trots intrång"
+fi
+
+# --- D: upptagen lease. Vägran FÖRE första varvet, inga event.
+D_AT="$WORK/d-att"; D_ST="$WORK/d-st"; D_LE="$WORK/d-le"; D_WS="$WORK/d-ws"
+mkdir -p "$D_WS"; "$ST" init "$D_ST" >/dev/null 2>&1
+"$LE" "$D_LE" acquire kedjan --ttl 300 >/dev/null 2>&1
+skriv_config "$WORK/config-d.json" "$WORK/backlog.json" "$D_AT" "$D_ST" "$D_LE" "$D_WS" "$WORK/arlig.py" kedja-d
+"$CLI" run "$WORK/config-d.json" >/dev/null 2>&1; kod_d=$?
+if [ "$kod_d" -ne 0 ] && [ "$(rader "$D_ST")" = "0" ]; then
+  ok "K7 upptagen lease vägrar körningen före första varvet, inga event"
+else
+  no "K7 lease-vägran" "exit ${kod_d} (väntat nollskilt) med $(rader "$D_ST") event (väntat 0) — kedjan körde trots upptagen lease"
+fi
+"$LE" "$D_LE" release kedjan >/dev/null 2>&1
+
+# --- Efter A: leasen släppt, omkörning tyst, inga worktree-rester.
+if [ -z "$("$LE" "$A_LE" owner kedjan 2>/dev/null)" ]; then
+  ok "K8 leasen är släppt efter drain"
+else
+  no "K8 lease-släpp" "lease owner är '$("$LE" "$A_LE" owner kedjan 2>/dev/null)' efter drain (väntat tom)"
+fi
+fore="$(rader "$A_ST")"
+"$CLI" run "$WORK/config-a.json" >/dev/null 2>&1; kod_a2=$?
+efter="$(rader "$A_ST")"
+if [ "$kod_a2" -eq 0 ] && [ "$fore" = "$efter" ]; then
+  ok "K9 redan attesterad backlog ger noll nya event (${fore}→${efter})"
+else
+  no "K9 tomt drain" "exit ${kod_a2} (väntat 0), event ${fore}→${efter} (väntat oförändrat)"
+fi
+if [ "$(git worktree list --porcelain | grep -c "$WORK_KANON")" = "0" ]; then
+  ok "K10 inga worktree-rester: alla workspaces rivna"
+else
+  no "K10 rest" "$(git worktree list --porcelain | grep -c "$WORK_KANON") worktrees under provkatalogen kvar — workspacet rivs inte efter varvet"
+fi
+
+summera
