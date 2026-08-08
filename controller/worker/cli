@@ -23,8 +23,16 @@ Klassen skrivs på STDOUT, inte stderr. Controllern läser utfallet ur stdout,
 och en traceback på stderr är inte en failure-klass utan en krasch.
 
 Exitkoden bär samma klassning, så en anropare slipper strängmatcha:
-0 giltigt · 1 felaktigt anrop · 2 empty · 3 unparseable · 4 sha saknas ·
-5 internt fel.
+0 giltigt · 1 felaktigt anrop · 3 unparseable · 4 sha saknas · 5 internt fel ·
+6 empty.
+
+**2 används aldrig.** Kontrollplanets exit-tester har redan bundit talet:
+`verify/bin/_lib.sh` rad 2 säger "exit 0 = PASS, 1 = FAIL, 2 = ODÖMBART", och
+skiva 2 avslutar med 2 när en stoppmekanism inte kan beläggas. Ett tomt
+worker-svar är inte odömbart — det är underkänt. Läser controllern 2 som
+"ingen dom" blir tyst utdata obedömd i stället för fälld, och det är exakt
+det tysta passet kriteriets sista led finns för att förhindra. `empty_output`
+ligger därför på 6, utanför 0-2.
 """
 
 import json
@@ -52,7 +60,9 @@ OPARSBAR = "unparseable_output"
 SHA_SAKNAS = "candidate_sha_not_found"
 INTERNT = "internal_error"
 
-KOD = {TOM: 2, OPARSBAR: 3, SHA_SAKNAS: 4, INTERNT: 5}
+# 2 saknas med avsikt: det talet är ODÖMBART i exit-testerna (_lib.sh rad 2)
+# och får aldrig betyda "underkänt" här. Se modulens docstring.
+KOD = {OPARSBAR: 3, SHA_SAKNAS: 4, INTERNT: 5, TOM: 6}
 
 
 class IckeStandard(ValueError):
