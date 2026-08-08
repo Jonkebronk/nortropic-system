@@ -144,6 +144,17 @@
       "exit_criterion": "Process som skriver välformad rapport ger exit 0 och rapporten oförändrad på stdout. Process som överskrider timeout dödas — hela processgruppen, inte bara barnet — och ger failure-klass timeout, aldrig hängning. Process som avslutar med nollskild kod ger failure med koden bevarad. Kuvertet når processen (den kan läsa det). Ingen rest efter timeout: inga kvarlämnade processer i gruppen. Ett dödat barnbarn räknas som rest.",
       "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-005", "h-006", "h-008"]
+    },
+    {
+      "id": "h-010",
+      "slice": 8,
+      "title": "Taskval och claim",
+      "summary": "Deterministiskt val av nästa behöriga task ur en godtycklig backlog-spec, plus claim. Behörig = samtliga depends_on attesterade-och-giltiga (h-003), tasken själv inte attesterad, status i state frånvarande eller pending. Ordning: lägst id i kodpunktsordning. Claim appendar exakt ett claimed-event i state (h-001) efter attest-guard (v4.1 §13/§178). Lease hör till körningen, inte claimet — h-011. Specen är indata; komponenten antar aldrig ett namnschema. priority/risk_class/next_eligible_at finns inte i specen och byggs inte — skrivs som kommentar i komponenten.",
+      "allowed_write": ["controller/taskval/**", "tests/controller/taskval/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-010-exit",
+      "exit_criterion": "Mot en fixturspec med främmande namn och opaddade tal där kodpunktsordning skiljer sig från numerisk: väljer lägst id i kodpunktsordning bland behöriga; task med oattesterat beroende hoppas över trots lägst id; redan attesterad task väljs inte om; invaliderad dependency gör den beroende tasken obehörig igen; blandade namnscheman sorteras utan prefixantagande; claimad task återväljs inte; claim appendar exakt ett claimed-event, verifierat via state/cli rebuild; ingen behörig task ger tomt val med exit 0 och oförändrad state-logg.",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-001", "h-003"]
     }
   ],
 

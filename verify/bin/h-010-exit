@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# h-010-exit — skiva 8 (taskval och claim)
+# Kontrakt: controller/taskval/cli select <spec.json> <attest-dir> <state-dir>
+#           controller/taskval/cli claim  <spec.json> <attest-dir> <state-dir>
+#   select → lägsta behöriga id (kodpunktsordning) på stdout, exit 0.
+#            Ingen behörig → tom stdout, exit 0 (dömbart utfall, inte fel). Fel → exit 1.
+#   claim  → som select, men appendar därtill EXAKT ETT event
+#            {"task": <id>, "status": "claimed"} i h-001-loggen. Tomt val appendar inget.
+# Behörig = samtliga depends_on attesterade-och-giltiga (h-003) OCH tasken själv
+# inte attesterad-giltig OCH status i state frånvarande eller "pending".
+# Specen är INDATA. Fixturnamnen är avsiktligt inte h-00N och talen opaddade:
+# kodpunktsordning skiljer sig från numerisk, så en numerisk sorterare mäts.
+# Doneness läses ur attest — aldrig ur rapporterad status. Kataloger anges av
+# anroparen (h-001-formen). Effekter mäts via state/cli rebuild, inte via
+# komponentens egen utsaga.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/taskval/cli"
+ATT="controller/attest/cli"
+ST="controller/state/cli"
+krav_komponent "$CLI"
+for dep in "$ATT" "$ST"; do
+  if [ ! -x "$dep" ]; then
+    echo "SKIP  harness — $dep saknas eller är inte körbar (h-010:s depends_on), testet är odömbart"
+    echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+  fi
+done
+
+WORK="$(temp_kat)" || { echo "FAIL  harness — temp-katalog kunde inte skapas"; exit 2; }
+trap 'rm -rf "$WORK"' EXIT
+
+# Fabricerade SHA — finns inte i repot, kan inte härledas ur git.
+S1="1111111111111111111111111111111111111111"
+S2="2222222222222222222222222222222222222222"
+S3="3333333333333333333333333333333333333333"
+
+# Fixtur 1: främmande prefix, opaddade tal. Kodpunkt: dag-0 < dag-10 < dag-100
+# < dag-2 < dag-9. dag-0 är lägst men blockerad (zon-9 attesteras aldrig).
+SPEC1="$WORK/backlog.json"
+cat > "$SPEC1" <<'JSON'
+{
+  "tasks": [
+    { "id": "dag-0",   "depends_on": ["zon-9"] },
+    { "id": "dag-10",  "depends_on": ["dag-100"] },
+    { "id": "dag-2",   "depends_on": ["dag-100"] },
+    { "id": "dag-9",   "depends_on": ["dag-100"] },
+    { "id": "dag-100", "title": "roten", "depends_on": [] }
+  ]
+}
+JSON
+
+# Rebuild-läsare, h-003-formen: parsas som JSON och prövar VÄRDET, aldrig
+# fältnamn i råtext. Exit 0 omm $2 står som claimed.
+klaimad() {
+  "$ST" rebuild "$1" 2>/dev/null | python3 -c 'import json,sys
+try: t=json.load(sys.stdin)
+except Exception: sys.exit(2)
+d={r["task"]: r["status"] for r in t}
+sys.exit(0 if d.get(sys.argv[1])=="claimed" else 1)' "$2"
+}
+rader() { wc -l < "$1/events.jsonl" | tr -d ' '; }
+
+# --- A: dag-100 attesterad. Behöriga = dag-10/dag-2/dag-9.
+A_ATT="$WORK/att-a"; A_ST="$WORK/st-a"; "$ST" init "$A_ST" >/dev/null 2>&1
+"$ATT" "$A_ATT" write dag-100 "$S1" >/dev/null 2>&1
+val_a="$("$CLI" select "$SPEC1" "$A_ATT" "$A_ST" 2>/dev/null)"; kod_a=$?
+if [ "$kod_a" -eq 0 ] && [ "$val_a" = "dag-10" ]; then
+  ok "K1 lägst id i kodpunktsordning bland behöriga (dag-10, inte dag-2)"
+else
+  no "K1 kodpunktsordning" "väntade dag-10 exit 0, fick '$val_a' exit $kod_a — dag-2 avslöjar numerisk sortering"
+fi
+if [ "$val_a" != "dag-0" ]; then
+  ok "K2 task med oattesterat beroende hoppas över trots lägst id"
+else
+  no "K2 attest-behörighet" "valde dag-0 vars beroende zon-9 saknar attestation — behörigheten läser inte attest"
+fi
+
+# --- B: dag-100 OCH dag-10 attesterade → dag-10 är klar och hoppas över.
+B_ATT="$WORK/att-b"; B_ST="$WORK/st-b"; "$ST" init "$B_ST" >/dev/null 2>&1
+"$ATT" "$B_ATT" write dag-100 "$S1" >/dev/null 2>&1
+"$ATT" "$B_ATT" write dag-10  "$S2" >/dev/null 2>&1
+val_b="$("$CLI" select "$SPEC1" "$B_ATT" "$B_ST" 2>/dev/null)"
+if [ "$val_b" = "dag-2" ]; then
+  ok "K3 attesterad-giltig task räknas som klar och väljs inte om (dag-2 väljs)"
+else
+  no "K3 done-hopp" "väntade dag-2 när dag-10 är attesterad-giltig, fick '$val_b'"
+fi
+
+# --- C: stale. Lastbärande mot state-baserat val: state kan inte bli stale.
+C_ATT="$WORK/att-c"; C_ST="$WORK/st-c"; "$ST" init "$C_ST" >/dev/null 2>&1
+"$ATT" "$C_ATT" write dag-100 "$S1" >/dev/null 2>&1
+val_c1="$("$CLI" select "$SPEC1" "$C_ATT" "$C_ST" 2>/dev/null)"
+"$ATT" "$C_ATT" invalidate "$S1" >/dev/null 2>&1
+val_c2="$("$CLI" select "$SPEC1" "$C_ATT" "$C_ST" 2>/dev/null)"
+if [ "$val_c1" = "dag-10" ] && [ "$val_c2" = "dag-100" ]; then
+  ok "K4 invalidering blockerar beroende tasks OCH öppnar dag-100 för omtest"
+else
+  no "K4 stale-behörighet" "före invalidate '$val_c1' (väntat dag-10), efter '$val_c2' (väntat dag-100) — stale ska både spärra beroende och göra den invaliderade valbar igen; state kan inte uttrycka detta"
+fi
+
+# --- D: blandade namnscheman i samma backlog. Kodpunkt: versaler före gemener.
+SPEC2="$WORK/blandad.json"
+cat > "$SPEC2" <<'JSON'
+{
+  "tasks": [
+    { "id": "NRT-2",  "depends_on": ["MIG-01"] },
+    { "id": "dag-2",  "depends_on": ["MIG-01"] },
+    { "id": "MIG-01", "depends_on": [] }
+  ]
+}
+JSON
+D_ATT="$WORK/att-d"; D_ST="$WORK/st-d"; "$ST" init "$D_ST" >/dev/null 2>&1
+"$ATT" "$D_ATT" write MIG-01 "$S3" >/dev/null 2>&1
+val_d="$("$CLI" select "$SPEC2" "$D_ATT" "$D_ST" 2>/dev/null)"
+if [ "$val_d" = "NRT-2" ]; then
+  ok "K5 blandade namnscheman i kodpunktsordning (NRT-2 före dag-2)"
+else
+  no "K5 namnschema-oberoende" "väntade NRT-2 (versaler före gemener), fick '$val_d' — skiftlägesokänslig sortering eller prefixantagande"
+fi
+
+# --- E: ingen behörig task är ett dömbart utfall.
+SPEC3="$WORK/tom.json"
+cat > "$SPEC3" <<'JSON'
+{ "tasks": [ { "id": "NRT-099", "depends_on": ["aldrig-klar"] } ] }
+JSON
+E_ATT="$WORK/att-e"; E_ST="$WORK/st-e"; "$ST" init "$E_ST" >/dev/null 2>&1
+"$ATT" "$E_ATT" write orelaterad "$S1" >/dev/null 2>&1
+ut_e="$("$CLI" select "$SPEC3" "$E_ATT" "$E_ST" 2>/dev/null)"; kod_e=$?
+if [ -z "$ut_e" ] && [ "$kod_e" -eq 0 ]; then
+  ok "K6 ingen behörig task → tomt val, exit 0"
+else
+  no "K6 tomt val" "väntade tom stdout exit 0, fick '$ut_e' exit $kod_e — 'ingen behörig' är dömbart, inte ett fel"
+fi
+
+# --- F: claim. Effekt mäts i loggen och via rebuild, inte i claimens utsaga.
+F_ATT="$WORK/att-f"; F_ST="$WORK/st-f"; "$ST" init "$F_ST" >/dev/null 2>&1
+"$ATT" "$F_ATT" write dag-100 "$S1" >/dev/null 2>&1
+c1="$("$CLI" claim "$SPEC1" "$F_ATT" "$F_ST" 2>/dev/null)"
+r1="$(rader "$F_ST")"
+if [ "$c1" = "dag-10" ] && [ "$r1" = "1" ] && klaimad "$F_ST" dag-10; then
+  ok "K7 claim väljer som select och appendar exakt ett claimed-event (rebuild visar dag-10)"
+else
+  no "K7 claim-effekt" "claim gav '$c1' (väntat dag-10) med $r1 event-rader (väntat 1) — effekten ska synas i state/cli rebuild som claimed"
+fi
+val_f="$("$CLI" select "$SPEC1" "$F_ATT" "$F_ST" 2>/dev/null)"
+if [ "$val_f" = "dag-2" ]; then
+  ok "K8 claimad task återväljs inte (select ger dag-2 efter claim av dag-10)"
+else
+  no "K8 livscykelfilter" "select efter claim gav '$val_f' (väntat dag-2) — claimad task får inte återväljas; state-livscykeln läses inte"
+fi
+c2="$("$CLI" claim "$SPEC1" "$F_ATT" "$F_ST" 2>/dev/null)"
+c3="$("$CLI" claim "$SPEC1" "$F_ATT" "$F_ST" 2>/dev/null)"
+r3="$(rader "$F_ST")"
+c4="$("$CLI" claim "$SPEC1" "$F_ATT" "$F_ST" 2>/dev/null)"; kod4=$?
+r4="$(rader "$F_ST")"
+if [ "$c2" = "dag-2" ] && [ "$c3" = "dag-9" ] && [ -z "$c4" ] && [ "$kod4" -eq 0 ] && [ "$r3" = "3" ] && [ "$r4" = "3" ]; then
+  ok "K9 tömning i ordning (dag-2, dag-9) och tomt claim lämnar loggen orörd (3→3 rader)"
+else
+  no "K9 tömning utan rest" "sekvens '$c2','$c3','$c4' (väntat dag-2, dag-9, tomt) exit $kod4, event-rader ${r3}→${r4} (väntat 3→3) — fel sekvens avslöjar också en select som muterar"
+fi
+
+summera
