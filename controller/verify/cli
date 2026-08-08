@@ -83,7 +83,7 @@ def kmd_check(register: dict, vid: str) -> int:
     return 0
 
 
-def kmd_run(register: dict, vid: str) -> int:
+def kmd_run(register: dict, vid: str, mal: Path = ROT) -> int:
     # Okänt id avvisas här, före allt annat. Fri text i verifier-fältet är
     # bara ett id som inte finns — det tolkas aldrig, det körs aldrig.
     if vid not in register:
@@ -112,7 +112,12 @@ def kmd_run(register: dict, vid: str) -> int:
         return fel(f"okänd runner för {vid}: {post.get('runner')}")
 
     # argv, aldrig shell.
-    return subprocess.run([runner, str(p)], cwd=ROT, shell=False).returncode
+    mal = mal.resolve()
+    if not mal.is_dir():
+        return fel(f"målkatalog saknas eller är ingen katalog: {mal}")
+    # Målet som indata (LOOP-ÄGARHAND-23): den GODKÄNDA filen körs alltid ur
+    # repot (hash-kontrollerad ovan), men trädet den dömer är målkatalogen.
+    return subprocess.run([runner, str(p)], cwd=mal, shell=False).returncode
 
 
 def main(argv: list[str]) -> int:
@@ -126,10 +131,14 @@ def main(argv: list[str]) -> int:
 
     if kommando == "list":
         return kmd_list(register)
-    if kommando in ("check", "run"):
+    if kommando == "check":
         if len(argv) != 3:
-            return fel(f"användning: cli {kommando} <verifier-id>")
-        return kmd_check(register, argv[2]) if kommando == "check" else kmd_run(register, argv[2])
+            return fel("användning: cli check <verifier-id>")
+        return kmd_check(register, argv[2])
+    if kommando == "run":
+        if len(argv) not in (3, 4):
+            return fel("användning: cli run <verifier-id> [målkatalog]")
+        return kmd_run(register, argv[2], Path(argv[3]) if len(argv) == 4 else ROT)
     return fel(f"okänt kommando: {kommando}")
 
 
