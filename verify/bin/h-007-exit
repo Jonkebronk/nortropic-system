@@ -2,56 +2,158 @@
 # h-007-exit — skiva 7 (diffpolicy, mekanisk §A-vakt)
 # Kontrakt: controller/policy/cli check <task-id> <base-sha> <candidate-sha>
 #           → 0 om kandidaten får föreslås, ≠0 annars. Orsak på stdout.
+# §A-ytan som prövas: byggplan v3 §3.1 MINUS controller/**, specs/**, verify/**
+# (de skyddas av allowed_write och ägarhand — se §3.1, Två mekanismer).
 . "$(dirname "$0")/_lib.sh"
 CLI="controller/policy/cli"
 krav_komponent "$CLI"
 
 BASE=$(git rev-parse HEAD)
 GREN="h007-prov-$$"
+WS=$(temp_kat)/ws
+[ -n "$WS" ] || { echo "FAIL  K0 temp — temp_kat gav ingen katalog"; echo; echo "0 PASS, 1 FAIL"; exit 1; }
 git branch -f "$GREN" "$BASE" >/dev/null 2>&1
-WS=$(mktemp -d); trap 'rm -rf "$WS"; git worktree remove --force "$WS" 2>/dev/null; git branch -D "$GREN" >/dev/null 2>&1' EXIT
-git worktree add --force "$WS" "$GREN" >/dev/null 2>&1 || { no "uppsättning" "kunde inte skapa provworktree"; summera; }
+# Städordning: worktree bort FÖRE katalogen rivs (h-005-lärdomen).
+trap 'git worktree remove --force "$WS" >/dev/null 2>&1; rm -rf "$(dirname "$WS")"; git branch -D "$GREN" >/dev/null 2>&1' EXIT
+git worktree add "$WS" "$GREN" >/dev/null 2>&1 || { no "K0 uppsättning" "kunde inte skapa provworktree"; summera; }
 
 commit_i_ws() { git -C "$WS" add -A >/dev/null 2>&1; git -C "$WS" commit -q -m "$1" >/dev/null 2>&1; git -C "$WS" rev-parse HEAD; }
+ater() { git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1; git -C "$WS" clean -fdq >/dev/null 2>&1; }
 
-# K1: kandidat som rör §A-yta avvisas
-echo "on" > "$WS/AUTOPILOT"
-KAND=$(commit_i_ws "prov: rör AUTOPILOT")
+# K1: §A-ytan avvisas — FEM skilda filer, inte en.
+# En komponent som hårdkodar "AUTOPILOT" fälls här.
+i=1
+for mal in "AUTOPILOT" "workflows/prov.md" "tests/fixtures/prov.json" \
+           "agents/nortropic-steward.md" "scripts/check-invariants.mjs"; do
+  ater
+  mkdir -p "$WS/$(dirname "$mal")" 2>/dev/null
+  printf '\n# prov\n' >> "$WS/$mal"
+  KAND=$(commit_i_ws "prov: rör $mal")
+  ut=$("$CLI" check h-001 "$BASE" "$KAND" 2>&1); kod=$?
+  if [ "$kod" -eq 0 ]; then
+    no "K1.$i §A-vakt" "$mal accepterades"
+  elif ! echo "$ut" | grep -qF "$mal"; then
+    no "K1.$i §A-orsak" "$mal avvisades men orsaken namnger den inte: [$ut]"
+  else
+    ok "K1.$i §A-yta avvisas: $mal"
+  fi
+  i=$((i+1))
+done
+
+# K2: utanför allowed_write avvisas, med orsak
+ater
+printf '\n# prov\n' >> "$WS/agents/qa-launcher.md"
+KAND=$(commit_i_ws "prov: rör agents/qa-launcher.md")
 ut=$("$CLI" check h-001 "$BASE" "$KAND" 2>&1); kod=$?
-if [ "$kod" -ne 0 ] && echo "$ut" | grep -qi "AUTOPILOT"; then
-  ok "K1 §A-yta avvisas, orsaken namnger filen"
+if [ "$kod" -eq 0 ]; then
+  no "K2 allowed_write" "skrivning utanför allowed_write accepterades"
+elif [ -z "$ut" ]; then
+  no "K2 allowed_write" "avvisades tyst — kontraktet kräver orsak på stdout"
 else
-  no "K1 §A-vakt" "kandidat som rörde AUTOPILOT gav kod=$kod"
+  ok "K2 utanför allowed_write avvisas: [$ut]"
 fi
-git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1
 
-# K2: kandidat utanför allowed_write avvisas
-mkdir -p "$WS/agents" && printf '\n# prov\n' >> "$WS/agents/qa-launcher.md"
-KAND=$(commit_i_ws "prov: rör agents/")
-if "$CLI" check h-001 "$BASE" "$KAND" >/dev/null 2>&1; then
-  no "K2 allowed_write" "skrivning utanför taskens allowed_write accepterades"
+# K3: inom allowed_write accepteras — positiv kontroll.
+# Utan den passerar en komponent som avvisar allt.
+ater
+mkdir -p "$WS/controller/state"; echo "prov" > "$WS/controller/state/prov.txt"
+printf '\n| prov | | |\n' >> "$WS/docs/05-beslutslogg.md"
+KAND=$(commit_i_ws "prov: inom allowed_write med docs")
+ut=$("$CLI" check h-001 "$BASE" "$KAND" 2>&1); kod=$?
+if [ "$kod" -eq 0 ]; then
+  ok "K3 laglig kandidat accepteras"
 else
-  ok "K2 skrivning utanför allowed_write avvisas"
+  no "K3 falsk positiv" "laglig kandidat avvisades: kod=$kod [$ut]"
 fi
-git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1
 
-# K3: kandidat inom allowed_write accepteras
-mkdir -p "$WS/controller/state" && echo "prov" > "$WS/controller/state/prov.txt"
-KAND=$(commit_i_ws "prov: inom allowed_write")
-if "$CLI" check h-001 "$BASE" "$KAND" >/dev/null 2>&1; then
-  ok "K3 kandidat inom allowed_write accepteras"
+# K4: h-007:s EGEN form accepteras — controller/policy/** plus dess docs.
+# Skivan får inte fälla sin egen kandidat.
+ater
+mkdir -p "$WS/controller/policy"; echo "prov" > "$WS/controller/policy/prov.txt"
+printf '\n| prov | | |\n' >> "$WS/docs/05-beslutslogg.md"
+printf '\nprov\n' >> "$WS/docs/00-borja-har.md"
+KAND=$(commit_i_ws "prov: h-007:s egen form")
+ut=$("$CLI" check h-007 "$BASE" "$KAND" 2>&1); kod=$?
+if [ "$kod" -eq 0 ]; then
+  ok "K4 h-007:s egen kandidatform accepteras"
 else
-  no "K3 falsk positiv" "laglig kandidat avvisades"
+  no "K4 självfällning" "h-007 avvisade sin egen form: kod=$kod [$ut]"
 fi
-git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1
 
-# K4: evidence sparas vid avslag
-echo "on" > "$WS/AUTOPILOT"
+# K5: docs_impact ouppfyllt avvisas. Fältet är en SÖKVÄGSLISTA sedan ÄGARHAND-11.
+ater
+mkdir -p "$WS/controller/state"; echo "prov" > "$WS/controller/state/prov.txt"
+KAND=$(commit_i_ws "prov: utan docs")
+ut=$("$CLI" check h-001 "$BASE" "$KAND" 2>&1); kod=$?
+if [ "$kod" -eq 0 ]; then
+  no "K5 docs-krav" "kandidat utan docs-ändring accepterades trots docs_impact"
+elif [ -z "$ut" ]; then
+  no "K5 docs-krav" "avvisades tyst — orsak krävs"
+elif ! echo "$ut" | grep -qiE "docs|05-beslutslogg"; then
+  no "K5 docs-orsak" "avvisad men orsaken nämner inte docs-kravet: [$ut]"
+else
+  ok "K5 docs_impact ouppfyllt avvisas: [$ut]"
+fi
+
+# K6: LOC-budget. 3x max_added_lines (600) = 1800 rader ska avvisas.
+ater
+mkdir -p "$WS/controller/state"
+python3 -c "
+import sys
+open(sys.argv[1],'w').write('\n'.join('rad %d' % n for n in range(1800)) + '\n')
+" "$WS/controller/state/stor.txt"
+printf '\n| prov | | |\n' >> "$WS/docs/05-beslutslogg.md"
+KAND=$(commit_i_ws "prov: 1800 rader")
+ut=$("$CLI" check h-001 "$BASE" "$KAND" 2>&1); kod=$?
+if [ "$kod" -eq 0 ]; then
+  no "K6 LOC-budget" "1800 rader accepterades mot budget 600"
+elif [ -z "$ut" ]; then
+  no "K6 LOC-budget" "avvisades tyst — orsak krävs"
+elif ! echo "$ut" | grep -qiE "rad|lin|LOC|1800|600"; then
+  no "K6 LOC-orsak" "avvisad men orsaken nämner inte radbudgeten: [$ut]"
+else
+  ok "K6 3x LOC-budget avvisas: [$ut]"
+fi
+
+# K7: filbudget. 8 filer är tak; nio ska avvisas.
+ater
+mkdir -p "$WS/controller/state"
+for n in 1 2 3 4 5 6 7 8 9; do echo "prov" > "$WS/controller/state/f$n.txt"; done
+printf '\n| prov | | |\n' >> "$WS/docs/05-beslutslogg.md"
+KAND=$(commit_i_ws "prov: tio filer")
+ut=$("$CLI" check h-001 "$BASE" "$KAND" 2>&1); kod=$?
+if [ "$kod" -eq 0 ]; then
+  no "K7 filbudget" "tio filer accepterades mot budget 8"
+elif ! echo "$ut" | grep -qiE "(9|10|nio|tio)[^/]*(fil|file)|(fil|file)[^/]*(9|10|8|budget|gräns|max)"; then
+  no "K7 filbudget-orsak" "avvisad men orsaken nämner inte filbudgeten: [$ut]"
+else
+  ok "K7 filbudget överskriden avvisas: [$ut]"
+fi
+
+# K8: evidence skrivs vid avslag — mätt som NYTT, inte som "finns".
+# K1 har redan kört avslag, så en ren närvarokontroll vore vakuös.
+ater
+fore=$(ls controller/policy/evidence/ 2>/dev/null | wc -l | tr -d ' ')
+echo "on" >> "$WS/AUTOPILOT"
 KAND=$(commit_i_ws "prov: evidence")
 "$CLI" check h-001 "$BASE" "$KAND" >/dev/null 2>&1
-if ls controller/policy/evidence/* >/dev/null 2>&1; then
-  ok "K4 evidence sparas vid avslag"
+efter=$(ls controller/policy/evidence/ 2>/dev/null | wc -l | tr -d ' ')
+if [ "$efter" -gt "$fore" ]; then
+  ok "K8 evidence skrivs vid avslag ($fore → $efter)"
 else
-  no "K4 evidence" "inget evidence skrevs vid avslag"
+  no "K8 evidence" "inget NYTT evidence skrevs ($fore → $efter)"
+fi
+
+# K9: ingen krasch. Okänt task-id och ogiltigt SHA ska klassas, inte spåra ur.
+ater
+kras=""
+err=$("$CLI" check h-999 "$BASE" "$BASE" 2>&1 >/dev/null)
+echo "$err" | grep -qi "traceback" && kras="$kras okänt-task-id"
+err=$("$CLI" check h-001 "$BASE" "0000000000000000000000000000000000000000" 2>&1 >/dev/null)
+echo "$err" | grep -qi "traceback" && kras="$kras ogiltigt-sha"
+if [ -n "$kras" ]; then
+  no "K9 ingen krasch" "traceback för:$kras"
+else
+  ok "K9 ingen krasch vid okänt task-id eller ogiltigt SHA"
 fi
 summera
