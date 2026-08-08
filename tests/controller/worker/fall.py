@@ -30,7 +30,10 @@ from pathlib import Path
 ROT = Path(__file__).resolve().parents[3]
 CLI = ROT / "controller/worker/cli"
 
-GILTIG, ANROP, TOM, OPARSBAR, SHA_SAKNAS, INTERNT = 0, 1, 2, 3, 4, 5
+# 2 är ODÖMBART i exit-testerna (_lib.sh rad 2) och är därför inte en
+# failure-klass här. Filens EGET exit 2 nedan är just den betydelsen: odömbar
+# körning, inte underkänd komponent.
+GILTIG, ANROP, OPARSBAR, SHA_SAKNAS, INTERNT, TOM = 0, 1, 3, 4, 5, 6
 
 
 def git(*argv: str) -> str:
@@ -86,7 +89,8 @@ FALL: list[tuple] = [
     ("bom", "﻿" + kuvert(SHA), OPARSBAR, None, ""),
     ("json-array", "[" + kuvert(SHA) + "]", OPARSBAR, None, ""),
     ("json-strang", '"bara en sträng"', OPARSBAR, None, ""),
-    ("saknat-falt", '{"status":"candidate","files":["x"]}', OPARSBAR, None, "candidate_sha saknas"),
+    ("saknat-falt", '{"status":"candidate","files":["x"]}', OPARSBAR, None,
+     "AVSIKTLIGT: JSON men inget kuvert — schemabrott är oparsbart, inte sha-saknat"),
     ("fel-status", kuvert(SHA).replace('"candidate"', '"failure"', 1), OPARSBAR, None, ""),
     ("forkortat-sha", kuvert(SHA[:12]), OPARSBAR, None, "förkortning är tvetydig"),
     ("sha-radbrytning", json.dumps({"status": "candidate", "candidate_sha": SHA + "\n",
@@ -131,6 +135,7 @@ def main() -> int:
         p.write_text(innehall, encoding="utf-8")
         kod, ut, err = kor(["parse", str(p)])
         doma(namn, kod == vantad_kod, f"exit={kod} ut=[{ut[:70]}]", f"exit={vantad_kod}")
+        doma(f"{namn}/ej-2", kod != 2, "exit=2", "2 är ODÖMBART i exit-testerna, aldrig en dom")
         if vantad_ut is not None:
             doma(f"{namn}/stdout", ut == vantad_ut, f"[{ut[:70]}]", f"exakt [{vantad_ut}]")
         doma(f"{namn}/stderr", err == "", f"[{err[:70]}]", "tom stderr")
