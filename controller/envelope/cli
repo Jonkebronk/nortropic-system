@@ -1,0 +1,172 @@
+#!/usr/bin/env python3.12
+"""controller/envelope/cli — skiva 6b: taskkuvert, immutable uppdrag per attempt.
+
+    build <run-id> <task-id> <base-sha>
+        0   kuvertet som JSON på stdout
+        ≠0  orsaken på stdout
+
+Kuvertet bär v4.1 §12:s nio fält och är workerns HELA uppdrag. Det innehåller
+outcome — aldrig verifierarens implementation — och workern kontrollerar
+aldrig certifieringssteget.
+
+**Vad som medvetet INTE följer med.** `exit_test` är sökvägen till grinden som
+ska döma just den här kandidaten; en worker som ser den kan optimera mot
+provet i stället för mot uppgiften. Samma sak för verifierarregistret och
+verifier-id. `depends_on` och `slice` är controllerns schemaläggning, inte
+workerns uppdrag.
+
+**candidate_requirements finns inte i specen** och får aldrig uppfinnas som
+spec-fält — det härleds. `description` bär `summary`, alltså vad kandidaten
+ska åstadkomma. `candidate_requirements.utfall` bär `exit_criterion` styckat
+i enskilda krav: samma text, men vänd från *så här kommer den att dömas* till
+*det här ska kandidaten uppfylla*. `omfang` bär de spec-värden som h-007:s
+diffpolicy faktiskt avvisar på — docs-kravet och budgetarna. Utan dem är
+workern satt att misslyckas på regler den inte fått veta.
+
+Styckningen är KONSERVATIV: den delar bara där nästa mening börjar med versal
+eller siffra, så en förkortning aldrig blir en falsk gräns. Priset är grövre
+segment för h-004 och h-008. Ingen text får gå förlorad — går den det faller
+komponenten tillbaka på kriteriet i ett stycke.
+
+Kuvertet är immutable per attempt: samma run_id, task_id och base-sha ger
+BYTE-identiskt kuvert. Ingen tidsstämpel, ingen slump, sorterade nycklar.
+
+Exitkoden: 0 kuvert · 1 anropsfel · 8 internt fel. **2 används aldrig** —
+`verify/bin/_lib.sh` rad 2 binder det till ODÖMBART.
+"""
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/envelope/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+SPEC = ROT / "specs/tasks.spec.json"
+
+ANROP, INTERNT = 1, 8
+
+# Fälten i v4.1 §12, i den ordning paragrafen räknar upp dem. Listan finns för
+# att bygget ska falla om ett fält tappas bort, inte som dokumentation.
+FALT = ("run_id", "task_id", "base_sha", "spec_sha256", "title", "description",
+        "allowed_write", "denied_write", "candidate_requirements")
+
+# Delar bara framför versal eller siffra — "t.ex. " blir aldrig en gräns.
+MENINGSGRANS = re.compile(r"(?<=\.)\s+(?=[A-ZÅÄÖ0-9])")
+
+ID_FORM = re.compile(r"^[A-Za-z0-9._-]+\Z")
+
+
+def svar(text: str, kod: int) -> int:
+    print(text)
+    return kod
+
+
+def git(*argv: str) -> subprocess.CompletedProcess:
+    """Git utan skal. argv är en lista — fri text kan aldrig bli ett kommando."""
+    return subprocess.run(["git", "-C", str(ROT), *argv],
+                          capture_output=True, text=True, check=False)
+
+
+def los_upp_sha(sha: str) -> str | None:
+    """Commit-SHA som självt är en commit, annars None.
+
+    Identitetskravet är h-006:s lärdom: `^{commit}` peelar ett annoterat
+    taggobjekt till en ANNAN commit, och ett kuvert som beordrar fel base-sha
+    skickar workern att bygga på något ingen bett om.
+    """
+    r = git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+    ut = r.stdout.strip()
+    if r.returncode != 0 or not ut or ut != sha.lower():
+        return None
+    return ut
+
+
+def krav_ur(kriterium: str) -> list[str]:
+    """exit_criterion styckat i enskilda krav, utan att tappa ett tecken."""
+    delar = [d.strip() for d in MENINGSGRANS.split(kriterium.strip()) if d.strip()]
+    if "".join(delar.copy()).replace(" ", "") != kriterium.strip().replace(" ", ""):
+        # Styckningen tappade text. Hellre ett grovt krav än ett stympat.
+        return [kriterium.strip()]
+    return delar
+
+
+def bygg(run_id: str, task_id: str, base_arg: str) -> int:
+    try:
+        ra = SPEC.read_bytes()
+        spec = json.loads(ra)
+    except (OSError, ValueError) as e:
+        return svar(f"internt fel: kan inte läsa {SPEC}: {e}", INTERNT)
+
+    if not ID_FORM.match(run_id):
+        return svar(f"anropsfel: ogiltigt run-id {run_id!r}", ANROP)
+
+    traff = [t for t in spec.get("tasks", []) if t.get("id") == task_id]
+    if not traff:
+        return svar(f"anropsfel: okänd task-id {task_id} — finns inte i {SPEC.name}", ANROP)
+    task = traff[0]
+    std = spec.get("defaults", {})
+
+    base = los_upp_sha(base_arg)
+    if base is None:
+        return svar(f"anropsfel: base-sha {base_arg} är ingen commit i repot", ANROP)
+
+    kuvert = {
+        "run_id": run_id,
+        "task_id": task_id,
+        "base_sha": base,
+        "spec_sha256": hashlib.sha256(ra).hexdigest(),
+        "title": task.get("title", ""),
+        # §12 kallar fältet description; specen kallar det summary. Samma sak.
+        "description": task.get("summary", ""),
+        "allowed_write": list(task.get("allowed_write", [])),
+        "denied_write": list(std.get("denied_write", [])),
+        "candidate_requirements": {
+            "utfall": krav_ur(task.get("exit_criterion", "")),
+            "omfang": {
+                "docs_uppdatering_i_samma_commit": list(task.get("docs_impact", [])),
+                "max_andrade_filer": std.get("max_changed_files"),
+                "max_tillagda_rader": std.get("max_added_lines"),
+            },
+        },
+    }
+
+    saknas = [f for f in FALT if f not in kuvert]
+    if saknas:
+        return svar(f"internt fel: kuvertet saknar §12-fält: {', '.join(saknas)}", INTERNT)
+
+    # sort_keys + inget tidsberoende = byte-identiskt kuvert per attempt.
+    print(json.dumps(kuvert, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 4 or argv[0] != "build":
+        return svar("anropsfel: build <run-id> <task-id> <base-sha>", ANROP)
+    return bygg(argv[1], argv[2], argv[3])
+
+
+if __name__ == "__main__":
+    # Kriteriet kräver klassning, inte krasch. Inget stackspår når stderr.
+    try:
+        kod = main(sys.argv[1:])
+    except BrokenPipeError:
+        kod = INTERNT
+    except SystemExit:
+        raise
+    except BaseException as e:
+        try:
+            kod = svar(f"internt fel: {type(e).__name__}: {e}", INTERNT)
+        except BrokenPipeError:
+            kod = INTERNT
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        kod = INTERNT
+    sys.exit(kod)

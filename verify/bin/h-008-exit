@@ -103,9 +103,19 @@ fi
 
 # K8: kuvertet bär INGET om verifierarens implementation (v4.1 §12)
 if [ -s "$tmp/kuvert.json" ]; then
+  # allowed_write och denied_write BÄR sökvägar ur specen med avsikt — defaults.denied_write
+  # innehåller scripts/check-invariants.mjs. En grep över hela filen gör K5 och K8 ömsesidigt
+  # oförenliga (funnet av h-008-sessionen 2026-08-08, som mätte att en JSON-escape hade gett
+  # båda gröna och avstod). Grep:a därför kuvertet MINUS de två fälten.
+  python3.12 -c "
+import json,sys
+k=json.load(open(sys.argv[1]))
+for f in ('allowed_write','denied_write'): k.pop(f, None)
+print(json.dumps(k, ensure_ascii=False))
+" "$tmp/kuvert.json" > "$tmp/kuvert-utan-vagar.json"
   lack=""
-  grep -qi 'verify/bin' "$tmp/kuvert.json" && lack="$lack exit_test-sökväg"
-  grep -qi 'register.json\|verifier_id\|check-invariants' "$tmp/kuvert.json" && lack="$lack verifierarreferens"
+  grep -qi 'verify/bin' "$tmp/kuvert-utan-vagar.json" && lack="$lack exit_test-sökväg"
+  grep -qi 'register.json\|verifier_id' "$tmp/kuvert-utan-vagar.json" && lack="$lack verifierarreferens"
   if [ -n "$lack" ]; then
     no "K8 verifierarläckage" "kuvertet innehåller:$lack"
   else
@@ -125,5 +135,54 @@ if [ -n "$kras" ]; then
   no "K9 ingen krasch" "traceback för:$kras"
 else
   ok "K9 ingen krasch vid ogiltigt SHA eller saknade argument"
+fi
+
+# K10: run_id, task_id och base_sha speglar ARGUMENTEN, inte konstanter.
+# Lögnstubben skrev fyrtio nollor som base_sha och konstant run_id och passerade K2.
+ut=$("$CLI" build kort-run-42 h-003 "$BASE" 2>/dev/null)
+if [ -z "$ut" ]; then
+  no "K10 argumentspegling" "inget kuvert byggdes"
+else
+  echo "$ut" > "$tmp/k10.json"
+  fel=$(python3.12 -c "
+import json,sys
+k=json.load(open(sys.argv[1])); b=sys.argv[2]; f=[]
+if k.get('run_id')!='kort-run-42': f.append(f\"run_id={k.get('run_id')}\")
+if k.get('task_id')!='h-003': f.append(f\"task_id={k.get('task_id')}\")
+if k.get('base_sha')!=b: f.append(f\"base_sha={k.get('base_sha')}\")
+print(' '.join(f))
+" "$tmp/k10.json" "$BASE" 2>/dev/null)
+  if [ -z "$fel" ]; then ok "K10 run_id/task_id/base_sha speglar argumenten"
+  else no "K10 argumentspegling" "avviker: $fel"; fi
+fi
+
+# K11: title och description kommer ur SPECEN för just den tasken.
+# Två olika tasks måste ge olika text — tomma eller konstanta fält fälls.
+t3=$("$CLI" build r h-003 "$BASE" 2>/dev/null | python3.12 -c "import json,sys;k=json.load(sys.stdin);print(k.get('title',''))" 2>/dev/null)
+t5=$("$CLI" build r h-005 "$BASE" 2>/dev/null | python3.12 -c "import json,sys;k=json.load(sys.stdin);print(k.get('title',''))" 2>/dev/null)
+s3=$(python3.12 -c "
+import json
+d=json.load(open('specs/tasks.spec.json'))
+print([t for t in d['tasks'] if t['id']=='h-003'][0]['title'])
+")
+d3=$("$CLI" build r h-003 "$BASE" 2>/dev/null | python3.12 -c "import json,sys;print(len(json.load(sys.stdin).get('description','')))" 2>/dev/null)
+if [ "$t3" != "$s3" ]; then
+  no "K11 title/description" "title=[$t3] men specen säger [$s3]"
+elif [ "$t3" = "$t5" ]; then
+  no "K11 title/description" "h-003 och h-005 fick samma title — konstant, inte läst"
+elif [ "${d3:-0}" -lt 20 ]; then
+  no "K11 title/description" "description är $d3 tecken — tomt eller platshållare"
+else
+  ok "K11 title och description läses per task ur specen"
+fi
+
+# K12: candidate_requirements bär uppdraget, inte certifieringssteget.
+cr=$("$CLI" build r h-003 "$BASE" 2>/dev/null | python3.12 -c "import json,sys;print(json.dumps(json.load(sys.stdin).get('candidate_requirements','')))" 2>/dev/null)
+if [ "${#cr}" -lt 20 ]; then
+  no "K12 candidate_requirements" "tomt eller platshållare: $cr"
+elif echo "$cr" | grep -qi 'verify/bin\|exit_test\|verifier_id'; then
+  no "K12 candidate_requirements" "läcker certifieringssteget: $cr"
+else
+  ok "K12 candidate_requirements bär uppdraget utan certifieringssteget"
 fi
 summera
