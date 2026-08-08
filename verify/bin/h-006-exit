@@ -1,43 +1,92 @@
 #!/usr/bin/env bash
 # h-006-exit — skiva 6 (worker-launch med strikt utdatakontrakt)
-# Kontrakt: controller/worker/cli parse <fil>  → 0 vid giltigt kuvert, ≠0 annars
+# Kontrakt: controller/worker/cli parse <fil>
+#   giltigt kuvert  → exit 0, candidate_sha på stdout
+#   allt annat      → exit ≠0, orsak på stdout, aldrig traceback
 . "$(dirname "$0")/_lib.sh"
 CLI="controller/worker/cli"
 krav_komponent "$CLI"
 
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+tmp=$(temp_kat); trap 'rm -rf "$tmp"' EXIT
+[ -n "$tmp" ] && [ -d "$tmp" ] || { echo "FAIL  K0 temp — temp_kat gav ingen katalog"; echo; echo "0 PASS, 1 FAIL"; exit 1; }
 SHA=$(git rev-parse HEAD)
+SHA2=$(git rev-parse HEAD~1)
 
-# K1: giltigt kuvert accepteras
-printf '{"status":"candidate","candidate_sha":"%s","files":["controller/state/cli"]}\n' "$SHA" > "$tmp/ok.json"
-if "$CLI" parse "$tmp/ok.json" >/dev/null 2>&1; then
-  ok "K1 giltigt kuvert accepteras"
-else
-  no "K1 giltigt kuvert" "välformat kuvert avvisades"
-fi
+kuvert() { printf '{"status":"candidate","candidate_sha":"%s","files":["controller/state/cli"]}\n' "$1"; }
 
-# K2: prosa → unparseable_output, aldrig tolkningsförsök
+# K1/K2: giltigt kuvert accepteras OCH returnerar sitt EGET sha.
+# Två skilda SHA — ett enda hade inte skilt extraktion från hårdkodning.
+i=1
+for s in "$SHA" "$SHA2"; do
+  kuvert "$s" > "$tmp/ok$i.json"
+  ut=$("$CLI" parse "$tmp/ok$i.json" 2>/dev/null); kod=$?
+  if [ "$kod" -eq 0 ] && [ "$ut" = "$s" ]; then
+    ok "K$i giltigt kuvert accepteras och returnerar $s"
+  else
+    no "K$i giltigt kuvert" "kod=$kod utdata=[$ut] väntat=[$s]"
+  fi
+  i=$((i+1))
+done
+
+# K3: prosa → unparseable, aldrig tolkningsförsök
 printf 'Jag har nu byggt komponenten och allt fungerar bra!\n' > "$tmp/prosa.txt"
-ut=$("$CLI" parse "$tmp/prosa.txt" 2>&1); kod=$?
-if [ "$kod" -ne 0 ] && echo "$ut" | grep -qi "unparseable"; then
-  ok "K2 prosa → unparseable_output"
+ut3=$("$CLI" parse "$tmp/prosa.txt" 2>/dev/null); kod=$?
+if [ "$kod" -ne 0 ] && echo "$ut3" | grep -qi "unparseable"; then
+  ok "K3 prosa → unparseable"
 else
-  no "K2 prosa" "prosa gav kod=$kod utan unparseable_output"
+  no "K3 prosa" "kod=$kod utdata=[$ut3]"
 fi
 
-# K3: påstådd SHA som inte finns → failure
-printf '{"status":"candidate","candidate_sha":"0000000000000000000000000000000000000000","files":["x"]}\n' > "$tmp/falsk.json"
-if "$CLI" parse "$tmp/falsk.json" >/dev/null 2>&1; then
-  no "K3 SHA-verifiering" "obefintlig candidate_sha accepterades"
+# K4: prosa som INNEHÅLLER ett giltigt SHA ska ändå avvisas.
+# Skiljer "parsar strukturen" från "hittar en hex-sträng".
+printf 'Klart! Jag committade %s och allt är grönt.\n' "$SHA" > "$tmp/prosa-sha.txt"
+ut=$("$CLI" parse "$tmp/prosa-sha.txt" 2>/dev/null); kod=$?
+if [ "$kod" -ne 0 ]; then
+  ok "K4 prosa med giltigt SHA avvisas ändå"
 else
-  ok "K3 obefintlig candidate_sha → failure"
+  no "K4 prosa med SHA" "accepterades, kod=$kod utdata=[$ut]"
 fi
 
-# K4: tomt svar → failure, aldrig tyst PASS
+# K5: välformat kuvert med SHA som inte finns i repot → failure, EGEN klass.
+# Slumpat 40-hex, inte sentinelvärdet 0*40 som ett enkelt grep hade fångat.
+FALSK=$(head -c 20 /dev/urandom | od -An -tx1 | tr -d ' \n')
+if git cat-file -e "$FALSK^{commit}" 2>/dev/null; then
+  no "K5 falsk SHA" "slumpat SHA fanns i repot — kör om"
+else
+  kuvert "$FALSK" > "$tmp/falsk.json"
+  ut5=$("$CLI" parse "$tmp/falsk.json" 2>/dev/null); kod=$?
+  if [ "$kod" -eq 0 ]; then
+    no "K5 SHA-verifiering" "obefintlig candidate_sha accepterades"
+  elif echo "$ut5" | grep -qi "unparseable"; then
+    no "K5 failure-klass" "parsat-men-underkänt gav unparseable — samma klass som K3"
+  elif [ "$ut5" = "$ut3" ]; then
+    no "K5 failure-klass" "utdata identisk med K3:s — klasserna skiljs inte åt"
+  else
+    ok "K5 obefintlig candidate_sha → egen failure-klass"
+  fi
+fi
+
+# K6: ingen krasch. Traceback på stderr är inte en failure-klass.
+err=$("$CLI" parse "$tmp/prosa.txt" 2>&1 >/dev/null)
+if echo "$err" | grep -qi "traceback"; then
+  no "K6 ingen krasch" "traceback på stderr"
+else
+  ok "K6 ingen krasch vid oparsbar indata"
+fi
+
+# K7/K8/K9: tomt, blanktecken, trunkerad JSON → failure. Trunkerad är det
+# realistiska workerfelet; noll byte är det ovanligaste.
 : > "$tmp/tom.json"
-if "$CLI" parse "$tmp/tom.json" >/dev/null 2>&1; then
-  no "K4 tomt svar" "tomt kuvert gav exit 0"
-else
-  ok "K4 tomt svar → failure"
-fi
+printf '   \n\t\n' > "$tmp/blank.json"
+printf '{"status":"candidate","candidate_sha":"%s","fi' "$SHA" > "$tmp/trunk.json"
+i=7
+for f in tom blank trunk; do
+  ut=$("$CLI" parse "$tmp/$f.json" 2>/dev/null); kod=$?
+  if [ "$kod" -ne 0 ]; then
+    ok "K$i $f → failure"
+  else
+    no "K$i $f" "accepterades, utdata=[$ut]"
+  fi
+  i=$((i+1))
+done
 summera
