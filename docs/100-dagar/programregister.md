@@ -1081,7 +1081,7 @@ inte en loop: ingenting väljer nästa task, startar en worker eller binder dela
 Åtgärd kräver eget krav med eget exit-test före kod, enligt beslut 3. Ägarbeslut 2026-08-08: fixas
 inte inom h-006 — eget ärende, prioriteras separat.
 
-**Uppdatering 2026-08-08 (senare samma dag): ärendet stängt.** Launch-halvan byggd som h-008 (kuvert, 13 PASS) och h-009 (processtart, 11 PASS); väljaren h-010 (15 PASS) och huvudloopen h-011 (16 PASS) grindade på main `248afb9` — tolv gröna exit-test. "Ingenting väljer nästa task, startar en worker eller binder delarna samman" gäller inte längre: kedjan är hermetiskt bevisad utan LLM i kedjan. Kvar för drift: smoke-momentet (nästa post) och piloten.
+**Uppdatering 2026-08-08 (senare samma dag): ärendet stängt.** Launch-halvan byggd som h-008 (kuvert, 13 PASS) och h-009 (processtart, 11 PASS); väljaren h-010 (15 PASS) och huvudloopen h-011 (16 PASS) grindade på main `248afb9` — elva gröna exit-test (rättat 2026-08-08: `verify/bin/` bär elva grindar h-001–h-011, summa 122 PASS; "tolv" var fel och stod även i kontext-5). "Ingenting väljer nästa task, startar en worker eller binder delarna samman" gäller inte längre: kedjan är hermetiskt bevisad utan LLM i kedjan. Kvar för drift: smoke-momentet (nästa post) och piloten.
 
 ## Öppet ärende (registrerat ur kontrollplansarbetet 2026-08-08): h-009:s smoke-test och utföraragenten
 `h-009` startar en worker som ett KONFIGURERAT kommando, och dess exit-test kör hermetiska
@@ -1096,3 +1096,33 @@ som prövar att kommandot startar, att kuvertet når sessionen och att en verkli
 ingen utförare. Byggplan v3 §3 har redan förkastat v4.1:s filstruktur som en kundsajt. Vilket kommando
 som ska stå i h-009:s konfiguration i drift är alltså ännu obesvarat — komponenten är byggbar utan svaret,
 driften är det inte. Kräver spec-rad före kod enligt beslut 3.
+
+**Uppdatering 2026-08-08 (senare samma dag): posten stängd med utfall.** Smoke-momentet genomfört
+mot Claude Code 2.1.224 via `controller/launch/cli`. Postens tre krav belagda: kommandot startar
+(`launch-exit 0`, 8–20 s, tom stderr) · kuvertet når sessionen HELT — `spec_sha256` och cwd under
+`workspace_rot` återgivna i kandidatens INNEHÅLL, inte bara `base_sha` · verklig slutrapport fångad
+och accepterad av h-006 (`parse-exit 0`). Farhågan att `claude -p` alltid skulle linda JSON i prosa
+är FALSIFIERAD: `--output-format text` skrev exakt objektet tre gånger av tre.
+`--permission-mode acceptEdits` täcker filskrivning i `-p`-läge utan att någon allow-regel rördes.
+Två negativa utfall som är rätt beteende: tom `files` avvisades av h-006, och `status: failed`
+avvisades som kandidat — failure attesterar aldrig, nu mätt på en verklig session.
+
+**Utföraragenten: `utforare.md` BYGGS INTE.** v4.1 Fas B punkt 3 förutsätter en subagent-form som
+byggplan v3 §3 redan förkastat, och kedjan delegerar via kuvert, inte via subagent. Ersätts av
+h-012 (`controller/utforare/cli`, skiva 10) som komponent — spec-rad i `specs/tasks.spec.json`.
+
+## Öppet ärende (2026-08-08): commiträtten i länkat worktree
+`git add` PASSERAR sandboxen i ett länkat worktree trots att indexskrivningen går till huvudrepots
+`.git/worktrees/<ws>/`, alltså utanför workspacet. `git commit` gör det inte. Skillnaden kan inte
+förklaras av sandboxen och är **OVERIFIERAT**. Varken `git add` eller `git commit` finns i någon
+allow-lista; `~/.claude/settings.local.json` bär tjugo regler hopsamlade ur interaktiva sessioner,
+oversionerat och utanför ägarhand — driftbefogenhet ska aldrig vila där. Blockerar INTE h-012:
+skalet committar, sessionen behöver aldrig rätten. Registrerad som kuriositet, inte som hinder.
+
+## Öppet ärende (2026-08-08): spec-radshantverket
+En spec-rad kräver nio fält, `allowed_write` inom `.gitignore`-vitlistan och ett `exit_criterion`
+som ett skript kan döma. Det är ett hantverk, och backloggens kvalitet sätter taket för hur mycket
+autonomi kedjan kan ge. Tänkbar åtgärd: en komponent som validerar en handskriven rad mot vitlistan
+och budgetarna, eller genererar den ur en registerpost. **Ägarbeslut 2026-08-08: byggs inte nu** —
+underlaget saknas tills verkliga tasks körts och det syns var det faktiskt skaver. Kräver spec-rad
+före kod enligt beslut 3.

@@ -23,7 +23,7 @@ Träder i kraft vid nästa sessionsstart.
 | Nyckel | Verkan |
 |---|---|
 | `permissions.deny` (34) | Nekar verktygsvägen mot §A-mängden och läsning av nycklar |
-| `sandbox.filesystem.denyWrite` (26) | Nekar skalvägen mot §A på OS-nivå (Seatbelt) |
+| `sandbox.filesystem.denyWrite` (13) | Nekar skalvägen mot §A på OS-nivå (Seatbelt) |
 | `sandbox.network` | Tom allowlist utom `api.anthropic.com`, `strictAllowlist`, `allowManagedDomainsOnly` |
 | `requiredMinimum/MaximumVersion` | Claude Code vägrar starta utanför 2.1.224 |
 | `env.DISABLE_AUTOUPDATER` | Bakgrundsuppdatering av — pinnen håller |
