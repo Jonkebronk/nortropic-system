@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+# h-013-exit — skiva 11 (brytaren: failureklassning, attempt-budget, circuit)
+# Kontrakt: controller/brytare/cli
+#   kor <dir> <task> <budget> <tröskel> <workspace> <kuvertfil> <timeout-s> -- <kommando...>
+#     0    kandidat — utforarens rapport OFÖRÄNDRAD, aldrig extra rader
+#     1    anropsfel (eget eller utforarens; förbrukar inte, fingerprintas inte)
+#     3-8  utforarens failure vidarebefordrad ordagrant + sist "fingerprint: <fp>"
+#     9    brytaren är/blir öppen — vid öppning skrivs den klassade failuren
+#          FÖRST, sist "brytare öppen: <orsak>"; redan öppen startas INGET kommando
+#     10   budget slut eller noll — inget kommando startas. BUDGET PRÖVAS FÖRE ÖPPEN.
+#     2    aldrig (_lib.sh binder den till ODÖMBART)
+#   status <dir>   tillståndet som JSON {"oppen","orsak","forbrukat","fingerprints"}
+#   <dir>/kvot.monster: substrängsmönster, en per rad, TOMMA RADER IGNORERAS,
+#   matchas mot failuretexten för klasserna 3-8. kvot_slut förbrukar ingen budget,
+#   fingerprintas inte och öppnar brytaren omedelbart.
+#
+# FINGERPRINT-IDENTITET MÄTS PÅ BETEENDE, inte utsaga: med tröskel 2 öppnar andra
+# anropet OM fingerprinten är samma; öppnar det inte är de skilda. status-verbet
+# används endast som sekundär formkontroll — en dekorativ räknare får inte fria.
+#
+# WORKSPACES VIA h-005 (h-012-lärdomen: delad objektdatabas är h-006:s krav).
+# Failure-fixturerna lämnar workspacet RENT — ett delat failure-ws återanvänds;
+# succéer får färskt. Kanariefiler ligger i $tmp, ALDRIG i workspacet: en kanarie
+# i arbetsträdet hade gjort en stoppmätning till en kandidat.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/brytare/cli"
+krav_komponent "$CLI"
+for dep in controller/workspace/cli controller/worker/cli controller/launch/cli \
+           controller/envelope/cli controller/utforare/cli; do
+  if [ ! -x "$dep" ]; then
+    echo "SKIP  harness — $dep saknas eller är inte körbar (h-013:s depends_on), testet är odömbart"
+    echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+  fi
+done
+
+WSROT="$(temp_kat)" || { echo "FAIL  harness — temp-katalog"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+tmp="$(temp_kat)"  || { echo "FAIL  harness — temp-katalog"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+WSROT_KANON="$(cd "$WSROT" && pwd -P)"
+WSP="controller/workspace/cli"
+# ORDNINGEN ÄR AVSIKTLIG: destroy FÖRST så git får städa sin egen registrering,
+# rm -rf sedan. LÄSER DISKEN, inte en variabel (kommandosubstitution är subskal).
+stada() {
+  for d in "$WSROT"/*; do
+    [ -d "$d" ] && "$WSP" "$WSROT" destroy "$(basename "$d")" >/dev/null 2>&1
+  done
+  git worktree prune >/dev/null 2>&1
+  rm -rf "$tmp" "$WSROT"
+}
+trap stada EXIT
+
+BAS="$(git rev-parse HEAD)"
+readonly BAS
+KOR_ID="$$_$(date +%s)"
+KUV="$tmp/kuvert.json"
+./controller/envelope/cli build h013-prov h-001 "$BAS" > "$KUV" 2>/dev/null
+[ -s "$KUV" ] || { echo "FAIL  K0 kuvert — kunde inte bygga provkuvert"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+
+# Reporotens läge FÖRE — K14 jämför mot detta.
+ROT_HEAD="$(git rev-parse HEAD)"
+ROT_STATUS="$(git status --porcelain)"
+ROT_REFS="$(git for-each-ref --format='%(refname) %(objectname)' | sort)"
+
+# ws() FÄLLER HÅRT — h-012-formen. IDENTITETEN KOMMER UR ARGUMENTET, aldrig ur
+# delat tillstånd (kommandosubstitution är subskal; mätt på bash 3.2.57 att
+# $LINENO som argument expanderas i anroparen). INVARIANT: aldrig två ws-anrop
+# på samma fysiska rad.
+ws() {
+  local id="p${KOR_ID}_${1:?anropsplats saknas}" w
+  w="$("$WSP" "$WSROT" create "$id" "$BAS" 2>&1)"
+  case "$w" in
+    "$WSROT"*|"$WSROT_KANON"*) ;;
+    *) echo "" ; return 1 ;;
+  esac
+  [ -d "$w" ] && [ -e "$w/.git" ] || { echo "" ; return 1 ; }
+  echo "$w"
+}
+harnessfel() {
+  echo "FAIL  harness — workspace kunde inte skapas inför $1"
+  echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+}
+vakt() {
+  if [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ] || [ "$(git status --porcelain)" != "$ROT_STATUS" ]; then
+    echo "FAIL  harness — REPOROTEN RÖRD efter $1. Provet avbryts innan mer skada sker."
+    echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+  fi
+}
+huvud() { git -C "$1" rev-parse HEAD 2>/dev/null; }
+filer_i() { git -C "$1" show --name-only --format= "$2" 2>/dev/null | sed '/^$/d' | sort | tr '\n' ' '; }
+falt() { python3 -c "
+import json,sys
+try: d=json.loads(sys.stdin.read())
+except Exception: print('OPARSBAR'); raise SystemExit
+v=d.get(sys.argv[1])
+if v is None: print('SAKNAS')
+elif isinstance(v,list): print(' '.join(sorted(str(x) for x in v)))
+else: print(v)" "$1" 2>/dev/null || echo PYFEL; }
+fprad() { echo "$1" | sed -n 's/^fingerprint: //p' | tail -1; }
+
+# --- Fixturer. Failure-skripten lämnar workspacet RENT (bara stderr + exitkod).
+# fel-a1/fel-a2 skiljer sig ENDAST i siffror och absoluta sökvägar — det
+# normaliseringen ska radera. fel-b/c/d skiljer sig i ORD, aldrig i siffror.
+cat > "$tmp/arlig.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p tests/h013fix; echo ny > tests/h013fix/f.txt
+EOF
+cat > "$tmp/fel-a1.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "läsfel i /tmp/prov4711/indata på rad 17" >&2; exit 7
+EOF
+cat > "$tmp/fel-a2.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "läsfel i /tmp/prov9002/indata på rad 63" >&2; exit 7
+EOF
+cat > "$tmp/fel-b.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "skrivfel mot databasen" >&2; exit 7
+EOF
+cat > "$tmp/fel-c.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "nätverket svarade aldrig" >&2; exit 7
+EOF
+cat > "$tmp/fel-d.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "tillståndsfilen saknar ägare" >&2; exit 7
+EOF
+cat > "$tmp/kvot.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "PROVKVOT uttömd för kontot" >&2; exit 7
+EOF
+cat > "$tmp/kanarie.sh" <<'EOF'
+#!/usr/bin/env bash
+echo x > "${KANFIL:?}"
+EOF
+chmod +x "$tmp"/*.sh 2>/dev/null
+KODER=""
+
+# Delat failure-workspace — failure-fixturerna rör det aldrig.
+FW=$(ws "$LINENO") || harnessfel "$LINENO"
+
+# K1 POSITIV: kandidat via brytaren — oförändrad, h-006-parsbar, git är källan.
+W=$(ws "$LINENO") || harnessfel "$LINENO"; H0=$(huvud "$W")
+ut=$("$CLI" kor "$tmp/d1" h-001 5 3 "$W" "$KUV" 60 -- "$tmp/arlig.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"; echo "$ut" > "$tmp/k1.json"; H1=$(huvud "$W")
+r=$(echo "$ut" | falt candidate_sha); f=$(echo "$ut" | falt files); g=$(filer_i "$W" "$H1")
+if [ "$kod" -ne 0 ]; then no "K1 kandidat via brytaren" "kod=$kod [$ut]"
+elif ! ./controller/worker/cli parse "$tmp/k1.json" >/dev/null 2>&1; then
+  no "K1 rapporten oförändrad, h-006-parsbar" "parse avvisade HELA stdout [$ut]"
+elif [ "$H1" = "$H0" ]; then no "K1 kandidat via brytaren" "ingen commit gjordes"
+elif [ "$r" != "$H1" ]; then no "K1 candidate_sha ur git" "rapport=[$r] git=[$H1]"
+elif [ "$(echo $f)" != "$(echo $g)" ]; then no "K1 files ur git" "rapport=[$f] git=[$g]"
+else ok "K1 kandidat via brytaren — rapporten oförändrad, h-006-parsbar, git är källan"; fi
+vakt "K1"
+
+# K2 BUDGET RÄKNAR ÄVEN LYCKADE, mätt på beteende: budget 2 → två succéer, sedan stopp.
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+"$CLI" kor "$tmp/d2" h-001 2 9 "$W" "$KUV" 60 -- "$tmp/arlig.sh" >/dev/null 2>&1; k1=$?
+KODER="$KODER $k1"
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+"$CLI" kor "$tmp/d2" h-001 2 9 "$W" "$KUV" 60 -- "$tmp/arlig.sh" >/dev/null 2>&1; k2=$?
+KODER="$KODER $k2"
+ut=$(KANFIL="$tmp/kan2" "$CLI" kor "$tmp/d2" h-001 2 9 "$FW" "$KUV" 60 -- "$tmp/kanarie.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+if [ "$k1" -ne 0 ] || [ "$k2" -ne 0 ]; then no "K2 två succéer inom budget" "kod1=$k1 kod2=$k2"
+elif [ "$kod" -ne 10 ]; then no "K2 tredje försöket stoppas" "kod=$kod, väntade 10 [$ut]"
+elif [ -e "$tmp/kan2" ]; then no "K2 inget kommando startas vid budgetstopp" "kanarien skrevs"
+elif ! echo "$ut" | grep -qi budget; then no "K2 orsaken namnger budgeten" "[$ut]"
+else ok "K2 budget räknar även lyckade: 2 succéer, tredje stoppas utan start"; fi
+vakt "K2"
+
+# K3 SAMMA FEL I TVÅ VARIANTER (skiljer endast i siffror + sökväg), tröskel 2:
+# andra anropet ÖPPNAR — fingerprint-identiteten bevisad på beteende.
+ut=$("$CLI" kor "$tmp/d3" h-001 9 2 "$FW" "$KUV" 60 -- "$tmp/fel-a1.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"; fp1=$(fprad "$ut")
+ut2=$("$CLI" kor "$tmp/d3" h-001 9 2 "$FW" "$KUV" 60 -- "$tmp/fel-a2.sh" 2>/dev/null); kod2=$?
+KODER="$KODER $kod2"; fp2=$(fprad "$ut2")
+if [ "$kod" -ne 4 ]; then no "K3 utforarens kod vidarebefordras exakt" "kod=$kod, väntade 4 [$ut]"
+elif ! echo "$ut" | grep -qF "nonzero_exit" || ! echo "$ut" | grep -qF "läsfel"; then
+  no "K3 klass och orsak ordagrant" "[$ut]"
+elif [ -z "$fp1" ]; then no "K3 fingerprint-raden bär en icke-tom fingerprint" "[$ut]"
+elif [ "$kod2" -ne 9 ]; then no "K3 två varianter av samma fel ger samma fingerprint" "andra anropet öppnade inte: kod=$kod2 [$ut2]"
+elif [ "$fp1" != "$fp2" ] || [ -z "$fp2" ]; then
+  no "K3 fingerprintsträngarna lika" "fp1=[$fp1] fp2=[$fp2]"
+else ok "K3 två varianter av samma fel → samma fingerprint, mätt på tröskelöppning"; fi
+
+# K4 TVÅ OLIKA FEL (ordskillnad, identiska siffror), tröskel 2: öppnar INTE.
+ut=$("$CLI" kor "$tmp/d4" h-001 9 2 "$FW" "$KUV" 60 -- "$tmp/fel-a1.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"; fp1=$(fprad "$ut")
+ut2=$("$CLI" kor "$tmp/d4" h-001 9 2 "$FW" "$KUV" 60 -- "$tmp/fel-b.sh" 2>/dev/null); kod2=$?
+KODER="$KODER $kod2"; fp2=$(fprad "$ut2")
+if [ "$kod" -ne 4 ] || [ "$kod2" -ne 4 ]; then
+  no "K4 två olika fel ger två fingerprints" "koder $kod/$kod2, väntade 4/4 — olika fel får aldrig öppna vid tröskel 2 [$ut2]"
+elif [ -z "$fp1" ] || [ -z "$fp2" ] || [ "$fp1" = "$fp2" ]; then
+  no "K4 fingerprintsträngarna skilda" "fp1=[$fp1] fp2=[$fp2]"
+else ok "K4 två olika fel → två fingerprints, ingen öppning vid tröskel 2"; fi
+
+# K5 N ÖPPNAR, N-1 GÖR DET INTE, succé nollställer inget (tröskel 3).
+"$CLI" kor "$tmp/d5" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/fel-a1.sh" >/dev/null 2>&1; k1=$?
+KODER="$KODER $k1"
+"$CLI" kor "$tmp/d5" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/fel-a1.sh" >/dev/null 2>&1; k2=$?
+KODER="$KODER $k2"
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+"$CLI" kor "$tmp/d5" h-001 9 3 "$W" "$KUV" 60 -- "$tmp/arlig.sh" >/dev/null 2>&1; k3=$?
+KODER="$KODER $k3"
+ut=$("$CLI" kor "$tmp/d5" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/fel-a1.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+if [ "$k1" -ne 4 ] || [ "$k2" -ne 4 ]; then no "K5 N-1 öppnar inte" "koder $k1/$k2, väntade 4/4"
+elif [ "$k3" -ne 0 ]; then no "K5 kommandot startar när brytaren är stängd" "succén gav kod=$k3"
+elif [ "$kod" -ne 9 ]; then no "K5 N:e gången öppnar" "kod=$kod, väntade 9 [$ut]"
+elif ! echo "$ut" | grep -qF "läsfel" || ! echo "$ut" | grep -qF "fingerprint: "; then
+  no "K5 öppningsanropet sväljer inte failuren" "klass/orsak/fingerprint saknas: [$ut]"
+elif ! echo "$ut" | grep -qF "brytare öppen"; then no "K5 öppningen namnges" "[$ut]"
+else ok "K5 samma fingerprint 3:e gången öppnar, 2 gör det inte, succén nollställde inget"; fi
+vakt "K5"
+
+# K6 OLIKA FINGERPRINTS ÖPPNAR ALDRIG oavsett antal (tröskel 3, fyra olika fel).
+"$CLI" kor "$tmp/d6" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/fel-a1.sh" >/dev/null 2>&1; k1=$?
+KODER="$KODER $k1"
+"$CLI" kor "$tmp/d6" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/fel-b.sh" >/dev/null 2>&1; k2=$?
+KODER="$KODER $k2"
+"$CLI" kor "$tmp/d6" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/fel-c.sh" >/dev/null 2>&1; k3=$?
+KODER="$KODER $k3"
+"$CLI" kor "$tmp/d6" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/fel-d.sh" >/dev/null 2>&1; k4=$?
+KODER="$KODER $k4"
+W=$(ws "$LINENO") || harnessfel "$LINENO"
+"$CLI" kor "$tmp/d6" h-001 9 3 "$W" "$KUV" 60 -- "$tmp/arlig.sh" >/dev/null 2>&1; k5=$?
+KODER="$KODER $k5"
+if [ "$k1$k2$k3$k4" != "4444" ]; then
+  no "K6 olika fingerprints öppnar aldrig" "koder $k1/$k2/$k3/$k4, väntade 4/4/4/4"
+elif [ "$k5" -ne 0 ]; then no "K6 brytaren förblev stängd" "succén efteråt gav kod=$k5"
+else ok "K6 fyra olika fel vid tröskel 3 — brytaren öppnade aldrig"; fi
+vakt "K6"
+
+# K7 REDAN ÖPPEN: inget kommando startas, orsak på stdout, aldrig tyst.
+ut=$(KANFIL="$tmp/kan7" "$CLI" kor "$tmp/d5" h-001 9 3 "$FW" "$KUV" 60 -- "$tmp/kanarie.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+st=$("$CLI" status "$tmp/d5" 2>/dev/null)
+if [ "$kod" -ne 9 ]; then no "K7 öppen brytare stoppar" "kod=$kod, väntade 9 [$ut]"
+elif [ -e "$tmp/kan7" ]; then no "K7 inget kommando startas" "kanarien skrevs"
+elif [ -z "$ut" ] || ! echo "$ut" | grep -qF "brytare öppen"; then
+  no "K7 orsak på stdout, aldrig tyst" "[$ut]"
+elif [ "$(echo "$st" | falt oppen)" != "True" ]; then
+  no "K7 status-verbet bär tillståndet" "status=[$st]"
+else ok "K7 öppen brytare: stopp utan start, orsak på stdout, status bär oppen"; fi
+
+# K8 KVOT_SLUT KLASSAS SKILT och öppnar direkt — via nonzero-vägen, trots tröskel 3.
+mkdir -p "$tmp/q" && printf 'PROVKVOT uttömd\n\n' > "$tmp/q/kvot.monster"
+ut=$("$CLI" kor "$tmp/q" h-001 1 3 "$FW" "$KUV" 60 -- "$tmp/kvot.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+st=$("$CLI" status "$tmp/q" 2>/dev/null)
+if [ "$kod" -ne 9 ]; then no "K8 kvot_slut öppnar direkt" "kod=$kod, väntade 9 på FÖRSTA anropet [$ut]"
+elif ! echo "$ut" | grep -qF "kvot_slut"; then no "K8 klassen kvot_slut namnges" "[$ut]"
+elif [ "$(echo "$st" | falt fingerprints)" != "{}" ]; then
+  no "K8 kvot_slut fingerprintas inte" "fingerprints=[$(echo "$st" | falt fingerprints)]"
+else ok "K8 kvot_slut klassad skilt från nonzero_exit, öppnade direkt trots tröskel 3"; fi
+
+# K9 KVOT FÖRBRUKAR INGEN BUDGET — mätt på exitkod över processgräns (återstart
+# = nytt CLI-anrop mot samma dir), plus kontrast och precedensvakt.
+ut=$(KANFIL="$tmp/kan9a" "$CLI" kor "$tmp/q" h-001 1 3 "$FW" "$KUV" 60 -- "$tmp/kanarie.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+"$CLI" kor "$tmp/n9" h-001 1 9 "$FW" "$KUV" 60 -- "$tmp/fel-a1.sh" >/dev/null 2>&1; k1=$?
+KODER="$KODER $k1"
+ut2=$(KANFIL="$tmp/kan9b" "$CLI" kor "$tmp/n9" h-001 1 9 "$FW" "$KUV" 60 -- "$tmp/kanarie.sh" 2>/dev/null); kod2=$?
+KODER="$KODER $kod2"
+ut3=$(KANFIL="$tmp/kan9c" "$CLI" kor "$tmp/q" h-001 0 3 "$FW" "$KUV" 60 -- "$tmp/kanarie.sh" 2>/dev/null); kod3=$?
+KODER="$KODER $kod3"
+if [ "$kod" -ne 9 ] || [ -e "$tmp/kan9a" ]; then
+  no "K9 budgeten oförbrukad efter kvot_slut" "kod=$kod (10 hade betytt förbrukad budget) [$ut]"
+elif [ "$k1" -ne 4 ] || [ "$kod2" -ne 10 ] || [ -e "$tmp/kan9b" ]; then
+  no "K9 kontrast: vanligt fel förbrukar" "kod1=$k1 kod2=$kod2, väntade 4 sedan 10 [$ut2]"
+elif [ "$kod3" -ne 10 ] || [ -e "$tmp/kan9c" ]; then
+  no "K9 budget prövas före öppen brytare" "kod=$kod3, väntade 10 [$ut3]"
+else ok "K9 kvot_slut lämnade budgeten oförbrukad — mätt på exitkod, med kontrast och precedens"; fi
+
+# K10 SAKNAD kvot.monster: samma kvottext klassas INTE kvot_slut.
+ut=$("$CLI" kor "$tmp/d10" h-001 9 9 "$FW" "$KUV" 60 -- "$tmp/kvot.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+if [ "$kod" -ne 4 ]; then no "K10 utan mönsterfil ingen kvotklassning" "kod=$kod, väntade 4 [$ut]"
+elif echo "$ut" | grep -qF "kvot_slut"; then no "K10 kvot_slut nämns inte utan mönster" "[$ut]"
+else ok "K10 saknad kvot.monster → vanlig failure, ingen kvotklassning"; fi
+
+# K11 MÖNSTERFIL PÅ PLATS men ICKE-MATCHANDE fel: ingen kvotklassning.
+mkdir -p "$tmp/d11" && printf 'PROVKVOT uttömd\n\n' > "$tmp/d11/kvot.monster"
+ut=$("$CLI" kor "$tmp/d11" h-001 9 9 "$FW" "$KUV" 60 -- "$tmp/fel-b.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+if [ "$kod" -ne 4 ]; then no "K11 icke-matchande fel förblir sin klass" "kod=$kod, väntade 4 [$ut]"
+elif echo "$ut" | grep -qF "kvot_slut"; then
+  no "K11 mönsterfilens existens räcker aldrig för kvotklassning" "[$ut]"
+elif ! echo "$ut" | grep -qF "nonzero_exit"; then no "K11 klassen bärs vidare" "[$ut]"
+else ok "K11 mönsterfil på plats men fel som inte matchar → aldrig kvot_slut"; fi
+
+# K12 BUDGET NOLL ger aldrig ett försök: inget kommando startas.
+ut=$(KANFIL="$tmp/kan12" "$CLI" kor "$tmp/d12" h-001 0 3 "$FW" "$KUV" 60 -- "$tmp/kanarie.sh" 2>/dev/null); kod=$?
+KODER="$KODER $kod"
+if [ "$kod" -ne 10 ]; then no "K12 budget noll stoppar" "kod=$kod, väntade 10 [$ut]"
+elif [ -e "$tmp/kan12" ]; then no "K12 inget kommando startas" "kanarien skrevs"
+elif ! echo "$ut" | grep -qi budget; then no "K12 orsaken namnger budgeten" "[$ut]"
+else ok "K12 budget noll → exit 10 utan att något kommando startas"; fi
+
+# K13 EXIT 2 ANVÄNDS ALDRIG — svep över samtliga uppmätta koder.
+if echo " $KODER " | grep -q " 2 "; then
+  no "K13 exitkod 2 används aldrig" "uppmätta koder:$KODER"
+else ok "K13 ingen väg gav exitkod 2 (koder:$KODER)"; fi
+
+# K14 REPOROTEN ORÖRD — HEAD, arbetsträd, refs. Objekt delas by design.
+if [ "$BAS" != "$ROT_HEAD" ]; then
+  echo "FAIL  K14 basen flyttade sig — provet mätte mot ett rörligt mål"
+  echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+fi
+if [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ]; then no "K14 reporoten orörd" "HEAD ändrades"
+elif [ "$(git status --porcelain)" != "$ROT_STATUS" ]; then
+  no "K14 reporoten orörd" "arbetsträdet ändrades"
+elif [ "$(git for-each-ref --format='%(refname) %(objectname)' | sort)" != "$ROT_REFS" ]; then
+  no "K14 reporoten orörd" "refs tillkom eller ändrades"
+else ok "K14 reporotens HEAD, arbetsträd och refs orörda"; fi
+
+summera
