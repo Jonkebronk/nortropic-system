@@ -6,10 +6,10 @@
   "verifiers": {
     "check-invariants": {
       "path": "scripts/check-invariants.mjs",
-      "sha256": "bbe5ef8ee02f8f50401db40b0da9341499c82580d85865c724f6fcd42568f50d",
+      "sha256": "d37e45b46cdc92a016022b80e7f1ea32661cd33a4f1b97af61962bc7cb0bf3ba",
       "runner": "node",
       "startbar": true,
-      "beskrivning": "Deterministisk invariantgrind INV-001–005. Exit 0/1, inga natanrop, körs från reporoten."
+      "beskrivning": "Deterministisk invariantgrind INV-001–008. Exit 0/1, inga natanrop, körs från reporoten. Registrerad hash uppdateras endast av människohand i samma commit som filändringen."
     },
     "nortropic-verify-suite": {
       "path": "workflows/nortropic-verify-suite.js",

@@ -10,7 +10,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
-const CHECKS = ['INV-001', 'INV-002', 'INV-003', 'INV-004', 'INV-005', 'INV-006'];
+const CHECKS = ['INV-001', 'INV-002', 'INV-003', 'INV-004', 'INV-005', 'INV-006', 'INV-007', 'INV-008'];
 const violations = [];               // { id, line }
 const invalid = new Set();           // checks som inte kunde bedomas -> FAIL, aldrig PASS
 function flag(id, file, line, reason) { violations.push({ id, line: `${id} ${file}:${line} ${reason}` }); }
@@ -190,6 +190,51 @@ try {
     flag('INV-006', K6_FILES[0], a.line,
       `FIXKONTRAKT-KÄRNAN avviker från ${K6_FILES[1]} (${a.hash.slice(0, 12)}… != ${b.hash.slice(0, 12)}…) (BATCH-005)`);
 } catch { invalid.add('INV-006'); }
+
+// ---- INV-007 (regel 16): pipeline-skills bar disable-model-invocation: true ----
+// Regel 16 utpekar TRE skills vars steg skapar verkliga resurser respektive systemforslag;
+// modellen far aldrig trigga dem sjalv. Regeltexten sager "vaktas av doctor #5" — doctor #5
+// var prosa, inte kod (Pass 0 2026-08-07), sa uppdraget hade ingen implementation. Den har.
+// Filerna ar HARDKODADE med avsikt: regel 16 namnger exakt dessa tre. En ny pipeline-skill
+// som behover samma skydd ska DARFOR falla pa att regel 16 uppdateras medvetet, inte glida
+// in under ett glob-monster. Saknad fil eller saknad frontmatter -> INVALID, aldrig PASS.
+const INV007_SKILLS = [
+  'skills/nortropic-plan/SKILL.md',
+  'skills/nortropic-init/SKILL.md',
+  'skills/nortropic-retro/SKILL.md',
+];
+try {
+  for (const f of INV007_SKILLS) {
+    const lines = readLines(f);
+    // frontmatter = mellan forsta '---' och nasta '---'
+    if (lines[0].trim() !== '---') { invalid.add('INV-007'); continue; }
+    let fmEnd = -1;
+    for (let i = 1; i < lines.length; i++) if (lines[i].trim() === '---') { fmEnd = i; break; }
+    if (fmEnd < 0) { invalid.add('INV-007'); continue; }
+    const idx = lines.slice(0, fmEnd).findIndex(l => l.startsWith('disable-model-invocation:'));
+    if (idx < 0) flag('INV-007', f, fmEnd + 1, 'disable-model-invocation saknas i frontmatter (regel 16)');
+    else if (lines[idx].split(':')[1].trim() !== 'true')
+      flag('INV-007', f, idx + 1, `disable-model-invocation ar inte true (regel 16)`);
+  }
+} catch { invalid.add('INV-007'); }
+
+// ---- INV-008 (regel 20 / T1): profile.ts-kontraktsversionen ar deklarerad och parsbar ----
+// Steward-texten (agents/nortropic-steward.md, doctor #5 T1) kraver att kontraktsversionen
+// lases ur SKILL.md och att en oparsbar deklaration ar FAIL — "navet tappade sin sparbarhet".
+// DENNA grind provar ENDAST deklarationens integritet. Den semver-medvetna jamforelsen mot
+// kundrepons profilKontraktVersion gar INTE att gora har: kundrepon ligger utanfor detta repo
+// (~/Workflow, ~/*/src/content/profile.ts) och filen ar repolokal utan filsystemsvandring
+// utanfor reporoten. Den halvan kvarstar hos doctor #5 och ar registrerad i programregistret
+// med detta skal — en grind som bara prover halften far aldrig se komplett ut.
+const INV008_FIL = 'skills/nortropic-stack/SKILL.md';
+const INV008_RE = /profile\.ts-kontraktsversion:\s*v(\d+)\.(\d+)\.(\d+)/;
+try {
+  const lines = readLines(INV008_FIL);
+  const idx = lines.findIndex(l => l.includes('profile.ts-kontraktsversion'));
+  if (idx < 0) invalid.add('INV-008');                       // deklarationen saknas helt -> odombar
+  else if (!INV008_RE.test(lines[idx]))
+    flag('INV-008', INV008_FIL, idx + 1, 'profile.ts-kontraktsversion ej parsbar som vMajor.minor.patch (T1)');
+} catch { invalid.add('INV-008'); }
 
 // ---- Rapport ----
 for (const v of violations) console.log(v.line);
