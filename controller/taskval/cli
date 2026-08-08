@@ -61,6 +61,16 @@ def kor(argv: list[str]) -> subprocess.CompletedProcess:
         raise Avbryt(f"{argv[0]} kunde inte startas — {e}") from e
 
 
+def orsak(svar: subprocess.CompletedProcess) -> str:
+    """Sista raden ur ett systerkommandos stderr.
+
+    Kraschar ett systerkommando är dess stackspår dess eget; att klistra in
+    hela i vårt fel gör vår utdata till någon annans. Sista raden bär
+    undantaget — det är den som säger något."""
+    rader = [r for r in svar.stderr.splitlines() if r.strip()]
+    return rader[-1].strip()[:200] if rader else f"inget meddelande (exit {svar.returncode})"
+
+
 def las_spec(spec: Path) -> list[tuple[str, list[str]]]:
     """Backloggen som (id, depends_on). Formen prövas, aldrig namnen."""
     try:
@@ -102,7 +112,7 @@ def attesterad_giltig(attkat: Path, task: str) -> bool:
     if svar.returncode == 1 and svar.stderr.startswith("read: "):
         return False
     raise Avbryt(
-        f"attest svarade oväntat för {task} (exit {svar.returncode}): {svar.stderr.strip()}"
+        f"attest svarade oväntat för {task} (exit {svar.returncode}): {orsak(svar)}"
     )
 
 
@@ -110,7 +120,7 @@ def status_ur_state(stkat: Path) -> dict[str, str]:
     """Läser LOGGEN via rebuild, inte projektionen via dump — loggen är sanningen (skiva 1)."""
     svar = kor([str(ST), "rebuild", str(stkat)])
     if svar.returncode != 0:
-        raise Avbryt(f"state: {stkat} kunde inte rekonstrueras — {svar.stderr.strip()}")
+        raise Avbryt(f"state: {stkat} kunde inte rekonstrueras — {orsak(svar)}")
     try:
         tabell = json.loads(svar.stdout)
     except json.JSONDecodeError as e:
@@ -149,7 +159,7 @@ def kmd_claim(tasks: list[tuple[str, list[str]]], attkat: Path, stkat: Path) -> 
         [str(ST), "append", str(stkat), json.dumps({"task": val, "status": "claimed"}, ensure_ascii=False)]
     )
     if kvitto.returncode != 0:
-        raise Avbryt(f"claim: eventet för {val} kunde inte skrivas — {kvitto.stderr.strip()}")
+        raise Avbryt(f"claim: eventet för {val} kunde inte skrivas — {orsak(kvitto)}")
     print(val)
     return 0
 
