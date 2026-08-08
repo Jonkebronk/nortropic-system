@@ -133,6 +133,17 @@
       "exit_criterion": "Kuvert för känd task bär alla nio fälten med värden ur specen. spec_sha256 är filens FAKTISKA sha256, inte ett påstått värde. allowed_write och denied_write kommer ur task + defaults, aldrig ur en egen lista i koden. Okänd task-id ger failure med orsak, aldrig tomt kuvert. Två anrop med samma run_id och task_id ger byte-identiskt kuvert. Kuvertet innehåller inget om verifierarens implementation (verifier-id, exit_test-sökväg eller registerinnehåll).",
       "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-006", "h-007"]
+    },
+    {
+      "id": "h-009",
+      "slice": "6c",
+      "title": "Worker-launch — processtart med timeout",
+      "summary": "Controllern startar en worker som ett konfigurerat kommando i ett givet workspace, skickar kuvertet, och fångar stdout som slutrapport (v4.1 §13 run_worker). Kommandot är konfiguration, inte hårdkodat: provet kan därför starta hermetiska testprocesser i stället för en betald Claude Code-session. Att just Claude Code startar rätt prövas separat av människa — se öppen post.",
+      "allowed_write": ["controller/launch/**", "tests/controller/launch/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-009-exit",
+      "exit_criterion": "Process som skriver välformad rapport ger exit 0 och rapporten oförändrad på stdout. Process som överskrider timeout dödas — hela processgruppen, inte bara barnet — och ger failure-klass timeout, aldrig hängning. Process som avslutar med nollskild kod ger failure med koden bevarad. Kuvertet når processen (den kan läsa det). Ingen rest efter timeout: inga kvarlämnade processer i gruppen. Ett dödat barnbarn räknas som rest.",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-005", "h-006", "h-008"]
     }
   ],
 

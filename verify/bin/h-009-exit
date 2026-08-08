@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# h-009-exit — skiva 6c (worker-launch, processtart med timeout)
+# Kontrakt: controller/launch/cli run <workspace> <kuvertfil> <timeout-s> -- <kommando...>
+#           → 0 med processens stdout oförändrad, ≠0 med failure-klass på stdout annars.
+# Kommandot är KONFIGURATION: provet startar hermetiska testprocesser, aldrig Claude Code.
+# Att just Claude Code startar rätt prövas av människa (öppen post) — det är en
+# konfigurationsfråga, medan timeout, processgrupp och rest är logik och prövas här.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/launch/cli"
+krav_komponent "$CLI"
+
+tmp=$(temp_kat); trap 'rm -rf "$tmp"' EXIT
+[ -n "$tmp" ] && [ -d "$tmp" ] || { echo "FAIL  K0 temp — temp_kat gav ingen katalog"; echo; echo "0 PASS, 1 FAIL"; exit 1; }
+WS="$tmp/ws"; mkdir -p "$WS"
+KUV="$tmp/kuvert.json"
+./controller/envelope/cli build h009-prov h-001 "$(git rev-parse HEAD)" > "$KUV" 2>/dev/null
+[ -s "$KUV" ] || { echo "FAIL  K0 kuvert — kunde inte bygga provkuvert"; echo; echo "0 PASS, 1 FAIL"; exit 1; }
+
+# Testprocesser. Ingen av dem är Claude Code; alla är hermetiska och deterministiska.
+cat > "$tmp/rapport.sh" <<'EOF'
+#!/usr/bin/env bash
+cat "$1" > /dev/null
+printf '{"candidate_sha":"%s","changed_files":["x"],"tests_run":["t"],"test_results":"ok","open_risks":[]}\n' "$2"
+EOF
+cat > "$tmp/las-kuvert.sh" <<'EOF'
+#!/usr/bin/env bash
+python3.12 -c "import json,sys;print(json.load(open(sys.argv[1]))['task_id'])" "$1"
+EOF
+cat > "$tmp/haenger.sh" <<'EOF'
+#!/usr/bin/env bash
+sleep 120 &
+sleep 120
+EOF
+cat > "$tmp/faller.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "något gick fel"
+exit 42
+EOF
+chmod +x "$tmp"/*.sh 2>/dev/null
+SHA=$(git rev-parse HEAD)
+
+# K1: välformad rapport → exit 0, stdout OFÖRÄNDRAD
+ut=$("$CLI" run "$WS" "$KUV" 30 -- "$tmp/rapport.sh" "$KUV" "$SHA" 2>/dev/null); kod=$?
+vantat=$(printf '{"candidate_sha":"%s","changed_files":["x"],"tests_run":["t"],"test_results":"ok","open_risks":[]}' "$SHA")
+if [ "$kod" -ne 0 ]; then
+  no "K1 lyckad worker" "kod=$kod [$ut]"
+elif [ "$(echo "$ut" | tr -d '[:space:]')" != "$(echo "$vantat" | tr -d '[:space:]')" ]; then
+  no "K1 rapport oförändrad" "stdout ändrad: [$ut]"
+else
+  ok "K1 välformad rapport → exit 0, stdout oförändrad"
+fi
+
+# K2: kuvertet NÅR processen — den kan läsa task_id ur det
+ut=$("$CLI" run "$WS" "$KUV" 30 -- "$tmp/las-kuvert.sh" "$KUV" 2>/dev/null); kod=$?
+if [ "$kod" -eq 0 ] && echo "$ut" | grep -q 'h-001'; then
+  ok "K2 kuvertet når processen"
+else
+  no "K2 kuvertet når processen" "kod=$kod utdata=[$ut]"
+fi
+
+# K3: timeout dödar processen och ger failure-klass — aldrig hängning.
+# Provet har en egen yttre gräns: hänger komponenten är det ETT FEL, inte en väntan.
+start=$(date +%s)
+ut=$(perl -e 'alarm 20; exec @ARGV' "$CLI" run "$WS" "$KUV" 3 -- "$tmp/haenger.sh" 2>/dev/null); kod=$?
+slut=$(date +%s); gick=$((slut-start))
+if [ "$gick" -ge 20 ]; then
+  no "K3 timeout" "komponenten hängde — provets egen gräns löste ut efter ${gick}s"
+elif [ "$kod" -eq 0 ]; then
+  no "K3 timeout" "hängd process gav exit 0"
+elif [ -z "$ut" ]; then
+  no "K3 timeout" "avvisades tyst — kontraktet kräver failure-klass på stdout"
+elif ! echo "$ut" | grep -qi 'timeout'; then
+  no "K3 timeout-klass" "orsaken namnger inte timeout: [$ut]"
+else
+  ok "K3 timeout dödar processen och klassar (${gick}s)"
+fi
+
+# K4: INGEN REST efter timeout — hela processgruppen, inte bara barnet.
+# haenger.sh startar ett barnbarn i bakgrunden; dödas bara barnet lever det vidare.
+kvar=$(pgrep -f "$tmp/haenger.sh" 2>/dev/null | wc -l | tr -d ' ')
+sovande=$(ps -eo command 2>/dev/null | grep -c '[s]leep 120' || true)
+if [ "${kvar:-0}" -gt 0 ]; then
+  no "K4 rest efter timeout" "$kvar processer kvar ur haenger.sh"
+elif [ "${sovande:-0}" -gt 0 ]; then
+  no "K4 rest efter timeout" "$sovande kvarlämnade sleep 120 — processgruppen dödades inte"
+else
+  ok "K4 ingen rest efter timeout (processgruppen dödad)"
+fi
+
+# K5: nollskild exitkod bevaras, inte maskeras
+ut=$("$CLI" run "$WS" "$KUV" 30 -- "$tmp/faller.sh" 2>/dev/null); kod=$?
+if [ "$kod" -eq 0 ]; then
+  no "K5 exitkod" "process med kod 42 gav exit 0"
+elif [ -z "$ut" ]; then
+  no "K5 exitkod" "avvisades tyst — orsak krävs"
+elif ! echo "$ut" | grep -q '42'; then
+  no "K5 exitkod bevarad" "koden 42 nämns inte i orsaken: [$ut]"
+else
+  ok "K5 nollskild exitkod bevarad i orsaken"
+fi
+
+# K6: timeout-klassen SKILJER SIG från exitkodsklassen.
+# Utan detta är 'processen dog' och 'processen misslyckades' samma utfall.
+u3=$(perl -e 'alarm 20; exec @ARGV' "$CLI" run "$WS" "$KUV" 3 -- "$tmp/haenger.sh" 2>/dev/null)
+u5=$("$CLI" run "$WS" "$KUV" 30 -- "$tmp/faller.sh" 2>/dev/null)
+if [ -n "$u3" ] && [ "$u3" = "$u5" ]; then
+  no "K6 failure-klasser" "timeout och exitkod ger IDENTISK utdata — klasserna skiljs inte åt"
+else
+  ok "K6 timeout och exitkod är skilda failure-klasser"
+fi
+
+# K7: ingen krasch vid saknat kuvert, saknat workspace eller okörbart kommando
+kras=""
+err=$("$CLI" run "$WS" "$tmp/finns-inte.json" 5 -- /bin/echo x 2>&1 >/dev/null)
+echo "$err" | grep -qi 'traceback' && kras="$kras saknat-kuvert"
+err=$("$CLI" run "$tmp/ingen-ws" "$KUV" 5 -- /bin/echo x 2>&1 >/dev/null)
+echo "$err" | grep -qi 'traceback' && kras="$kras saknat-workspace"
+err=$("$CLI" run "$WS" "$KUV" 5 -- "$tmp/finns-inte.sh" 2>&1 >/dev/null)
+echo "$err" | grep -qi 'traceback' && kras="$kras okörbart-kommando"
+if [ -n "$kras" ]; then
+  no "K7 ingen krasch" "traceback för:$kras"
+else
+  ok "K7 ingen krasch vid saknat kuvert, workspace eller kommando"
+fi
+summera
