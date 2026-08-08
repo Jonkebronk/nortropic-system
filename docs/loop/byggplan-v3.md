@@ -64,7 +64,7 @@ specs/**  verify/**  controller/**  CLAUDE.md
 
 `allowed_write` för h-001→h-007: `controller/**`, `tests/controller/**`.
 
-**Två mekanismer, olika ytor.** `controller/**`, `specs/**` och `verify/**` står i §A-mängden ovan men vaktas INTE av skiva 7:s §A-kontroll — de skyddas av `allowed_write` (som är smalare per task) och av ägarhand. Skälet är mekaniskt: varje h-task bygger i `controller/<del>/**`, så en §A-vakt som täckte hela `controller/**` hade avvisat sin egen kandidat, h-007:s inkluderad. §A-kontrollen prövar därför resten av mängden — `AUTOPILOT`, `workflows/**`, `tests/fixtures/**`, `docs/07-konstitution.md`, `docs/03-regelverk.md`, `agents/nortropic-steward.md`, `scripts/check-invariants.mjs`, `skills/nortropic-eval/references/eval-rubric.md`, `skills/nortropic-plan/references/juridikflaggor.md`, `CLAUDE.md` — alltså det som ligger utanför varje tasks `allowed_write` och som ingen annan mekanism fångar. Förhållandet skrivs här i stället för att lämnas underförstått (beslut 2026-08-08, LOOP-ÄGARHAND-15).
+**Två mekanismer, olika ytor.** `controller/**`, `specs/**` och `verify/**` står i §A-mängden ovan men vaktas INTE av skiva 7:s §A-kontroll — de skyddas av `allowed_write` (som är smalare per task) och av ägarhand. Skälet är mekaniskt: varje h-task bygger i `controller/<del>/**`, så en §A-vakt som täckte hela `controller/**` hade avvisat sin egen kandidat, h-007:s inkluderad. §A-kontrollen prövar därför resten av mängden — `AUTOPILOT`, `workflows/**`, `tests/fixtures/**`, `docs/07-konstitution.md`, `docs/03-regelverk.md`, `agents/nortropic-steward.md`, `scripts/check-invariants.mjs`, `skills/nortropic-eval/references/eval-rubric.md`, `skills/nortropic-plan/references/juridikflaggor.md`, `CLAUDE.md` — alltså det som ligger utanför varje tasks `allowed_write` och som ingen annan mekanism fångar. Förhållandet skrivs här i stället för att lämnas underförstått (beslut 2026-08-08, LOOP-ÄGARHAND-15). **Vitlistan binder allowed_write:** `.gitignore` är en whitelist (`/*` med `!`-undantag) — en tasks `allowed_write` måste ligga inom vitlistade träd, annars kan ingen worker committa någon kandidat alls (LOOP-ÄGARHAND-26).
 
 ## 4. Stängda beslut
 
@@ -126,6 +126,13 @@ grep -rn "doctor #5\|doctor#5" . --include=*.js --include=*.mjs --include=*.md |
 | h-005 | 5 Workspace per attempt | Ren checkout på beordrad base-SHA · §A-skrivning stoppas av OS · Ctrl-C → rest städas · ingen kvarlämnad gren/lås |
 | h-006 | 6 Worker-launch | Prosa-svar → `unparseable_output` · påstådd `CANDIDATE_SHA` som saknas → failure, inte krasch |
 | h-007 | 7 Diffpolicy | Kandidat som rör §A-mängden avvisas med sparat evidence · 3× LOC-budget avvisas · docs-krav ouppfyllt avvisas |
+| h-008 | 6b Taskkuvert | §12-kuvert ur config-specen: nio fält · exit_test och register följer aldrig med · okänd task avvisas |
+| h-009 | 6c Processtart | Konfigurerat argv-kommando med timeout · hela processgruppen dödas · rest mäts på EFFEKT |
+| h-010 | 8 Taskval + claim | Doneness ur attest (`--require-valid`), aldrig ur state · kodpunktsordning · claim = exakt ett event · trasig spec/state/attestbutik är fel, aldrig tomt svar |
+| h-011 | 9 Huvudloopen | v4.1 §13:s varv med kedjande base · failure attesterar aldrig · workspaces rivs · vägen gjord till utfall: arbetskopian orörd, plats+kuvert i kandidatinnehållet, kanarie-timeout, spärrtask, okänd verifierare |
+
+Skivorna 6b, 6c, 8 och 9 tillkom efter planens skrivning (LOOP-ÄGARHAND-16–27). Specen och
+beslutsloggen är operativ ordning; kalenderns kvarvarande poster är smoke-momentet och piloten.
 
 ### 7.1 Doctor #5-luckan — tre invarianter, egen HÖGRISK-commit
 
@@ -161,6 +168,8 @@ Konstitutionen varnar själv i §A6 för nät som kan redigeras av det som ska f
 | Helg 2 | h-003 + h-004 + h-005 | ~4 h |
 | Helg 3 | h-006 + h-007 + INV-007 + pilot | ~4 h |
 | Löpande | 100-dagarsbatchar för hand tills piloten är grön | per batch |
+
+**Kalenderns läge 2026-08-08:** h-001–h-011 levererade och grindade på main. Kvar: smoke-momentet (programregistret) och piloten.
 
 **Avvecklingen av systeminstallationen** (`/usr/local/libexec/nortropic`, sudoers-filen, sju konton) sker **före Pass 1:s gränstest**. Ett gränstest på en maskin med ett andra kontrollplan installerat bevisar ingenting. Ingen avinstallation finns i `rollback/` — planeras som eget moment.
 
