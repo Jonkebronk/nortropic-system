@@ -1,0 +1,174 @@
+#!/usr/bin/env python3.12
+"""controller/taskval/cli — skiva 8: taskval och claim.
+
+    select <spec.json> <attest-dir> <state-dir>   lägsta behöriga id på stdout
+    claim  <spec.json> <attest-dir> <state-dir>   som select, plus ETT event
+
+Behörig = samtliga depends_on attesterade-och-giltiga (skiva 3) OCH tasken
+själv inte attesterad-giltig OCH status i state frånvarande eller "pending".
+Ordning: lägst id i kodpunktsordning.
+
+Doneness läses ur ATTEST, aldrig ur state. State är rapportering — {task,
+status} med en godtycklig sträng och ingen inbyggd betydelse av klar; bara
+attestationen är bunden till en candidate-SHA, och bara den kan bli stale.
+Ett status "done" hade stått kvar för evigt (LOOP-ÄGARHAND-23).
+
+Specen är INDATA. Komponenten antar inget namnschema och bär ingen egen
+lista över tasks.
+
+v4.1 §13:s fulla ordning är priority → riskklass → next_eligible_at → äldst
+id. Fälten priority, risk_class och next_eligible_at finns inte i
+specs/tasks.spec.json och byggs INTE här: kodpunktsordning på id är hela
+ordningen. Lease hör till körningen, inte claimet — den tas en gång per run
+före taskloopen (v4.1 §13, eventordningen run_started → lease_acquired →
+task_claimed) och byggs i h-011.
+
+Exit 0 = ok, tomt val inräknat: "ingen behörig task" är ett dömbart utfall,
+inte ett fel. Exit 1 = fel, alltid med orsak på stderr — ett fel får aldrig
+se ut som ett tomt val.
+"""
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/taskval/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+ATT = ROT / "controller/attest/cli"
+ST = ROT / "controller/state/cli"
+
+# Frånvarande status är None. Båda betyder "inte påbörjad".
+VALBARA_STATUS = (None, "pending")
+
+
+class Avbryt(Exception):
+    """Fel som blir exit 1 med orsak — aldrig ett tyst tomt val."""
+
+
+def fel(text: str) -> int:
+    print(text, file=sys.stderr)
+    return 1
+
+
+def kor(argv: list[str]) -> subprocess.CompletedProcess:
+    """Systerkomponenterna anropas som argv utan skal (v4.1 §2 invariant 3)."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, shell=False)
+    except OSError as e:
+        raise Avbryt(f"{argv[0]} kunde inte startas — {e}") from e
+
+
+def las_spec(spec: Path) -> list[tuple[str, list[str]]]:
+    """Backloggen som (id, depends_on). Formen prövas, aldrig namnen."""
+    try:
+        data = json.loads(spec.read_text(encoding="utf-8"))
+    except OSError as e:
+        raise Avbryt(f"spec: {spec} kunde inte läsas — {e}") from e
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise Avbryt(f"spec: {spec} är inte giltig JSON — {e}") from e
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+        raise Avbryt(f"spec: {spec} saknar listan tasks")
+
+    tasks: list[tuple[str, list[str]]] = []
+    sedda: set[str] = set()
+    for nr, post in enumerate(data["tasks"], start=1):
+        if not isinstance(post, dict) or not isinstance(post.get("id"), str) or not post["id"]:
+            raise Avbryt(f"spec: task {nr} saknar id som icke-tom sträng")
+        tid = post["id"]
+        if tid in sedda:
+            # Två rader med samma id är två sanningar om samma task — vilken
+            # depends_on gäller? Hellre vägran än ett tyst val mellan dem.
+            raise Avbryt(f"spec: id {tid} förekommer mer än en gång")
+        sedda.add(tid)
+        dep = post.get("depends_on", [])
+        if not isinstance(dep, list) or not all(isinstance(d, str) and d for d in dep):
+            raise Avbryt(f"spec: depends_on för {tid} är ingen lista av id")
+        tasks.append((tid, dep))
+    return tasks
+
+
+def attesterad_giltig(attkat: Path, task: str) -> bool:
+    """Frågar skiva 3. Stale-semantiken bor där, aldrig i en kopia här."""
+    svar = kor([str(ATT), str(attkat), "read", task, "--require-valid"])
+    if svar.returncode == 0:
+        return True
+    # Exit 1 betyder BÅDE "ingen attestation / stale" och "attest kraschade".
+    # Att låta dem bli samma utfall vore fail-open: en oläsbar attestbutik
+    # hade gjort varje beroendelös task behörig igen och köat om klart arbete.
+    # Skiva 3:s två negativa svar inleds båda med "read: "; allt annat är fel.
+    if svar.returncode == 1 and svar.stderr.startswith("read: "):
+        return False
+    raise Avbryt(
+        f"attest svarade oväntat för {task} (exit {svar.returncode}): {svar.stderr.strip()}"
+    )
+
+
+def status_ur_state(stkat: Path) -> dict[str, str]:
+    """Läser LOGGEN via rebuild, inte projektionen via dump — loggen är sanningen (skiva 1)."""
+    svar = kor([str(ST), "rebuild", str(stkat)])
+    if svar.returncode != 0:
+        raise Avbryt(f"state: {stkat} kunde inte rekonstrueras — {svar.stderr.strip()}")
+    try:
+        tabell = json.loads(svar.stdout)
+    except json.JSONDecodeError as e:
+        raise Avbryt(f"state: rebuild gav ingen läsbar tabell — {e}") from e
+    return {rad["task"]: rad["status"] for rad in tabell}
+
+
+def valj(tasks: list[tuple[str, list[str]]], attkat: Path, stkat: Path) -> str | None:
+    status = status_ur_state(stkat)
+    besked: dict[str, bool] = {}
+
+    def attesterad(tid: str) -> bool:
+        if tid not in besked:
+            besked[tid] = attesterad_giltig(attkat, tid)
+        return besked[tid]
+
+    behoriga = [
+        tid
+        for tid, dep in tasks
+        if status.get(tid) in VALBARA_STATUS
+        and not attesterad(tid)
+        and all(attesterad(d) for d in dep)
+    ]
+    # min() på str är kodpunktsordning och lokaloberoende — samma semantik
+    # som skiva 1:s sorted() i den kanoniska tabellen.
+    return min(behoriga) if behoriga else None
+
+
+def kmd_claim(tasks: list[tuple[str, list[str]]], attkat: Path, stkat: Path) -> int:
+    val = valj(tasks, attkat, stkat)
+    if val is None:
+        return 0  # Tomt claim rör aldrig loggen.
+    # Eventet skrivs FÖRE svaret: ett claim som rapporterats men inte
+    # registrerats hade gjort två controllers till ägare av samma task.
+    kvitto = kor(
+        [str(ST), "append", str(stkat), json.dumps({"task": val, "status": "claimed"}, ensure_ascii=False)]
+    )
+    if kvitto.returncode != 0:
+        raise Avbryt(f"claim: eventet för {val} kunde inte skrivas — {kvitto.stderr.strip()}")
+    print(val)
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 5 or argv[1] not in ("select", "claim"):
+        return fel("användning: cli select|claim <spec.json> <attest-dir> <state-dir>")
+    kommando, spec, attkat, stkat = argv[1], Path(argv[2]), Path(argv[3]), Path(argv[4])
+    try:
+        tasks = las_spec(spec)
+        if kommando == "claim":
+            return kmd_claim(tasks, attkat, stkat)
+        val = valj(tasks, attkat, stkat)
+        if val is not None:
+            print(val)
+        return 0
+    except Avbryt as e:
+        return fel(str(e))
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
