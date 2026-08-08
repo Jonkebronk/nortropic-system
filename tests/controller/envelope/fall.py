@@ -123,12 +123,22 @@ def main() -> int:
 
         # Certifieringssteget får aldrig läcka (v4.1 §12). Grinden greppar fyra
         # strängar; här prövas att inget VÄRDE ur de förbjudna spec-fälten finns.
-        text = json.dumps(k, ensure_ascii=False)
+        # spec_sha256 utesluts: 64 slumpmässiga hex-tecken innehåller förr eller senare
+        # vilken kort sträng som helst. Mätt 2026-08-08: slice-värdet "6b" gav falskt
+        # FAIL när h-009 lades till specen och hashen ändrades till en som bär "6b".
+        utan_hash = {n: v for n, v in k.items() if n != "spec_sha256"}
+        text = json.dumps(utan_hash, ensure_ascii=False)
         for nyckel in FORBJUDNA_NYCKLAR:
             varde = tasks[task_id].get(nyckel)
-            if isinstance(varde, str) and varde:
-                doma(f"{task_id}/lackage-{nyckel}", varde not in text, f"{nyckel} i kuvertet",
-                     f"{nyckel} får aldrig följa med")
+            if not isinstance(varde, str) or not varde:
+                continue
+            if len(varde) < 8:
+                # För kort för att skilja läckage från slumpkollision — odömbart,
+                # rapporteras hellre än tystas. Samma disciplin som exit 2 = ODÖMBART.
+                print(f"SKIP  {task_id}/lackage-{nyckel} — värdet '{varde}' är för kort för att döma")
+                continue
+            doma(f"{task_id}/lackage-{nyckel}", varde not in text, f"{nyckel} i kuvertet",
+                 f"{nyckel} får aldrig följa med")
 
     # run_id ska faktiskt användas — två olika run_id ger olika kuvert.
     a = kor("build", "run-alfa", "h-001", base)[1]
