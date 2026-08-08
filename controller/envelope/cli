@@ -96,19 +96,19 @@ def krav_ur(kriterium: str) -> list[str]:
     return delar
 
 
-def bygg(run_id: str, task_id: str, base_arg: str) -> int:
+def bygg(run_id: str, task_id: str, base_arg: str, spec_fil: Path = SPEC) -> int:
     try:
-        ra = SPEC.read_bytes()
+        ra = spec_fil.read_bytes()
         spec = json.loads(ra)
     except (OSError, ValueError) as e:
-        return svar(f"internt fel: kan inte läsa {SPEC}: {e}", INTERNT)
+        return svar(f"internt fel: kan inte läsa {spec_fil}: {e}", INTERNT)
 
     if not ID_FORM.match(run_id):
         return svar(f"anropsfel: ogiltigt run-id {run_id!r}", ANROP)
 
     traff = [t for t in spec.get("tasks", []) if t.get("id") == task_id]
     if not traff:
-        return svar(f"anropsfel: okänd task-id {task_id} — finns inte i {SPEC.name}", ANROP)
+        return svar(f"anropsfel: okänd task-id {task_id} — finns inte i {spec_fil.name}", ANROP)
     task = traff[0]
     std = spec.get("defaults", {})
 
@@ -146,9 +146,10 @@ def bygg(run_id: str, task_id: str, base_arg: str) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 4 or argv[0] != "build":
-        return svar("anropsfel: build <run-id> <task-id> <base-sha>", ANROP)
-    return bygg(argv[1], argv[2], argv[3])
+    if len(argv) not in (4, 5) or argv[0] != "build":
+        return svar("anropsfel: build <run-id> <task-id> <base-sha> [spec-fil]", ANROP)
+    # Spec-fil som indata (LOOP-ÄGARHAND-23): utelämnad = repots spec, som förut.
+    return bygg(argv[1], argv[2], argv[3], Path(argv[4]) if len(argv) == 5 else SPEC)
 
 
 if __name__ == "__main__":
