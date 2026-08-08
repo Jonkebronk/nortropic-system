@@ -9,11 +9,15 @@ controller/utforare/cli och rör ALDRIG kandidatvägen — en lyckad rapport
 vidarebefordras OFÖRÄNDRAD, aldrig extra rader, så h-006 parse läser exakt
 de byte utforaren skrev.
 
-Failure normaliseras till en fingerprint: utforarens exitkod plus första
-felraden med sifferföljder ersatta av `#` och absoluta sökvägar av `‹väg›`.
-Samma fel i två varianter är EN klass, olika fel är TVÅ; identiteten mäts
-på tröskelbeteende, aldrig på brytarens egen utsaga. Samma fingerprint
-<tröskel> gånger öppnar brytaren, och en succé nollställer ingenting.
+Failure normaliseras till en fingerprint: utforarens exitkod, PROCESSENS
+exitkod och första felraden med sifferföljder ersatta av `#` och absoluta
+sökvägar av `‹väg›`. Processkoden hissas ut FÖRE normaliseringen — den är
+en siffra i failuretexten och hade annars raderats, och för den uppmätta
+workerformen (tom stderr, allt på stdout som h-009 kastar vid nonzero) är
+den felets enda bärare. Samma fel i två varianter är EN klass, olika fel
+är TVÅ; identiteten mäts på tröskelbeteende, aldrig på brytarens egen
+utsaga. Samma fingerprint <tröskel> gånger öppnar brytaren, och en succé
+nollställer ingenting.
 
 <katalog>/kvot.monster är DRIFTKONFIGURATION: substrängsmönster, ett per
 rad, tomma rader ignoreras, matchas mot failuretexten för klasserna 3–8.
@@ -69,6 +73,18 @@ BRUK = ("anropsfel: kor <katalog> <task> <budget> <tröskel> <workspace> "
 VAG = re.compile(r"""(?:^|(?<=[\s'"`(\[{<=:,;]))/\S+""")
 SIFFROR = re.compile(r"\d+")
 
+# PROCESSENS exitkod hissas ut FÖRE siffernormaliseringen. v4.1 §378 kräver
+# "failure class + exit code" — klassen fanns, koden raderades av SIFFROR, och
+# för den kanalform workern MÄTTS ha (smoke 2026-08-08: tom stderr, allt på
+# stdout, som h-009 kastar vid nonzero) är "kod N" allt som återstår av felet.
+# Utan utlyftet kollapsar varje tänkbart fel till EN klass och brytaren öppnar
+# på fel som inte hör ihop — tvärtemot kriteriets *olika fingerprints öppnar
+# den aldrig*. Ankaret är h-009:s KLASSNAMN, inte dess prosa, och första
+# talet efter "kod" är h-009:s eget (icke-girigt). Matchar mönstret inte
+# faller fingerprinten tillbaka på `-` och beter sig exakt som förut — en
+# okänd failuretext får aldrig bli ett anropsfel.
+PROCESSKOD = re.compile(r"^nonzero_exit:.*?\bkod (-?\d+)")
+
 
 class TrasigtTillstand(ValueError):
     """Tillståndsfilen finns men går inte att läsa som brytartillstånd.
@@ -121,9 +137,11 @@ def las_monster(kat: Path) -> list[str]:
 
 def fingerprint(kod: int, text: str) -> str:
     rad = (text.splitlines() or [""])[0]
+    m = PROCESSKOD.search(rad)
+    proc = m.group(1) if m else "-"
     rad = VAG.sub("‹väg›", rad)
     rad = SIFFROR.sub("#", rad)
-    return f"{kod}:{rad}"
+    return f"{kod}:{proc}:{rad}"
 
 
 def vidarebefordra(ut: bytes) -> None:
