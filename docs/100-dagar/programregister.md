@@ -1055,6 +1055,22 @@ Pass 0 (beslutslogg `LOOP-PASS0`); registrerat här 2026-08-08 enligt beslut 9 �
 den enda backloggen, och ett fynd som bara står i beslutsloggen är samma klass som doctor #5 självt:
 dokumenterat men inte där det räknas.
 
+**UPPDATERING 2026-08-08 (ägarhand, HÖGRISK-commit):** två av de tre uppdragen har nu mekanisk
+implementation, det tredje delvis. **Uppdrag 1 (§A-fällning av `[AUTO-N1]`/`[AUTO-N2]`) byggdes INTE
+som invariant** — `check-invariants.mjs` läser arbetsträdet, inte commits, och en kontroll av vad en
+commit rörde kräver base- och candidate-SHA som argument. Skiva 7 (`controller/policy/cli check
+<task-id> <base-sha> <candidate-sha>`) gör exakt detta och prövar tio §A-sökvägar; att duplicera den
+i en §A-fil hade blivit två sanningar av just den sort konstitutionen §A6 varnar för. Uppdraget
+tillskrivs därför skiva 7. **Uppdrag 2 → `INV-007`:** regel 16:s tre pipeline-skills måste bära
+`disable-model-invocation: true` i frontmatter; saknat fält, annat värde eller saknad frontmatter
+fälls. **Uppdrag 3 → `INV-008`, HALVA:** kontraktsversionens deklaration i
+`skills/nortropic-stack/SKILL.md` måste finnas och vara parsbar som `vMajor.minor.patch`.
+**Kvarstår hos doctor #5:** den semver-medvetna jämförelsen mot kundrepons `profilKontraktVersion`
+(saknad = WARN · annan MAJOR = FAIL · högre minor/patch = FAIL · lika eller lägre = PASS).
+Skälet är mekaniskt: kundrepon ligger utanför detta repo (`~/Workflow`, `~/*/src/content/profile.ts`)
+och `check-invariants.mjs` är repolokal utan filsystemsvandring utanför reporoten. En grind som bara
+prövar hälften får aldrig se komplett ut — därför står halvan skriven här i stället för att antas.
+
 ## Öppet ärende (registrerat ur kontrollplansarbetet 2026-08-08): skiva 6:s launch-halva obyggd
 Taskens titel är *Worker-launch med strikt utdatakontrakt*. Byggd är utdatakontraktet
 (`controller/worker/cli parse`, exit-test `h-006-exit` 10 PASS). Launch-halvan — workerstart,
