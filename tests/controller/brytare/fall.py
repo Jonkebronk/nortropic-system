@@ -15,7 +15,12 @@ fingerprintraden som enda tillägg och sist · tröskel 1 öppnar på första
 felet, med radordningen failure → fingerprint → "brytare öppen" sist ·
 sifferföljdsnormalisering över timeoutvärdet, mätt på tröskelbeteende ·
 citerad sökväg (gits/Pythons form) med bokstavsvarians är samma
-fingerprint · ordskillnad i klass 6-orsaken ger två fingerprints · kvotmatchning på
+fingerprint · ordskillnad i klass 6-orsaken ger två fingerprints ·
+PROCESSENS exitkod i den uppmätta kanalformen: grindens K15 mäter att
+olika exitkod ger olika fingerprint, här ligger motpolen (samma kod är
+fortfarande EN klass, även när den kastade stdouten skiljer sig),
+fingerprintens form, signalkodernas minustecken och återfallet `-` för
+klasser som inte bär någon processkod · kvotmatchning på
 klass 6 (mönstret möter hela failuretexten, inte bara nonzero-vägen) · en
 mönsterfil med enbart tomma och blanka rader kvotklassar ingenting — en
 blankrad som substrängsmönster hade matchat nästan allt · andra mönstret i
@@ -58,6 +63,16 @@ SKRIPT = {
                     'echo "kan inte öppna \'/tmp/provAAA/lager/l.lock\': upptagen" >&2\nexit 7\n',
     "fel-cit-b.sh": '#!/usr/bin/env bash\n'
                     'echo "kan inte öppna \'/tmp/provBBB/lager/l.lock\': upptagen" >&2\nexit 7\n',
+    # DEN UPPMÄTTA KANALFORMEN (smoke 2026-08-08): allt på STDOUT, TOM stderr.
+    # h-009 KASTAR sessionens stdout vid nonzero, så det enda som når brytaren
+    # är "nonzero_exit: processen avslutade med kod N" — processkoden är felets
+    # enda bärare. proc1-a/proc1-b skiljer sig ENDAST i den kastade texten,
+    # proc64 i koden. Signalfixturerna ger negativa koder (-15 / -9).
+    "proc1-a.sh": '#!/usr/bin/env bash\necho "3 tester föll i sviten"\nexit 1\n',
+    "proc1-b.sh": '#!/usr/bin/env bash\necho "verktyget saknas i PATH"\nexit 1\n',
+    "proc64.sh": '#!/usr/bin/env bash\necho "usage: worker [flaggor]"\nexit 64\n',
+    "sig-term.sh": '#!/usr/bin/env bash\nkill -s TERM $$\n',
+    "sig-kill.sh": '#!/usr/bin/env bash\nkill -s KILL $$\n',
 }
 
 
@@ -272,6 +287,55 @@ def main() -> int:
          f"koder {k1}/{k2}", "ordskillnad är två fingerprints — ingen öppning vid tröskel 2")
     doma("norm-ord/skilda", fprader(u1) and fprader(u2) and fprader(u1)[0] != fprader(u2)[0],
          f"{fprader(u1)[:1]} / {fprader(u2)[:1]}", "fingerprintsträngarna skilda")
+
+    # --- PROCESSENS EXITKOD, i den kanalform workern MÄTTS ha ---
+    # Grinden K15 mäter ena hållet: olika processkod ger olika fingerprint.
+    # Här ligger MOTPOLEN — en fix som splittrar samma fel vore lika fel som
+    # den som smälte ihop olika — plus formen, signalkoderna och återfallet.
+
+    # Samma processkod, HELT olika kastad stdout: fortfarande EN klass. Det är
+    # ärligt och inte en brist i brytaren: h-009 kastar sessionens stdout, så
+    # texterna är strukturellt oskiljbara nedströms. Tröskel 2 ska öppna.
+    dpk = str(kat / "d-proc-kastad")
+    k1, u1, _ = kor("kor", dpk, "h-x", "9", "2", str(FW), str(kuv), "30", "--", str(kat / "proc1-a.sh"))
+    k2, u2, _ = kor("kor", dpk, "h-x", "9", "2", str(FW), str(kuv), "30", "--", str(kat / "proc1-b.sh"))
+    doma("proc/kastad-stdout", k1 == NONZERO and k2 == OPPEN, f"koder {k1}/{k2}",
+         f"{NONZERO} sedan {OPPEN} — samma processkod är EN klass även när den "
+         "kastade stdouten skiljer sig")
+    doma("proc/barer-koden", bool(fprader(u1)) and ":1:" in fprader(u1)[0],
+         str(fprader(u1)[:1]), "fingerprinten bär processens exitkod 1")
+
+    # Olika processkod, samma kanalform: två fingerprints, ingen öppning.
+    dps = str(kat / "d-proc-skilda")
+    k1, u1, _ = kor("kor", dps, "h-x", "9", "2", str(FW), str(kuv), "30", "--", str(kat / "proc1-a.sh"))
+    k2, u2, _ = kor("kor", dps, "h-x", "9", "2", str(FW), str(kuv), "30", "--", str(kat / "proc64.sh"))
+    doma("proc/skilda-oppnar-inte", k1 == NONZERO and k2 == NONZERO, f"koder {k1}/{k2}",
+         f"{NONZERO} båda gångerna — kod 1 och kod 64 får aldrig öppna vid tröskel 2")
+    doma("proc/skilda-fp", bool(fprader(u1)) and bool(fprader(u2))
+         and fprader(u1)[0] != fprader(u2)[0] and ":64:" in fprader(u2)[0],
+         f"{fprader(u1)[:1]} / {fprader(u2)[:1]}",
+         "skilda fingerprints, den andra bär koden 64")
+
+    # Signalkoder är NEGATIVA (h-009 bär subprocessens returncode rått).
+    # Minustecknet överlever siffernormaliseringen — men bara koden skiljer
+    # SIGTERM från SIGKILL, så utlyftet måste läsa tecknet med.
+    dpg = str(kat / "d-proc-signal")
+    k1, u1, _ = kor("kor", dpg, "h-x", "9", "2", str(FW), str(kuv), "30", "--", str(kat / "sig-term.sh"))
+    k2, u2, _ = kor("kor", dpg, "h-x", "9", "2", str(FW), str(kuv), "30", "--", str(kat / "sig-kill.sh"))
+    doma("proc/signal-oppnar-inte", k1 == NONZERO and k2 == NONZERO, f"koder {k1}/{k2}",
+         f"{NONZERO} båda gångerna — SIGTERM och SIGKILL är två olika fel")
+    doma("proc/signal-fp", bool(fprader(u1)) and bool(fprader(u2))
+         and fprader(u1)[0] != fprader(u2)[0] and ":-15:" in fprader(u1)[0]
+         and ":-9:" in fprader(u2)[0],
+         f"{fprader(u1)[:1]} / {fprader(u2)[:1]}",
+         "fingerprintarna bär -15 respektive -9")
+
+    # Klasser UTAN processkod faller tillbaka på `-`: en okänd failuretext får
+    # aldrig bli ett anropsfel, och en timeout får ingen påhittad kod.
+    dpu = str(kat / "d-proc-utan")
+    _, u1, _ = kor("kor", dpu, "h-x", "9", "9", str(FW), str(kuv), "1", "--", str(kat / "sover.sh"))
+    doma("proc/utan-kod", bool(fprader(u1)) and fprader(u1)[0].startswith(f"fingerprint: {TIMEOUT}:-:"),
+         str(fprader(u1)[:1]), "timeout bär ingen processkod — återfallet är `-`")
 
     # --- KVOT: mönstret möter hela failuretexten, även klass 6 ---
     dq = kat / "d-kvot6"
