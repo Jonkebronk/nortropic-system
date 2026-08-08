@@ -28,6 +28,7 @@ Exitkoden bär samma klassning, så en anropare slipper strängmatcha:
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -41,7 +42,10 @@ KOMMANDON = ("parse",)
 
 # Ett fullt SHA-1, inget annat. Förkortningar är tvetydiga och ett strikt
 # utdatakontrakt gissar inte vilken commit workern menade.
-SHA_FORM = re.compile(r"^[0-9a-fA-F]{40}$")
+# \Z, inte $: i Python matchar $ även FÖRE en avslutande radbrytning, så
+# "<40 hex>\n" hade passerat formkontrollen och först senare fallit på
+# repo-uppslaget — rätt utfall av fel skäl, och i fel failure-klass.
+SHA_FORM = re.compile(r"^[0-9a-fA-F]{40}\Z")
 
 TOM = "empty_output"
 OPARSBAR = "unparseable_output"
@@ -49,6 +53,37 @@ SHA_SAKNAS = "candidate_sha_not_found"
 INTERNT = "internal_error"
 
 KOD = {TOM: 2, OPARSBAR: 3, SHA_SAKNAS: 4, INTERNT: 5}
+
+
+class IckeStandard(ValueError):
+    """Pythons json läser NaN, Infinity och -Infinity. JSON gör det inte.
+
+    RFC 8259 har inga sådana literaler. En parser som ändå tar emot dem
+    accepterar indata som ingen annan JSON-läsare i kedjan kan läsa — och ett
+    strikt utdatakontrakt som är vidare än standarden är inte strikt.
+    """
+
+
+class Dubblett(ValueError):
+    """Samma nyckel två gånger. Pythons json behåller tyst den sista.
+
+    Ett kuvert med två candidate_sha — ett falskt och ett äkta — skulle då
+    godkännas på det sista. Vilket som vinner är en implementationsdetalj, och
+    att välja åt workern är precis det tolkningsförsök kontraktet förbjuder.
+    """
+
+
+def _konstant(namn: str):
+    raise IckeStandard(namn)
+
+
+def _unika_nycklar(par: list[tuple[str, object]]) -> dict:
+    sedda: set[str] = set()
+    for nyckel, _ in par:
+        if nyckel in sedda:
+            raise Dubblett(nyckel)
+        sedda.add(nyckel)
+    return dict(par)
 
 
 def klass(namn: str, detalj: str) -> int:
@@ -91,7 +126,11 @@ def kuvert_ur(text: str) -> tuple[dict | None, int | None]:
         return None, klass(TOM, "rapporten innehåller ingenting att läsa")
 
     try:
-        värde = json.loads(text)
+        värde = json.loads(text, parse_constant=_konstant, object_pairs_hook=_unika_nycklar)
+    except IckeStandard as e:
+        return None, klass(OPARSBAR, f"{e} är ingen JSON-literal (RFC 8259 har varken NaN eller Infinity)")
+    except Dubblett as e:
+        return None, klass(OPARSBAR, f"nyckeln {e} förekommer flera gånger — vilken som gäller är inte definierat")
     except json.JSONDecodeError as e:
         return None, klass(OPARSBAR, f"inte JSON (rad {e.lineno}, kolumn {e.colno}: {e.msg})")
 
@@ -116,19 +155,34 @@ def kuvert_ur(text: str) -> tuple[dict | None, int | None]:
         return None, klass(OPARSBAR, "files är tom — en kandidat utan ändrade filer är ingen kandidat")
     if not all(isinstance(f, str) for f in värde["files"]):
         return None, klass(OPARSBAR, "files innehåller något som inte är en sträng")
+    if not all(f.strip() for f in värde["files"]):
+        return None, klass(OPARSBAR, "files innehåller en tom sökväg")
 
     return värde, None
 
 
-def los_upp_sha(sha: str) -> str | None:
-    """Kanoniskt commit-SHA ur repot, eller None om det inte finns.
+def los_upp_sha(sha: str) -> tuple[str | None, str]:
+    """Kandidatens SHA om det självt är en commit i repot, annars (None, skäl).
 
-    ^{commit} gör att ett giltigt tree- eller blob-SHA inte duger — en kandidat
-    måste vara en commit.
+    `^{commit}` räcker INTE ensamt. Det avvisar tree och blob, men ett
+    ANNOTERAT TAGGOBJEKT peelas vidare till commiten taggen pekar på — och då
+    blir svaret ett annat SHA än det workern påstod. Mätt 2026-08-08 på taggen
+    100d-baseline-20260730: kuvertet bar 7e08d29f (typ tag), komponenten
+    svarade exit 0 med 69559a55. En controller hade verifierat och attesterat
+    en commit som ingen worker föreslagit — tyst, med tom stderr.
+
+    Därför krävs att det peelade svaret är IDENTISKT med det påstådda. Är det
+    inte det var objektet inte självt en commit, och kandidaten avvisas.
     """
     r = git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
-    ut = r.stdout.strip()
-    return ut if r.returncode == 0 and ut else None
+    peelat = r.stdout.strip()
+    if r.returncode != 0 or not peelat:
+        return None, f"{sha} är ingen commit i repot"
+    if peelat != sha.lower():
+        typ = git("cat-file", "-t", sha).stdout.strip() or "okänt objekt"
+        return None, (f"{sha} är ett {typ}-objekt, inte en commit — det pekar vidare "
+                      f"till {peelat}, och den kandidaten påstod workern aldrig")
+    return peelat, ""
 
 
 def gor_parse(fil: Path) -> int:
@@ -141,9 +195,9 @@ def gor_parse(fil: Path) -> int:
         return kod
 
     påstått = kuvert["candidate_sha"]
-    sha = los_upp_sha(påstått)
+    sha, skäl = los_upp_sha(påstått)
     if sha is None:
-        return klass(SHA_SAKNAS, f"{påstått} är ingen commit i repot")
+        return klass(SHA_SAKNAS, skäl)
 
     print(sha)
     return 0
@@ -161,11 +215,29 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Sista skyddet. Kriteriet säger "failure, inte krasch": ett oväntat fel
+    # ska bli en klassad rad på stdout, aldrig ett stackspår på stderr.
     try:
-        sys.exit(main(sys.argv[1:]))
+        kod = main(sys.argv[1:])
+    except BrokenPipeError:
+        # Läsaren har gått. Det finns ingen kanal kvar att rapportera i, och
+        # att försöka skriva klassen skulle kasta samma fel en gång till.
+        kod = KOD[INTERNT]
     except SystemExit:
         raise
     except BaseException as e:
-        # Sista skyddet. Kriteriet säger "failure, inte krasch": ett oväntat
-        # fel ska bli en klassad rad på stdout, aldrig ett stackspår på stderr.
-        sys.exit(klass(INTERNT, f"{type(e).__name__}: {e}"))
+        try:
+            kod = klass(INTERNT, f"{type(e).__name__}: {e}")
+        except BrokenPipeError:
+            kod = KOD[INTERNT]
+
+    # Tolken spolar stdout vid avslut. Mot ett brutet rör skrev den
+    # "Exception ignored in ... BrokenPipeError" på stderr — mätt 2026-08-08.
+    # Det är inte en failure-klass, så spolningen görs här i stället, och
+    # resten av avslutet får skriva till /dev/null.
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        kod = KOD[INTERNT]
+    sys.exit(kod)
