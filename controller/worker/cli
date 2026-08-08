@@ -1,0 +1,171 @@
+#!/usr/bin/env python3.12
+"""controller/worker/cli — skiva 6: strikt utdatakontrakt för workerns rapport.
+
+    parse <fil>    giltigt kuvert → exit 0, candidate_sha på stdout
+                   allt annat     → exit ≠0, failure-klass på stdout
+
+Rapporten läses mekaniskt eller inte alls. Prosa är ett fel, inte något att
+tolka: HELA filen måste vara exakt ett JSON-objekt. Ett kuvert som ligger
+inbäddat i prosa plockas ALDRIG ut — att leta upp den sista JSON-liknande
+raden i ett textsvar är precis det tolkningsförsök kontraktet förbjuder, och
+den välvilligheten är hur en trasig worker råkar bli godkänd.
+
+Failure-klasserna hålls isär med avsikt. Controllern klassar och räknar fel
+(v4.1 §13 `classify`, §16 circuit breaker), och två fel som får samma namn
+kan inte räknas isär — då öppnar breakern på fel grund eller inte alls:
+
+    empty_output              tomt, eller bara blanktecken
+    unparseable_output        inte JSON, eller JSON som inte är ett kuvert
+    candidate_sha_not_found   välformat kuvert, men SHA:t finns inte i repot
+    internal_error            oväntat fel — en klass, aldrig en traceback
+
+Klassen skrivs på STDOUT, inte stderr. Controllern läser utfallet ur stdout,
+och en traceback på stderr är inte en failure-klass utan en krasch.
+
+Exitkoden bär samma klassning, så en anropare slipper strängmatcha:
+0 giltigt · 1 felaktigt anrop · 2 empty · 3 unparseable · 4 sha saknas ·
+5 internt fel.
+"""
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/worker/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+KOMMANDON = ("parse",)
+
+# Ett fullt SHA-1, inget annat. Förkortningar är tvetydiga och ett strikt
+# utdatakontrakt gissar inte vilken commit workern menade.
+SHA_FORM = re.compile(r"^[0-9a-fA-F]{40}$")
+
+TOM = "empty_output"
+OPARSBAR = "unparseable_output"
+SHA_SAKNAS = "candidate_sha_not_found"
+INTERNT = "internal_error"
+
+KOD = {TOM: 2, OPARSBAR: 3, SHA_SAKNAS: 4, INTERNT: 5}
+
+
+def klass(namn: str, detalj: str) -> int:
+    """Skriver failure-klassen på stdout och ger dess exitkod."""
+    print(f"{namn}: {detalj}")
+    return KOD[namn]
+
+
+def anropsfel(text: str) -> int:
+    """Fel i anropet självt — inte en failure-klass hos workern."""
+    print(text)
+    return 1
+
+
+def git(*argv: str) -> subprocess.CompletedProcess:
+    """Git utan skal. argv är en lista — fri text kan aldrig bli ett kommando."""
+    return subprocess.run(
+        ["git", "-C", str(ROT), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def las(fil: Path) -> tuple[str | None, int | None]:
+    """Filens text, eller (None, exitkod) om den inte går att läsa som text."""
+    try:
+        rå = fil.read_bytes()
+    except OSError as e:
+        return None, klass(INTERNT, f"kan inte läsa {fil}: {e.strerror or e}")
+    try:
+        return rå.decode("utf-8"), None
+    except UnicodeDecodeError as e:
+        return None, klass(OPARSBAR, f"inte giltig UTF-8 ({e.reason})")
+
+
+def kuvert_ur(text: str) -> tuple[dict | None, int | None]:
+    """Hela texten som ett kuvert, eller (None, exitkod) med klassen satt."""
+    if not text.strip():
+        return None, klass(TOM, "rapporten innehåller ingenting att läsa")
+
+    try:
+        värde = json.loads(text)
+    except json.JSONDecodeError as e:
+        return None, klass(OPARSBAR, f"inte JSON (rad {e.lineno}, kolumn {e.colno}: {e.msg})")
+
+    if not isinstance(värde, dict):
+        return None, klass(OPARSBAR, f"JSON men inte ett objekt ({type(värde).__name__})")
+
+    for fält, typ, vad in (("status", str, "en sträng"),
+                           ("candidate_sha", str, "en sträng"),
+                           ("files", list, "en lista")):
+        if fält not in värde:
+            return None, klass(OPARSBAR, f"fältet {fält} saknas")
+        if not isinstance(värde[fält], typ) or isinstance(värde[fält], bool):
+            return None, klass(OPARSBAR, f"fältet {fält} är inte {vad}")
+
+    if värde["status"] != "candidate":
+        return None, klass(OPARSBAR, f"status är {värde['status']!r}, inte 'candidate'")
+
+    if not SHA_FORM.match(värde["candidate_sha"]):
+        return None, klass(OPARSBAR, "candidate_sha är inte fyrtio hexadecimala tecken")
+
+    if not värde["files"]:
+        return None, klass(OPARSBAR, "files är tom — en kandidat utan ändrade filer är ingen kandidat")
+    if not all(isinstance(f, str) for f in värde["files"]):
+        return None, klass(OPARSBAR, "files innehåller något som inte är en sträng")
+
+    return värde, None
+
+
+def los_upp_sha(sha: str) -> str | None:
+    """Kanoniskt commit-SHA ur repot, eller None om det inte finns.
+
+    ^{commit} gör att ett giltigt tree- eller blob-SHA inte duger — en kandidat
+    måste vara en commit.
+    """
+    r = git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+    ut = r.stdout.strip()
+    return ut if r.returncode == 0 and ut else None
+
+
+def gor_parse(fil: Path) -> int:
+    text, kod = las(fil)
+    if text is None:
+        return kod
+
+    kuvert, kod = kuvert_ur(text)
+    if kuvert is None:
+        return kod
+
+    påstått = kuvert["candidate_sha"]
+    sha = los_upp_sha(påstått)
+    if sha is None:
+        return klass(SHA_SAKNAS, f"{påstått} är ingen commit i repot")
+
+    print(sha)
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] not in KOMMANDON:
+        return anropsfel(f"okänt kommando; välj ett av {', '.join(KOMMANDON)}")
+    kommando, argv = argv[0], argv[1:]
+
+    if len(argv) != 1:
+        return anropsfel(f"{kommando} kräver exakt <fil>")
+
+    return gor_parse(Path(argv[0]))
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except SystemExit:
+        raise
+    except BaseException as e:
+        # Sista skyddet. Kriteriet säger "failure, inte krasch": ett oväntat
+        # fel ska bli en klassad rad på stdout, aldrig ett stackspår på stderr.
+        sys.exit(klass(INTERNT, f"{type(e).__name__}: {e}"))
