@@ -166,6 +166,50 @@
       "exit_criterion": "Mot en fixturbacklog med två beroende tasks (steg-a, steg-b) och en konfigurerad testworker som gör riktiga commits i workspacet: kedjan tar lease, väljer, claimar, levererar kuvertet, parsar strikt, dömer diffen mot fixturspecens allowed_write, kör registrerad verifierare mot kandidatträdet och attesterar; varv två blir behörigt av varv etts attestation och bygger på dess kandidat-SHA — steg-b:s träd innehåller steg-a:s fil. Prosa-worker ger varv utan attestation och kedjan fortsätter till exit 0. Worker som skriver utanför allowed_write avvisas av policy utan attestation. Upptagen lease vägrar körningen före första varvet utan event. Efter drain är leasen släppt, och en redan attesterad backlog ger noll nya event.",
       "docs_impact": ["docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-002", "h-003", "h-004", "h-005", "h-006", "h-007", "h-008", "h-009", "h-010"]
+    },
+    {
+      "id": "h-012",
+      "slice": 10,
+      "title": "Utföraren — fullbordat försök",
+      "summary": "controller/utforare/cli kör konfigurerat kommando via h-009 med kuvertet, och gör därefter git-arbetet SJÄLV: stagar allt som ändrats i workspacet, committar med fast identitet och rapporterar {status, candidate_sha, files} på h-006:s form. Kandidat-SHA:t föds i controllerledet, aldrig i sessionens utsaga — sessionen behöver därmed ingen commiträtt. Domen vilar på git: ändrade filer avgör om ett försök lyckades. Sessionens egen text läses ENDAST vid failure, för att bära orsaken vidare, och kan aldrig vända ett failure till en kandidat. Kommandot är konfiguration; komponenten antar aldrig vilken binär som körs.",
+      "allowed_write": ["controller/utforare/**", "tests/controller/utforare/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-012-exit",
+      "exit_criterion": "Mot ett workspace på beordrad base och ett konfigurerat kommando: en session som ändrar filer ger kandidat vars candidate_sha finns i repot och vars files matchar git, och h-006 parse accepterar rapporten. En session som ändrar noll filer men skriver en välformad framgångsrapport ger failure utan commit — utsagan vänder aldrig ett failure till en kandidat. En session som ändrar filer utan att svara alls ger ändå kandidat, med files ur git. Failure bär sessionens orsakstext ordagrant när sådan finns; saknas den namnger utfallet steget i stället för att tiga. Timeout och nonzero_exit bärs vidare som skilda klasser från h-009. Ingen commit skapas när inget ändrats, och arbetskopian utanför workspacet är orörd före och efter.",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-006", "h-009"]
+    },
+    {
+      "id": "h-013",
+      "slice": 11,
+      "title": "Brytaren — failureklassning, budget och kvotstopp",
+      "summary": "controller/brytare/cli normaliserar failure till fingerprints, för attempt-budget per task och öppnar circuit vid upprepning. Kvotstopp är en EGEN klass, kvot_slut, skild från nonzero_exit: att modellkvoten tog slut är inte samma sak som att workern misslyckades, och två fel med samma namn kan inte räknas isär. Kvot_slut öppnar brytaren omedelbart utan att förbruka budget, så körningen stannar rent och kan återupptas. Ingen kvotbokföring och inget veckotak byggs (ägarbeslut 2026-08-08).",
+      "allowed_write": ["controller/brytare/**", "tests/controller/brytare/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-013-exit",
+      "exit_criterion": "Två varianter av samma fel ger samma fingerprint; två olika fel ger två. Samma fingerprint N gånger öppnar brytaren, N-1 gånger gör det inte, och olika fingerprints öppnar den aldrig oavsett antal. Kvot_slut klassas skilt från nonzero_exit, öppnar brytaren direkt och lämnar attempt-budgeten oförbrukad — mätt som att samma task efter återstart har kvar sina försök. Öppen brytare stoppar körningen med orsak på stdout, aldrig tyst och aldrig med exit 2. Budget noll ger aldrig ett försök: inget kommando startas.",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-006", "h-009", "h-012"]
+    },
+    {
+      "id": "h-014",
+      "slice": 12,
+      "title": "Notisen — Slack från controllern",
+      "summary": "controller/notis/cli skickar notis till en konfigurerad webhook vid de fyra händelser som kräver en människa: brytare öppnad, kvot slut, körning slutförd med minst en attestation, och task blockerad av oattesterat beroende. Aldrig per varv. Controllern skickar, aldrig workern — annars är det modellen som avgör när Johnny störs. Notisen är en biverkan: en trasig eller saknad webhook får aldrig påverka körningens utfall. URL:en är en hemlighet, läses ur miljön, och ligger aldrig i repot.",
+      "allowed_write": ["controller/notis/**", "tests/controller/notis/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-014-exit",
+      "exit_criterion": "Mot en lokal mottagare, aldrig mot Slack: de fyra händelserna ger var sin notis som bär run_id, task, klass och orsak; ett vanligt lyckat varv ger ingen. Saknad webhook, ogiltig URL och mottagare som vägrar svara ger alla oförändrad exit-kod på körningen. URL:en förekommer inte i stdout, stderr eller något felmeddelande, mätt med en URL som bär en sökbar hemlighetssträng. Ingen notis skickas två gånger för samma händelse.",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-013"]
+    },
+    {
+      "id": "h-015",
+      "slice": 13,
+      "title": "Återtaget — återstart efter avbrott",
+      "summary": "controller/atertag/cli återupptar en avbruten körning utan att förlora eller dubbla arbete: attesterade tasks väljs inte om, tasks som föll blir valbara igen med bevarad failure-historik, och öppen brytare överlever omstarten. Lease från en död körning återtas efter TTL, aldrig före. Detta är driftformen kör tills kvoten tar slut, börja om när den är tillbaka (ägarbeslut 2026-08-08).",
+      "allowed_write": ["controller/atertag/**", "tests/controller/atertag/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-015-exit",
+      "exit_criterion": "Efter en avbruten körning: attesterad task väljs inte om och ger inga nya event; task som föll blir valbar igen och dess tidigare fingerprints finns kvar; öppen brytare är fortfarande öppen och släpper först när dess villkor släpper. Lease från en död körning återtas efter TTL och aldrig före — mätt på klockan, inte på utsagan. Två samtidiga återstarter ger exakt en ägare. Återstart på tom eller helt attesterad backlog ger exit 0 utan nya event.",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-010", "h-013"]
     }
   ],
 
