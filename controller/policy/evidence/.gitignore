@@ -1,0 +1,5 @@
+# Evidence är körningsdata, inte källkod. Utan den här filen smutsar varje
+# avslag arbetsträdet och en exitgrindskörning ser ut som ocommittade ändringar.
+# Katalogen själv spåras via denna fil, så den finns i en färsk utcheckning.
+*
+!.gitignore
