@@ -117,7 +117,7 @@
       "slice": 7,
       "title": "Diffpolicy — mekanisk §A-vakt",
       "summary": "Kandidatens diff prövas mot §A-mängden, LOC-budget och docs-kravet innan den ens föreslås. Detta blir systemets första verkligt mekaniska §A-skydd.",
-      "allowed_write": ["controller/policy/**", "tests/controller/policy/**", "docs/05-beslutslogg.md"],
+      "allowed_write": ["controller/policy/**", "tests/controller/policy/**", "docs/05-beslutslogg.md", "docs/00-borja-har.md"],
       "exit_test": "verify/bin/h-007-exit",
       "exit_criterion": "Kandidat som rör §A-mängden avvisas med sparat evidence. 3× LOC-budget avvisas. Task med docs_impact ≠ ingen utan docs-ändring i samma commit avvisas (regel 17 + 22).",
       "docs_impact": ["docs/00-borja-har.md", "docs/05-beslutslogg.md"],

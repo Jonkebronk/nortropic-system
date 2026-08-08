@@ -23,8 +23,15 @@ ater() { git -C "$WS" reset --hard "$BASE" >/dev/null 2>&1; git -C "$WS" clean -
 # K1: §A-ytan avvisas — FEM skilda filer, inte en.
 # En komponent som hårdkodar "AUTOPILOT" fälls här.
 i=1
+# Alla tio §A-sökvägar ur §3.1, inte fem. De fem som saknades var
+# konstitutionen, regelverket, CLAUDE.md, eval-rubriken och juridikflaggorna
+# — §A1, §A2 och §A4, alltså grundlagen. En lögnstub som dömde på
+# sökvägsprefix släppte igenom de två docs/-filerna med exit 0.
 for mal in "AUTOPILOT" "workflows/prov.md" "tests/fixtures/prov.json" \
-           "agents/nortropic-steward.md" "scripts/check-invariants.mjs"; do
+           "agents/nortropic-steward.md" "scripts/check-invariants.mjs" \
+           "docs/07-konstitution.md" "docs/03-regelverk.md" "CLAUDE.md" \
+           "skills/nortropic-eval/references/eval-rubric.md" \
+           "skills/nortropic-plan/references/juridikflaggor.md"; do
   ater
   mkdir -p "$WS/$(dirname "$mal")" 2>/dev/null
   printf '\n# prov\n' >> "$WS/$mal"
