@@ -1,0 +1,232 @@
+#!/usr/bin/env python3.12
+"""controller/policy/cli — skiva 7: diffpolicy, mekanisk §A-vakt.
+
+    check <task-id> <base-sha> <candidate-sha>
+        0   kandidaten får föreslås
+        ≠0  avslag, orsaken på stdout — den NAMNGER vad som brast
+
+Kandidatens diff prövas innan den ens föreslås. Detta är systemets första
+verkligt mekaniska §A-skydd: fram tills nu har §A vaktats av prosa i
+docs/07-konstitution.md och av en doctor #5 som inte finns i kod.
+
+**Ytan hämtas ur specen, aldrig ur en egen lista.** `denied_write` i
+specs/tasks.spec.json ÄR byggplan v3 §3.1:s mängd. En andra lista här hade
+blivit två sanningar som driftar isär — precis det repot varnar för på flera
+ställen. Vi subtraherar `specs/**` och `verify/**`: enligt §3.1 stycket
+"Två mekanismer, olika ytor" vaktas de av ägarhand, och `controller/**`
+saknas redan i `denied_write` eftersom varje h-task bygger där. En §A-vakt
+som täckte controller/** hade avvisat sin egen kandidat.
+
+Skrivytan för en task är `allowed_write` UNION `docs_impact`. Unionen är
+nödvändig, inte bekväm: h-007 har `docs/00-borja-har.md` i `docs_impact` men
+inte i `allowed_write`, och docs-kravet beordrar alltså en ändring som
+allowed_write förbjuder. Provets K4 kräver att den formen accepteras.
+Rapporterat som spec-fynd — den rena rättningen är ägarhand.
+
+Ordningen på prövningarna är verdikternas allvar, inte bekvämlighet: §A
+först, för det är den enda överträdelse som aldrig får maskeras av ett
+lindrigare avslag.
+
+Exitkoden bär verdiktet: 0 accepterad · 1 anropsfel · 3 §A · 4 utanför
+allowed_write · 5 docs-kravet · 6 filbudget · 7 radbudget · 8 internt fel.
+**2 används aldrig** — `verify/bin/_lib.sh` rad 2 binder det till ODÖMBART,
+och ett avslag är en dom.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+if sys.version_info < (3, 12):
+    sys.exit(f"controller/policy/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
+
+ROT = Path(__file__).resolve().parents[2]
+SPEC = ROT / "specs/tasks.spec.json"
+EVIDENCE = ROT / "controller/policy/evidence"
+
+# Vaktas av ägarhand, inte av den här komponenten (byggplan v3 §3.1,
+# "Två mekanismer, olika ytor"). controller/** står inte i denied_write.
+AGARHAND = ("specs/**", "verify/**")
+
+ANROP, SEKTION_A, UTANFOR, DOCS, FILBUDGET, RADBUDGET, INTERNT = 1, 3, 4, 5, 6, 7, 8
+
+
+def svar(text: str, kod: int) -> int:
+    print(text)
+    return kod
+
+
+def git(*argv: str) -> subprocess.CompletedProcess:
+    """Git utan skal. argv är en lista — fri text kan aldrig bli ett kommando."""
+    return subprocess.run(["git", "-C", str(ROT), *argv],
+                          capture_output=True, text=True, check=False)
+
+
+def matchar(sokvag: str, monster: str) -> bool:
+    """Sökvägsmönster i specens form: exakt sökväg, eller prefix/**."""
+    if monster.endswith("/**"):
+        return sokvag.startswith(monster[:-2])
+    return sokvag == monster
+
+
+def los_upp_sha(sha: str) -> str | None:
+    """Commit-SHA som självt är en commit, annars None.
+
+    Identitetskravet är h-006:s lärdom: `^{commit}` peelar ett annoterat
+    taggobjekt till en ANNAN commit, och en policy som prövar fel commit
+    prövar ingenting.
+    """
+    r = git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+    ut = r.stdout.strip()
+    if r.returncode != 0 or not ut or ut != sha.lower():
+        return None
+    return ut
+
+
+def diffen(base: str, kandidat: str) -> tuple[list[str], int, list[str]]:
+    """(ändrade sökvägar, tillagda rader, binära filer) mellan två commits.
+
+    --no-renames: en omdöpning som gled genom som "samma fil" hade kunnat
+    flytta innehåll ut ur en tillåten yta utan att synas.
+    """
+    r = git("diff", "--numstat", "--no-renames", base, kandidat)
+    filer: list[str] = []
+    binara: list[str] = []
+    rader = 0
+    for rad in r.stdout.splitlines():
+        bit = rad.split("\t")
+        if len(bit) != 3:
+            continue
+        lagt, _, sokvag = bit
+        filer.append(sokvag)
+        if lagt == "-":
+            binara.append(sokvag)
+        else:
+            rader += int(lagt)
+    return filer, rader, binara
+
+
+def skriv_evidence(task: str, base: str, kandidat: str, verdikt: str, orsak: str,
+                   filer: list[str], rader: int) -> Path | None:
+    """Ett avslag utan sparat bevis är ett påstående. v4.1 §14."""
+    try:
+        EVIDENCE.mkdir(parents=True, exist_ok=True)
+        fd, namn = tempfile.mkstemp(dir=EVIDENCE, suffix=".json",
+                                    prefix=f"{task}-{kandidat[:8]}-")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({
+                "tidpunkt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "task_id": task, "base_sha": base, "candidate_sha": kandidat,
+                "verdikt": verdikt, "orsak": orsak,
+                "andrade_filer": filer, "tillagda_rader": rader,
+            }, f, ensure_ascii=False, indent=2)
+        return Path(namn)
+    except OSError:
+        # Evidence som inte kan skrivas får aldrig förvandla ett avslag till
+        # ett godkännande. Avslaget står; förlusten noteras på stdout.
+        return None
+
+
+def avslag(kod: int, verdikt: str, orsak: str, task: str, base: str,
+           kandidat: str, filer: list[str], rader: int) -> int:
+    p = skriv_evidence(task, base, kandidat, verdikt, orsak, filer, rader)
+    if p is None:
+        return svar(f"{orsak}\nVARNING: evidence kunde inte skrivas till {EVIDENCE}", kod)
+    return svar(orsak, kod)
+
+
+def gor_check(task_id: str, base_arg: str, kand_arg: str) -> int:
+    try:
+        spec = json.loads(SPEC.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return svar(f"anropsfel: kan inte läsa {SPEC}: {e}", INTERNT)
+
+    tasks = {t["id"]: t for t in spec.get("tasks", [])}
+    if task_id not in tasks:
+        return svar(f"anropsfel: okänt task-id {task_id} — finns inte i {SPEC.name}", ANROP)
+    task = tasks[task_id]
+    std = spec.get("defaults", {})
+
+    base = los_upp_sha(base_arg)
+    if base is None:
+        return svar(f"anropsfel: base-sha {base_arg} är ingen commit i repot", ANROP)
+    kandidat = los_upp_sha(kand_arg)
+    if kandidat is None:
+        return svar(f"anropsfel: candidate-sha {kand_arg} är ingen commit i repot", ANROP)
+
+    filer, rader, binara = diffen(base, kandidat)
+    arg = (task_id, base, kandidat, filer, rader)
+
+    # 1. §A — den enda överträdelse som aldrig får maskeras av ett lindrigare
+    #    avslag. Ytan är specens denied_write minus ägarhandsytorna.
+    vaktad = [m for m in std.get("denied_write", []) if m not in AGARHAND]
+    traffar = [f for f in filer if any(matchar(f, m) for m in vaktad)]
+    if traffar:
+        return avslag(SEKTION_A, "sektion_a",
+                      "§A-yta rörd, aldrig via loopen — alltid människa och HÖGRISK-märkt "
+                      f"commit: {', '.join(traffar)}", *arg)
+
+    # 2. Skrivytan. Unionen med docs_impact är nödvändig — se modulens docstring.
+    skrivyta = list(task.get("allowed_write", [])) + list(task.get("docs_impact", []))
+    utanfor = [f for f in filer if not any(matchar(f, m) for m in skrivyta)]
+    if utanfor:
+        return avslag(UTANFOR, "utanfor_allowed_write",
+                      f"utanför allowed_write för {task_id}: {', '.join(utanfor)}", *arg)
+
+    # 3. Docs-kravet (regel 17 + 22). docs_impact är en sökvägslista sedan
+    #    ÄGARHAND-11, så villkoret är en mängdkontroll och inte en tolkning:
+    #    VARJE listad sökväg ska vara rörd i samma commit.
+    saknade = [d for d in task.get("docs_impact", []) if d not in filer]
+    if saknade:
+        return avslag(DOCS, "docs_kravet",
+                      f"docs-kravet ouppfyllt för {task_id} (regel 17 + 22): "
+                      f"{', '.join(saknade)} ändrades inte i samma commit", *arg)
+
+    # 4. Budgetarna. Tak, inte mål (LOOP-ÄGARHAND-10).
+    tak_filer = std.get("max_changed_files")
+    if tak_filer is not None and len(filer) > tak_filer:
+        return avslag(FILBUDGET, "filbudget",
+                      f"filbudget överskriden: {len(filer)} ändrade filer, taket är {tak_filer}",
+                      *arg)
+
+    tak_rader = std.get("max_added_lines")
+    if tak_rader is not None and rader > tak_rader:
+        return avslag(RADBUDGET, "radbudget",
+                      f"radbudget överskriden: {rader} tillagda rader, taket är {tak_rader}",
+                      *arg)
+
+    if binara:
+        print(f"NOT: binära filer räknas inte mot radbudgeten: {', '.join(binara)}")
+    print(f"accepterad: {task_id}, {len(filer)} filer, {rader} tillagda rader")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 4 or argv[0] != "check":
+        return svar("anropsfel: check <task-id> <base-sha> <candidate-sha>", ANROP)
+    return gor_check(argv[1], argv[2], argv[3])
+
+
+if __name__ == "__main__":
+    # Kriteriet kräver klassning, inte krasch. Inget stackspår når stderr.
+    try:
+        kod = main(sys.argv[1:])
+    except BrokenPipeError:
+        kod = INTERNT
+    except SystemExit:
+        raise
+    except BaseException as e:
+        try:
+            kod = svar(f"internt fel: {type(e).__name__}: {e}", INTERNT)
+        except BrokenPipeError:
+            kod = INTERNT
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        kod = INTERNT
+    sys.exit(kod)
