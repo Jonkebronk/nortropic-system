@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# h-008-exit — skiva 6b (taskkuvert, v4.1 §12)
+# Kontrakt: controller/envelope/cli build <run-id> <task-id> <base-sha>
+#           → 0 med kuvertet som JSON på stdout, ≠0 med orsak på stdout annars.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/envelope/cli"
+krav_komponent "$CLI"
+
+tmp=$(temp_kat); trap 'rm -rf "$tmp"' EXIT
+[ -n "$tmp" ] && [ -d "$tmp" ] || { echo "FAIL  K0 temp — temp_kat gav ingen katalog"; echo; echo "0 PASS, 1 FAIL"; exit 1; }
+BASE=$(git rev-parse HEAD)
+SPECSHA=$(shasum -a 256 specs/tasks.spec.json | cut -d' ' -f1)
+
+# K1: kuvert för känd task byggs och är giltig JSON
+ut=$("$CLI" build run-prov h-001 "$BASE" 2>&1); kod=$?
+if [ "$kod" -ne 0 ]; then
+  no "K1 bygger kuvert" "kod=$kod [$ut]"
+else
+  echo "$ut" > "$tmp/kuvert.json"
+  if python3.12 -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp/kuvert.json" 2>/dev/null; then
+    ok "K1 kuvert för känd task byggs som giltig JSON"
+  else
+    no "K1 giltig JSON" "utdata går inte att parsa"
+  fi
+fi
+
+# K2: alla nio fälten ur v4.1 §12 finns
+if [ -s "$tmp/kuvert.json" ]; then
+  saknas=$(python3.12 -c "
+import json,sys
+k=json.load(open(sys.argv[1]))
+krav=['run_id','task_id','base_sha','spec_sha256','title','description','allowed_write','denied_write','candidate_requirements']
+print(' '.join(f for f in krav if f not in k))
+" "$tmp/kuvert.json" 2>/dev/null)
+  if [ -z "$saknas" ]; then ok "K2 alla nio §12-fälten finns"
+  else no "K2 §12-fälten" "saknas:$saknas"; fi
+else
+  no "K2 §12-fälten" "inget kuvert att pröva"
+fi
+
+# K3: spec_sha256 är filens FAKTISKA hash, inte ett påstått värde
+if [ -s "$tmp/kuvert.json" ]; then
+  h=$(python3.12 -c "import json,sys;print(json.load(open(sys.argv[1])).get('spec_sha256',''))" "$tmp/kuvert.json" 2>/dev/null)
+  if [ "$h" = "$SPECSHA" ]; then ok "K3 spec_sha256 = filens faktiska hash"
+  else no "K3 spec_sha256" "kuvert=[$h] faktisk=[$SPECSHA]"; fi
+else
+  no "K3 spec_sha256" "inget kuvert att pröva"
+fi
+
+# K4: allowed_write kommer ur SPECEN för just den tasken, inte ur en egen lista.
+# h-001 och h-007 har OLIKA allowed_write — ett kuvert med hårdkodad lista fälls här.
+u1=$("$CLI" build run-prov h-001 "$BASE" 2>/dev/null | python3.12 -c "import json,sys;print(sorted(json.load(sys.stdin).get('allowed_write',[])))" 2>/dev/null)
+u7=$("$CLI" build run-prov h-007 "$BASE" 2>/dev/null | python3.12 -c "import json,sys;print(sorted(json.load(sys.stdin).get('allowed_write',[])))" 2>/dev/null)
+s1=$(python3.12 -c "
+import json
+d=json.load(open('specs/tasks.spec.json'))
+print(sorted([t for t in d['tasks'] if t['id']=='h-001'][0]['allowed_write']))
+")
+s7=$(python3.12 -c "
+import json
+d=json.load(open('specs/tasks.spec.json'))
+print(sorted([t for t in d['tasks'] if t['id']=='h-007'][0]['allowed_write']))
+")
+if [ "$u1" = "$s1" ] && [ "$u7" = "$s7" ] && [ "$u1" != "$u7" ]; then
+  ok "K4 allowed_write läses per task ur specen"
+elif [ "$u1" = "$u7" ]; then
+  no "K4 allowed_write" "h-001 och h-007 fick SAMMA lista — hårdkodad, inte läst"
+else
+  no "K4 allowed_write" "avviker från specen: h-001=[$u1] vs [$s1]"
+fi
+
+# K5: denied_write kommer ur defaults
+if [ -s "$tmp/kuvert.json" ]; then
+  ud=$(python3.12 -c "import json,sys;print(sorted(json.load(open(sys.argv[1])).get('denied_write',[])))" "$tmp/kuvert.json" 2>/dev/null)
+  sd=$(python3.12 -c "import json;print(sorted(json.load(open('specs/tasks.spec.json'))['defaults']['denied_write']))")
+  if [ "$ud" = "$sd" ]; then ok "K5 denied_write = defaults ur specen"
+  else no "K5 denied_write" "kuvert=[$ud]"; fi
+else
+  no "K5 denied_write" "inget kuvert att pröva"
+fi
+
+# K6: okänd task-id → failure med orsak, aldrig tomt kuvert
+ut=$("$CLI" build run-prov h-999 "$BASE" 2>&1); kod=$?
+if [ "$kod" -eq 0 ]; then
+  no "K6 okänd task" "h-999 accepterades"
+elif [ -z "$ut" ]; then
+  no "K6 okänd task" "avvisades tyst — kontraktet kräver orsak på stdout"
+elif ! echo "$ut" | grep -qiE 'h-999|okänd|unknown|finns inte'; then
+  no "K6 okänd task" "orsaken namnger inte tasken: [$ut]"
+else
+  ok "K6 okänd task-id → failure med orsak"
+fi
+
+# K7: två anrop med samma run_id + task_id ger BYTE-IDENTISKT kuvert
+a=$("$CLI" build run-prov h-001 "$BASE" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+sleep 1
+b=$("$CLI" build run-prov h-001 "$BASE" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)
+if [ -n "$a" ] && [ "$a" = "$b" ]; then
+  ok "K7 kuvertet är deterministiskt (immutable per attempt)"
+else
+  no "K7 determinism" "två anrop gav olika kuvert ($a != $b) — tidsstämpel eller slump i kuvertet?"
+fi
+
+# K8: kuvertet bär INGET om verifierarens implementation (v4.1 §12)
+if [ -s "$tmp/kuvert.json" ]; then
+  lack=""
+  grep -qi 'verify/bin' "$tmp/kuvert.json" && lack="$lack exit_test-sökväg"
+  grep -qi 'register.json\|verifier_id\|check-invariants' "$tmp/kuvert.json" && lack="$lack verifierarreferens"
+  if [ -n "$lack" ]; then
+    no "K8 verifierarläckage" "kuvertet innehåller:$lack"
+  else
+    ok "K8 kuvertet bär inget om verifierarens implementation"
+  fi
+else
+  no "K8 verifierarläckage" "inget kuvert att pröva"
+fi
+
+# K9: ingen krasch vid ogiltigt base-sha eller saknade argument
+kras=""
+err=$("$CLI" build run-prov h-001 0000000000000000000000000000000000000000 2>&1 >/dev/null)
+echo "$err" | grep -qi 'traceback' && kras="$kras ogiltigt-sha"
+err=$("$CLI" build 2>&1 >/dev/null)
+echo "$err" | grep -qi 'traceback' && kras="$kras utan-argument"
+if [ -n "$kras" ]; then
+  no "K9 ingen krasch" "traceback för:$kras"
+else
+  ok "K9 ingen krasch vid ogiltigt SHA eller saknade argument"
+fi
+summera

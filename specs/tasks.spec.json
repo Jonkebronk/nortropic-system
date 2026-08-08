@@ -122,6 +122,17 @@
       "exit_criterion": "Kandidat som rör §A-mängden avvisas med sparat evidence. 3× LOC-budget avvisas. Task med docs_impact ≠ ingen utan docs-ändring i samma commit avvisas (regel 17 + 22).",
       "docs_impact": ["docs/00-borja-har.md", "docs/05-beslutslogg.md"],
       "depends_on": ["h-001", "h-003", "h-006"]
+    },
+    {
+      "id": "h-008",
+      "slice": "6b",
+      "title": "Taskkuvert — immutable uppdrag per attempt",
+      "summary": "Controllern genererar ett immutable kuvert per attempt ur specen: run_id, task_id, base_sha, spec_sha256, title, description, allowed_write, denied_write, candidate_requirements (v4.1 §12). Kuvertet är workerns hela uppdrag — det bär outcome, aldrig verifierarens implementation, och workern kontrollerar aldrig certifieringssteget. Registrerad som öppet ärende 2026-08-08: skiva 6:s launch-halva byggdes inte med h-006.",
+      "allowed_write": ["controller/envelope/**", "tests/controller/envelope/**", "docs/05-beslutslogg.md"],
+      "exit_test": "verify/bin/h-008-exit",
+      "exit_criterion": "Kuvert för känd task bär alla nio fälten med värden ur specen. spec_sha256 är filens FAKTISKA sha256, inte ett påstått värde. allowed_write och denied_write kommer ur task + defaults, aldrig ur en egen lista i koden. Okänd task-id ger failure med orsak, aldrig tomt kuvert. Två anrop med samma run_id och task_id ger byte-identiskt kuvert. Kuvertet innehåller inget om verifierarens implementation (verifier-id, exit_test-sökväg eller registerinnehåll).",
+      "docs_impact": ["docs/05-beslutslogg.md"],
+      "depends_on": ["h-001", "h-006", "h-007"]
     }
   ],
 
