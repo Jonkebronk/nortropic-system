@@ -1,0 +1,140 @@
+#!/usr/bin/env python3.12
+"""controller/utforare/cli — skiva 10, utföraren (fullbordat försök).
+
+    kor <workspace> <kuvertfil> <timeout-s> -- <kommando...>
+
+Startar det konfigurerade kommandot via controller/launch/cli (h-009) med
+kuvertet och timeouten, och gör därefter git-arbetet SJÄLV: stagar allt som
+ändrats i workspacet, committar med fast identitet och skriver
+{"status","candidate_sha","files"} på stdout, h-006-parsbart.
+
+DOMEN VILAR PÅ GIT. Sessionens text läses ENDAST vid failure, för att bära
+orsaken vidare, och kan aldrig vända ett failure till en kandidat
+(LOOP-ÄGARHAND-29). Kandidat-SHA:t föds här i controllerledet — sessionen
+behöver aldrig commiträtt. Kommandot är konfiguration; komponenten antar
+aldrig vilken binär som körs.
+
+Exitkoder: 0 kandidat · 1 anropsfel (eget eller h-009:s) · 3/4/5 vidarebefordras
+OFÖRÄNDRADE från h-009 (launch_failed/nonzero_exit/timeout — klassen på stdout) ·
+6 failure utan kandidat: inga ändrade filer, eller sessionen committade själv ·
+7 gitfel i workspacet · 8 internt fel (eget eller h-009:s).
+2 används aldrig — verify/bin/_lib.sh binder den till ODÖMBART.
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROT = Path(__file__).resolve().parents[2]
+LAUNCH = ROT / "controller/launch/cli"
+KANDIDAT, ANROP, INGEN_KANDIDAT, GITFEL, INTERNT = 0, 1, 6, 7, 8
+# Fast identitet: -c räcker inte om GIT_AUTHOR_*/GIT_COMMITTER_* står i miljön
+# (env slår config), så git-anropen får miljön rensad på GIT_-prefixet.
+IDENTITET = ("-c", "user.name=nortropic-utforare",
+             "-c", "user.email=utforare@nortropic",
+             "-c", "commit.gpgsign=false")
+GIT_MILJO = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def git(ws, *argv):
+    return subprocess.run(["git", "-C", str(ws), *argv],
+                          capture_output=True, text=True, env=GIT_MILJO)
+
+
+def gitfel(steg, r):
+    print(f"gitfel: {steg} i workspacet — {r.stderr.strip()[:200]}")
+    return GITFEL
+
+
+def main(argv):
+    if not argv or argv[0] != "kor" or "--" not in argv:
+        print("anropsfel: kor <workspace> <kuvertfil> <timeout-s> -- <kommando...>")
+        return ANROP
+    delare = argv.index("--")
+    fore, kommando = argv[1:delare], argv[delare + 1:]
+    if len(fore) != 3 or not kommando:
+        print("anropsfel: kor <workspace> <kuvertfil> <timeout-s> -- <kommando...>")
+        return ANROP
+    ws, kuvert, timeout_s = fore
+
+    # Tomt eller icke-git workspace hade låtit `git -C` falla tillbaka på
+    # anroparens cwd — i drift REPOROTEN. Domen får aldrig ens närma sig den.
+    if not ws or not (Path(ws) / ".git").exists():
+        print(f"anropsfel: workspace är inte ett git-arbetsträd: {ws!r}")
+        return ANROP
+    fore_launch = git(ws, "rev-parse", "HEAD")
+    if fore_launch.returncode != 0:
+        return gitfel("rev-parse HEAD", fore_launch)
+    h0 = fore_launch.stdout.strip()
+
+    # Bytes, inte text: h-009 vidarebefordrar sessionens stdout oförändrad,
+    # och en icke-UTF-8-byte får aldrig krascha domen.
+    r = subprocess.run([str(LAUNCH), "run", ws, kuvert, timeout_s, "--", *kommando],
+                       capture_output=True)
+    if r.returncode != 0:
+        # h-009:s klass vidarebefordras oförändrad med samma exitkod —
+        # timeout och nonzero_exit förblir skilda. Sessionens stdout är
+        # redan kastad av h-009; här uppfinns ingen text den inte gav.
+        sys.stdout.buffer.write(r.stdout)
+        return r.returncode
+
+    # -uall: värdkonfig (status.showUntrackedFiles=no) får inte gömma nya filer.
+    smuts = git(ws, "status", "--porcelain", "-uall")
+    if smuts.returncode != 0:
+        return gitfel("status", smuts)
+    if not smuts.stdout.strip():
+        efter = git(ws, "rev-parse", "HEAD")
+        if efter.returncode != 0:
+            return gitfel("rev-parse HEAD", efter)
+        if efter.stdout.strip() != h0:
+            # Rent träd men flyttad HEAD: orsaken får inte ljuga "inga ändringar".
+            print("ingen kandidat — sessionen committade själv i workspacet; "
+                  "kandidat-SHA:t föds i controllerledet")
+            return INGEN_KANDIDAT
+        # Ägarbeslutet: utsagan kan aldrig vända ett failure till en kandidat.
+        # Orsaken är sessionens egen text ordagrant; saknas den namnges steget.
+        orsak = r.stdout.decode("utf-8", "replace").strip()
+        print(f"inga ändrade filer — {orsak}" if orsak else "inga ändrade filer i workspacet")
+        return INGEN_KANDIDAT
+
+    stega = git(ws, "add", "-A")
+    if stega.returncode != 0:
+        return gitfel("add -A", stega)
+    c = git(ws, *IDENTITET, "commit", "-q", "-m", "kandidat")
+    if c.returncode != 0:
+        return gitfel("commit", c)
+
+    sha_svar = git(ws, "rev-parse", "HEAD")
+    sha = sha_svar.stdout.strip()
+    if sha_svar.returncode != 0 or not sha:
+        return gitfel("rev-parse efter commit", sha_svar)
+    visa = git(ws, "show", "--name-only", "--format=", sha)
+    if visa.returncode != 0:
+        return gitfel("show efter commit", visa)
+    filer = [f for f in visa.stdout.splitlines() if f]
+    print(json.dumps({"status": "candidate", "candidate_sha": sha, "files": sorted(filer)}))
+    return KANDIDAT
+
+
+if __name__ == "__main__":
+    # Kriteriet kräver klassning, inte krasch. Inget stackspår når stderr.
+    try:
+        kod = main(sys.argv[1:])
+    except BrokenPipeError:
+        kod = INTERNT
+    except SystemExit:
+        raise
+    except BaseException as e:
+        try:
+            print(f"internt fel: {type(e).__name__}: {e}")
+            kod = INTERNT
+        except BrokenPipeError:
+            kod = INTERNT
+    try:
+        sys.stdout.flush()
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        kod = INTERNT
+    sys.exit(kod)
