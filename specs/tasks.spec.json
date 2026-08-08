@@ -183,7 +183,7 @@
         "id": "m-002",
         "title": "Avveckling av /usr/local/libexec/nortropic",
         "after": "när det passar",
-        "summary": "Konton, hemkataloger och sudoers-regel borttagna 2026-08-07. Kvar: 122 binärer och tre tomma grupper, arkiverade i ~/Arkiv/nortropic-systeminstallation-2026-08-07.tar.gz. Ofarliga utan konton.",
+        "summary": "Konton, hemkataloger och sudoers-regel borttagna 2026-08-07. Uppdaterat 2026-08-08: /usr/local/libexec/nortropic finns inte längre (ls verifierat i byggsession) — den tidigare uppgiften om 122 kvarvarande binärer är överspelad. Overifierat: de tre tomma grupperna (dscl nekades i sandbox). Arkivet står i ~/Arkiv/nortropic-systeminstallation-2026-08-07.tar.gz.",
         "surface": "utanför repot"
       }
     ]

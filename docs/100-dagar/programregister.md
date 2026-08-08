@@ -1081,6 +1081,8 @@ inte en loop: ingenting väljer nästa task, startar en worker eller binder dela
 Åtgärd kräver eget krav med eget exit-test före kod, enligt beslut 3. Ägarbeslut 2026-08-08: fixas
 inte inom h-006 — eget ärende, prioriteras separat.
 
+**Uppdatering 2026-08-08 (senare samma dag): ärendet stängt.** Launch-halvan byggd som h-008 (kuvert, 13 PASS) och h-009 (processtart, 11 PASS); väljaren h-010 (15 PASS) och huvudloopen h-011 (16 PASS) grindade på main `248afb9` — tolv gröna exit-test. "Ingenting väljer nästa task, startar en worker eller binder delarna samman" gäller inte längre: kedjan är hermetiskt bevisad utan LLM i kedjan. Kvar för drift: smoke-momentet (nästa post) och piloten.
+
 ## Öppet ärende (registrerat ur kontrollplansarbetet 2026-08-08): h-009:s smoke-test och utföraragenten
 `h-009` startar en worker som ett KONFIGURERAT kommando, och dess exit-test kör hermetiska
 testprocesser — aldrig en riktig Claude Code-session. Skälet är mekaniskt: ett exit-test som startar

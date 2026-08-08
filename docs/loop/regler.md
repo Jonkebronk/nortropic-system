@@ -8,7 +8,7 @@ systemets 22 regler och konstitutionens §A/§B gäller oförändrat och står �
 
 1. Inget bygge utan spec-rad i `specs/tasks.spec.json` och exit-test definierat före start.
 2. Allt arbete i repot, på gren `nortropic/loop-<id>`, committat per delsteg.
-3. Komponenter använder planens namn (skiva 1–7, §-referenser). Inga nya kodnamn.
+3. Komponenter använder planens namn (skiva 1–9, där 6b/6c/8/9 tillkom via LOOP-ÄGARHAND-16–27; §-referenser). Inga nya kodnamn.
 4. Vid fel: fixa och kör om samma test. Bygg aldrig en ny klassificerare eller checkpoint.
 5. Ingen sudo. Kontrollplanet körs som användare.
 6. §A-mängden i [byggplan-v3.md](byggplan-v3.md) §3.1 rörs aldrig av en loop-task.
