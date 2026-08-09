@@ -54,6 +54,9 @@ REVIDERAD FÖR SKIVA 14 (h-016). Kedjan går nu genom brytaren och utföraren:
   B11 Öppen brytare ger exit 3 — skilt från både drain och fel.
   B12 Brytaren bokför varje STARTAT försök, även det som lyckades.
   B13 Brytarens anropsfel fäller körningen — och kedjan snurrar aldrig.
+  B14 Brytarens OBOKFÖRDA exit 8 görs aldrig om — den bränner annars kvoten.
+  B15 Avbrottsraden bär klass och fingerprintvärde ordagrant, oavsett textlängd.
+  B16 Stoppraden bär dessutom öppningsorsaken ordagrant.
 
 MÄTT 2026-08-09, sju defekta varianter av `controller/loop/cli` mot båda
 proven, en namngiven defekt var: förbi brytaren med egen räknare · eget event
@@ -61,6 +64,12 @@ per försök · återanvänt workspace mellan försöken · gemensam brytarkatal
 öppen brytare sväljd · config prövad efter leasen · anropsfel behandlat som ett
 vanligt fallet försök. h-016-grinden fällde ALLA sju. Fallfilen fällde sex —
 den sista, anropsfelet, passerade orört, och det hålet är B13 plus `FRIST`.
+
+MÄTT 2026-08-09 av granskaren, två defekter som överlevde alltihop: brytarens
+exit 8 gjordes om trots att kraschskyddets 8 aldrig bokför (75 verkliga
+sessionsstarter på 30 s, ingen retur), och `enrad()`:s klipp tog fingerprintens
+värde ur avbrottsraden så snart sessionstexten var normallång. B14–B16 binder
+båda — de fäller kedjan som den såg ut i `aa84a03`.
 """
 
 import hashlib
@@ -154,6 +163,17 @@ print("andra forsoket lyckades")
 SEG = """
 import time
 time.sleep(600)
+"""
+
+# Skriver en normallång sammanfattning och ändrar INGEN fil. Det ger utförarens
+# kod 6, den enda failureform som bär HELA sessionens text vidare — och därmed
+# en fingerprint som är längre än utsagans klippfönster. Det är också den
+# vanligaste verkliga failureformen och h-011:s eget prosa-fall.
+LANGPRAT = """
+import json, os, sys
+kuv = json.load(sys.stdin)
+open(os.path.join(os.environ["FALL_UT"], "start-" + kuv["task_id"]), "a").write("x\\n")
+print("jag gick igenom uppgiften noggrant och sammanfattar har vad jag kom fram till " * 5)
 """
 
 
@@ -444,6 +464,62 @@ def main() -> int:
         krav(eventrader(c) == 1 and not giltig(c, "e-tva"),
              "B13 drainet fortsatte inte till nästa task")
         krav(lease_agare(c) == "", "B13 leasen är släppt även när körningen faller")
+
+        # B14 — brytarens exit 8 ur KRASCHSKYDDET är inget bokfört försök:
+        # forbrukat ökar aldrig, så ett omförsök närmar sig aldrig taket.
+        # Provokationen gör skrivmålet <brytare_rot>/<task>/tillstand.json.ny
+        # till en KATALOG, så brytarens tillståndsskrivning faller EFTER att
+        # kommandot startats — samma form som en skrivskyddad katalog, men utan
+        # chmod (nekad i sandboxen). MÄTT FÖRE FIXEN: 75 VERKLIGA sessionsstarter
+        # på 30 s, forbrukat 0, och körningen returnerade aldrig. I drift är
+        # varje start en modellsession.
+        c = rigga(kat, "b14", [task("i-ett", "tests/kedjefix/**"),
+                               task("i-tva", "tests/kedjefix/**")], LANGPRAT,
+                  budget=2, troskel=9)
+        (Path(falt(c, "brytare_rot")) / "i-ett" / "tillstand.json.ny").mkdir(parents=True)
+        r = kor(c)
+        krav(r.returncode == 1,
+             "B14 brytarens OBOKFÖRDA exit 8 fäller körningen — den snurrar aldrig")
+        krav(starter(ut, "i-ett") == 1,
+             "B14 exakt EN sessionsstart: ett obokfört utfall görs aldrig om")
+        krav(brytfalt(c, "i-ett", "forbrukat") is None,
+             "B14 brytaren hann aldrig bokföra — därför fanns inget att göra om")
+        krav(eventrader(c) == 1 and not giltig(c, "i-tva"),
+             "B14 drainet fortsatte inte till nästa task")
+
+        # B15 — avbrottsraden bär systerns klass OCH fingerprintens VÄRDE
+        # ordagrant, även när sessionens text är flera hundra tecken. MÄTT FÖRE
+        # FIXEN: raden blev 334 tecken och nådde aldrig fingerprint-raden, vars
+        # nyckel var 414 tecken — ett klipp i MITTEN hade alltså inte räckt
+        # heller; svansen måste bäras hel.
+        c = rigga(kat, "b15", [task("prat-en", "tests/kedjefix/**")], LANGPRAT,
+                  budget=1, troskel=9)
+        r = kor(c)
+        rad = next((x for x in r.stdout.splitlines() if "avbrutet i " in x), "")
+        fps = brytfalt(c, "prat-en", "fingerprints") or {}
+        fp = list(fps)[0] if len(fps) == 1 else ""
+        krav(len(fp) > 300,
+             "B15 fingerprinten är längre än utsagans fönster — annars mäter fallet inget")
+        krav(bool(fp) and f"fingerprint: {fp}" in rad,
+             "B15 avbrottsraden bär fingerprintens VÄRDE ordagrant trots lång sessionstext")
+        # Klassen mäts UTANFÖR fingerprinten, som bär samma ord inuti sig: en
+        # grep på hela raden hade mättats av fingerprintsträngen.
+        krav("inga ändrade filer" in rad.replace(f"fingerprint: {fp}", ""),
+             "B15 och systerns klass, mätt i den del av raden som inte är fingerprinten")
+
+        # B16 — vid STOPP bär raden dessutom orsaken till att brytaren öppnade.
+        # Marginalen är tunnare där: efter klassraden och fingerprinten ligger
+        # öppningsorsaken sist, och det är den en cron behöver för att veta
+        # varför körningen stannade.
+        c = rigga(kat, "b16", [task("prat-tva", "tests/kedjefix/**")], LANGPRAT,
+                  budget=5, troskel=2)
+        r = kor(c)
+        rader = [x for x in r.stdout.splitlines() if "avbrutet i " in x]
+        orsak = brytfalt(c, "prat-tva", "orsak") or ""
+        krav(r.returncode == 3 and len(orsak) > 300,
+             "B16 stoppet skedde och orsaken är längre än fönstret — annars mäter fallet inget")
+        krav(bool(rader) and f"brytare öppen: {orsak}" in rader[-1],
+             "B16 stoppraden bär öppningsorsaken ordagrant, inte avklippt")
 
     print()
     print(f"{len(fel)} FEL" if fel else "alla fall håller")

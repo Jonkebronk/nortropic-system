@@ -100,7 +100,23 @@ RENT_STOPP = 3
 # Brytarens exitkoder, skiva 11:s kontrakt. Läses här, dupliceras inte:
 # klassningen görs av brytaren, kedjan väljer bara väg på utfallet.
 BR_KANDIDAT, BR_ANROPSFEL, BR_OPPEN, BR_BUDGET_SLUT = 0, 1, 9, 10
-BR_FAILURE = range(3, 9)
+# 3–7, INTE 3–8. Ett omförsök får bara göras på ett utfall brytaren har
+# BOKFÖRT, annars närmar sig taket aldrig och varvet snurrar utan slut.
+# Brytarens 8 har tre ursprung som bokför OLIKA: utföraren gav en kod utanför
+# kontraktet (bokför), och brytarens eget kraschskydd (bokför inte — skrivningen
+# av tillståndet hann aldrig ske). Utsidan kan inte skilja dem åt, så koden
+# behandlas som obokförd. Mätt 2026-08-09 med 3–8: en tillståndsskrivning som
+# faller EFTER att kommandot startats gav 75 VERKLIGA sessionsstarter på 30 s,
+# forbrukat 0, och körningen returnerade aldrig — i drift är varje start en
+# modellsession. Samma premiss som anropsfelet nedan, nu samma behandling.
+# Att kraschskyddet delar exitkod med ett bokfört utfall är roten, och den bor
+# i controller/brytare/** — utanför denna tasks skrivyta. Registrerad som öppen
+# post mot h-013; här snävas bara omförsöket in.
+BR_FAILURE = range(3, 8)
+# Brytarens kontrakt skriver som mest TVÅ egna rader efter systerns text —
+# `fingerprint: <fp>` respektive `kvot_slut: …`, och vid öppning `brytare
+# öppen: <orsak>`. De hålls utanför klippningen; se enrad().
+BR_SVANS = 2
 
 TEXTFALT = ("spec", "attest_dir", "state_dir", "lease_dir", "lease_resurs",
             "workspace_rot", "base_sha", "verifier_id", "run_id", "brytare_rot")
@@ -129,9 +145,27 @@ def kor(argv: list, text: bool = True) -> subprocess.CompletedProcess:
         raise Avbryt(f"{argv[0]} kunde inte startas — {e}") from e
 
 
-def enrad(text: str, tecken: int = 300) -> str:
-    """Systerns utfall som EN rad, ordagrant så långt den får plats."""
-    return " · ".join(r.strip() for r in text.strip().splitlines() if r.strip())[:tecken]
+def enrad(text: str, tecken: int = 300, svansrader: int = 0) -> str:
+    """Systerns utfall som EN rad, ordagrant så långt den får plats.
+
+    `svansrader` håller de N SISTA raderna HELT utanför klippningen. Systrarna
+    lägger sin fria text först — utförarens kod 6 bär hela sessionens stdout —
+    och sitt strukturerade efterled sist: brytarens `fingerprint: <fp>`, och
+    vid öppning dessutom `brytare öppen: <orsak>`. Kriteriet kräver att det
+    efterledet bärs ORDAGRANT, och ett klipp i slutet tar just det.
+
+    Mätt 2026-08-09 mot en session som skriver en normal sammanfattning och
+    inte ändrar någon fil: avbrottsraden blev 334 tecken och nådde aldrig
+    fingerprint-raden, vars nyckel var 414 tecken — längre än hela fönstret.
+    Ett klipp i mitten hade alltså inte heller räckt; svansen måste bäras hel.
+    Klassen står först i den fria texten och överlever därför klippningen.
+    """
+    rader = [r.strip() for r in text.strip().splitlines() if r.strip()]
+    if not rader:
+        return ""
+    n = min(svansrader, len(rader))
+    huvud, svans = rader[:len(rader) - n], rader[len(rader) - n:]
+    return " · ".join(([" · ".join(huvud)[:tecken]] if huvud else []) + svans)
 
 
 def sista(text: str) -> str:
@@ -178,9 +212,9 @@ def las_config(fil: Path) -> dict:
     return k
 
 
-def utsaga(nr: int, task: str, steg: str, text: str) -> None:
+def utsaga(nr: int, task: str, steg: str, text: str, svansrader: int = 0) -> None:
     """Varvets utsaga vid avbrott. Systerns klass bärs vidare ordagrant."""
-    print(f"varv {nr} {task}: avbrutet i {steg} — {enrad(text)}")
+    print(f"varv {nr} {task}: avbrutet i {steg} — {enrad(text, svansrader=svansrader)}")
     return None
 
 
@@ -223,19 +257,21 @@ def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int) -> tupl
             # Brytaren startade inget kommando och förbrukade ingen budget.
             # Ett omförsök hade snurrat för evigt; ett tyst drain hade dolt
             # att försöket aldrig ens gjordes.
-            raise Avbryt(f"brytare: {enrad(ut)}")
+            raise Avbryt(f"brytare: {enrad(ut, svansrader=BR_SVANS)}")
         if kod == BR_BUDGET_SLUT:
-            print(f"varv {nr} {task}: {enrad(ut)}")
+            print(f"varv {nr} {task}: {enrad(ut, svansrader=BR_SVANS)}")
             return VARV_SLUT, None
         if kod == BR_OPPEN:
-            utsaga(nr, task, "forsok", ut)
+            utsaga(nr, task, "forsok", ut, svansrader=BR_SVANS)
             return STOPP, None
         if kod in BR_FAILURE:
-            utsaga(nr, task, "forsok", ut)
+            utsaga(nr, task, "forsok", ut, svansrader=BR_SVANS)
             return FALLET, None
         if kod != BR_KANDIDAT:
-            raise Avbryt(f"brytare: exitkod {kod} utanför kontraktet 0/1/3–8/9/10 "
-                         f"— {enrad(ut)}")
+            # Hit hamnar också brytarens 8: obokförd eller obokförbar, och
+            # därmed ingenting att göra om. Se BR_FAILURE ovan.
+            raise Avbryt(f"brytare: exitkod {kod} bär inget bokfört försök att göra om "
+                         f"— {enrad(ut, svansrader=BR_SVANS)}")
 
         rapportfil = tmpkat / f"{attempt}.rapport"
         rapportfil.write_bytes(rapport)
@@ -280,9 +316,12 @@ def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int) -> tupl
 def varv(k: dict, task: str, base: str, tmpkat: Path, nr: int) -> tuple[str, str | None]:
     """Ett varv = ETT claim och ett eller flera försök.
 
-    Loopen tar slut av sig själv: brytaren räknar varje startat försök och
-    svarar BUDGET_SLUT när taket är nått. Anropsfel och öppen brytare lämnar
-    den på egen hand, och kedjefel före brytaren gör aldrig om något.
+    Loopen tar slut därför att den bara gör om BOKFÖRDA utfall: brytarens
+    3–7, som alla ökar forbrukat, så taket nås. Varje annat utfall lämnar
+    loopen direkt — budget slut, öppen brytare, anropsfel, obokförd 8, och
+    kedjefel före brytaren. Formuleringen *brytaren räknar varje startat
+    försök* höll inte som terminationsargument: mätt 2026-08-09 startade en
+    obokförd 8 sessionen 75 gånger på 30 s utan att taket rörde sig.
     """
     f = 0
     while True:
