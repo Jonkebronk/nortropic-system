@@ -1,0 +1,820 @@
+#!/usr/bin/env bash
+# h-016-exit — skiva 14 (kedjan kopplas in: varvet går genom brytaren och utföraren)
+#
+# KONTRAKT som provet binder — controller/loop/cli run <config.json>
+#   Configen bär h-011:s elva fält PLUS tre, och prövas i sin HELHET före leasen:
+#     brytare_rot   icke-tom sträng — roten för brytarens tillståndskataloger
+#     budget        HELTAL          — attempt-budget PER TASK
+#     troskel       HELTAL          — fingerprint-tröskel PER TASK
+#   Brytarkatalogen för en task är exakt <brytare_rot>/<task-id>. Fingerprinten
+#   bär ingen task-identitet (h-013), så katalogsökvägen är det ENDA som gör
+#   räkningen per task — därför binds namnformen här, som workspace_rot gör.
+#   Varvet: claim → [försök: workspace på OFÖRÄNDRAD base → kuvert →
+#     controller/brytare/cli kor <brytare_rot>/<task> <task> <budget> <troskel>
+#         <ws> <kuvertfil> <timeout_s> -- <worker_cmd...>
+#     → h-006 parse → h-007 policy → h-002 verifierare → h-003 attest]
+#   Brytarens koder i kedjan: 0 kandidat (går vidare nedströms) · 1 anropsfel →
+#   HELA körningen exit 1 · 3–8 failure → nytt försök inuti claimet · 9 öppen →
+#   drainet avslutas FÖRE nästa claim med exit 3 · 10 budget slut → nästa task.
+#   Exit 0 = drain slutförd · 1 = fel · 3 = rent stopp. 2 används aldrig.
+#
+# K-KARTA — vilken mening i h-016:s exit_criterion varje kontroll svarar mot.
+#   K1  "…en konfigurerad session som ENDAST redigerar filer … attesterar kedjan
+#        ändå, och den attesterade kandidatens SHA finns i git … har sessionens
+#        fil i sitt träd" (talande session)
+#   K2  samma mening, ledet "i ett fall aldrig skriver en rad på stdout"
+#   K3  samma mening, ledet "bär författaren nortropic-utforare"
+#   K4  "En session som committar SJÄLV ger ingen attestation, och dess commit
+#        återfinns i ingen attestationsbutik."
+#   K5  "Omförsöket sker inuti claimet: … attesteras i SAMMA körning, startas
+#        exakt två gånger…"
+#   K6  samma mening, ledet "har exakt ETT claimed-event"
+#   K7  samma mening, ledet "det attesterade trädet bär andra försökets fil men
+#        inte det förstas" + "Antalet starter mäts utanför varje workspace — en
+#        räknare i arbetsträdet hade stagats in i kandidaten av utföraren"
+#   K8  "Kedjande base överlever omförsöken"
+#   K9  "Budgeten är per task: … startas den fallande exakt budget många gånger,
+#        förblir claimed utan attestation, och den andra attesteras ändå."
+#   K10 "Avslag NEDSTRÖMS om rapporten kostar försök på samma sätt." — mätt i
+#        BÅDA nedströmsleden med ÄKTA verdikt, och på tre storheter: sessions-
+#        starter, systerns egen bokföring (h-007:s evidence, brytarens
+#        forbrukat) och utebliven attestation. h-002-ledet provoceras INTE med
+#        ett okänt verifier-id — det är ett riggfel som avvisas innan någon
+#        process körs, och en kedja som anropade `verify check` i stället för
+#        `verify run <id> <ws>` hade grönat utan att någonsin ha kört en
+#        verifierare mot ett kandidatträd. Fall W bygger i stället ett VERKLIGT
+#        verdikt: en agentfil utan EXTERN DATA-blocket passerar h-007 (fixtur-
+#        specen har ingen denied_write) och fälls av check-invariants INV-004.
+#        Att försöket KOSTAR mäts på brytarens forbrukat, inte bara på
+#        räknaren: en kedja med egen räknare som går förbi brytaren till
+#        utföraren har rätt antal starter men forbrukat=1.
+#        Parse-ledet kan inte provoceras med en fungerande utförare: rapporten
+#        föds i controllerledet och är alltid välformad.
+#   K11 "Fingerprintar räknas per task: samma fel i två OLIKA tasks öppnar
+#        aldrig något stopp…"
+#   K12 "…medan samma fel i SAMMA task når tröskeln och avslutar drainet FÖRE
+#        nästa claim med exit 3 — den orörda tasken har då inget event, ingen
+#        rad i räknaren och ingen attestation…"
+#   K13 samma mening, ledet "leasen är släppt och inga worktrees ligger kvar" —
+#        mätt mot HELA worktree-listan som den såg ut FÖRE körningen, aldrig mot
+#        en sökvägsmatchning på provets temp-katalog: en implementation som
+#        tappar rot-argumentet till h-005 hamnar i komponentens inbyggda
+#        <repo>/../worktrees, och en matchning på $WORK är blind för den.
+#   K14 "Öppningen mäts på systerns eget tillstånd över processgränsen och med
+#        budget STRIKT högre än tröskeln…"
+#   K15 "Stoppet kostar ingenting: en ny körning direkt efteråt attesterar den
+#        orörda tasken och lägger inga event på den fallna."
+#   K16 "Kvotstopp stannar körningen redan vid första felet med forbrukat noll."
+#   K17 "Failure attesterar aldrig och sväljs aldrig: timeout mäts på effekt…"
+#        EFFEKT = h-012:s K12-form: kanarien TICKAR, provet mäter radantal,
+#        sover och mäter IGEN och kräver att den slutat växa. En engångskanarie
+#        som läses innan den ändå hade skrivits mäter ingenting — den passerar
+#        även om timeouten inte dödar något. Tickade kanarien aldrig är
+#        mätningen ODÖMBAR, aldrig tyst grön.
+#   K18 samma mening, "…avbrottsraden namnger steget och bär systerns klass och
+#        fingerprint-rad ordagrant." Tre storheter, var för sig: STEGORDET
+#        (icke-tomt, ett ord, varken taskens id eller klassens namn — annars
+#        namnger raden inte steget utan upprepar data som redan står där) ·
+#        KLASSEN mätt i den del av raden som ligger FÖRE "fingerprint: ", ty
+#        fingerprintsträngen för timeoutfallet innehåller själv ordet timeout
+#        och hade mättat en naiv grep · fingerprintens VÄRDE, jämfört med den
+#        nyckel brytarens egen status bär. Etiketten ensam är ingen mätning:
+#        en kedja som kortar systerns utfall mitt i fingerprinten grönar då.
+#   K19 "Brytarens anropsfel fäller hela körningen med exit 1 i stället för ett
+#        tyst drain." Provokationen är en KATALOGPLATS SOM ÄR EN FIL, vilket
+#        bara `kor` kan se: den faller på mkdir med "File exists", medan
+#        `status` mot samma sökväg svarar exit 0 med färskt tillstånd. En kedja
+#        som lägger ett status-förled framför kor och behandlar kors exit 1 som
+#        ett vanligt fallet försök fälls därför här — förledet ser ingenting,
+#        och anropsfelet förbrukar ingen budget, så omförsöket snurrar tills
+#        fristen fäller körningen. Kontrollen bär dessutom ett POSITIVT ankare:
+#        samma config UTAN provokationen måste ge exit 0 och två attestationer.
+#        Fyra frånvaromätningar utan positivt ankare kan uppfyllas av en kedja
+#        som alltid faller.
+#   K20 "Config prövas i sin helhet före leasen: saknat brytare_rot …" (saknat)
+#   K21 samma mening, "…icke-heltaliga budget…"
+#   K22 samma mening, "…och tröskel ger exit 1 med noll rader i eventloggen,
+#        ingen lease-ägare och ingen brytarkatalog på disk."
+#   K23 "…och reporotens HEAD, arbetsträd och refs är oförändrade."
+#   K24 husets svep: exitkod 2 är ODÖMBART (_lib.sh) och får aldrig vara en dom.
+#
+# GRINDENS EGNA TAL, och varför de är just dessa (talen blir en del av vad
+# grinden mäter — ett illa valt tak maskerar det som ska fällas):
+#   A budget 1 / tröskel 9 — ett försök per task, och tröskel > budget så att
+#     självcommittens failure aldrig kan bli ett stopp i stället för ett varv.
+#   R budget 3 / tröskel 9 — rum för två försök; tröskeln får aldrig hinna före.
+#   B budget 2 / tröskel 9 — budget 2 gör "exakt budget många starter" skilt
+#     från 1, alltså mätbart; tröskeln utesluts som förklaring till stoppet.
+#   P budget 1 / tröskel 2 — ett försök per task. En GEMENSAM katalog hade
+#     antingen öppnat på den andra taskens fel (tröskel 2) eller vägrat den ett
+#     försök alls (delad budget 1); båda utfallen fälls av K11.
+#   S budget 5 / tröskel 2 — tröskeln nås på andra försöket och budgeten är
+#     STRIKT högre, så forbrukat 2 < 5 skiljer den öppna brytaren från ett
+#     budgetstopp. Brytaren prövar budget FÖRE öppen: ett snålt tak hade gjort
+#     katalogen till "10 budget slut" för alltid och maskerat öppningen.
+#   Q budget 5 / tröskel 9 — kvotstoppet ska ske vid FÖRSTA felet; höga tal gör
+#     både budget- och tröskelstopp omöjliga som alternativförklaring.
+#   T budget 1 / tröskel 9, timeout 2 s mot 5 s sömn — exakt en start.
+#   W budget 2 / tröskel 9, REGISTRERAD verifierare och skrivyta agents/** —
+#     nedströmsavslaget är h-002:s äkta verdikt, inte ett riggfel; samma budget
+#     som B så talen är jämförbara.
+#   E budget 5 / tröskel 9 — anropsfelet ska fälla körningen, inte ett tak.
+#
+# FIXTURERNAS KANALFORM är den MÄTTA (smoke 2026-08-08): allt på stdout, TOM
+# stderr, och h-009 KASTAR sessionens stdout vid nonzero. Undantaget är q-ett,
+# som skriver kvotmarkören på STDERR — det är den enda kanal som ÖVERLEVER
+# h-009 och alltså den enda kvot.monster kan matcha (öppen post ur
+# LOOP-ÄGARHAND-35: landar den verkliga kvotsignalen på stdout är mekanismen
+# strukturellt död, och den frågan hör till h-009-ledet, inte hit).
+#
+# RÄKNARE OCH KANARIER LIGGER I $UT, ALDRIG I ETT WORKSPACE. Utföraren gör
+# git add -A där, så en räknare i arbetsträdet hade stagats in i kandidaten och
+# gjort en stoppmätning till en kandidat. K7 mäter att så inte skett.
+#
+# EFFEKTER MÄTS MED GIT, ATTESTBUTIKEN, STATE-LOGGEN, POLICYNS EVIDENCE OCH
+# BRYTARENS EGET status — aldrig ur kedjans utsaga. Undantaget är K18, vars
+# hela sak ÄR utsagan.
+#
+# VARJE KEDJEKÖRNING HAR EN FRIST (kor_kedjan). En implementation som snurrar —
+# t.ex. en som gör om ett anropsfel som per konstruktion aldrig förbrukar
+# budget — ska ge ett högljutt fall, aldrig en hängd grind. Fristen ger kod 124,
+# som ingen kontroll väntar sig.
+. "$(dirname "$0")/_lib.sh"
+CLI="controller/loop/cli"
+ATT="controller/attest/cli"
+ST="controller/state/cli"
+LE="controller/lease/cli"
+BR="controller/brytare/cli"
+WSP="controller/workspace/cli"
+EV="controller/policy/evidence"
+krav_komponent "$CLI"
+for dep in controller/taskval/cli controller/attest/cli controller/state/cli \
+           controller/lease/cli controller/workspace/cli controller/worker/cli \
+           controller/policy/cli controller/envelope/cli controller/launch/cli \
+           controller/verify/cli controller/utforare/cli controller/brytare/cli; do
+  if [ ! -x "$dep" ]; then
+    echo "SKIP  harness — $dep saknas eller är inte körbar (h-016:s kedja), testet är odömbart"
+    echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+  fi
+done
+
+WORK="$(temp_kat)" || { echo "FAIL  harness — temp-katalog kunde inte skapas"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+WORK_KANON="$(cd "$WORK" && pwd -P)"
+UT="$WORK/ut"; mkdir -p "$UT"
+export H016_UT="$UT"
+# ORDNINGEN ÄR AVSIKTLIG: destroy FÖRST så git får städa sin egen registrering,
+# rm -rf sedan. Omvänd ordning lämnar föräldralösa poster i .git/worktrees som
+# fäller NÄSTA körnings create. LÄSER DISKEN, aldrig en variabel.
+# LÄSER HELA worktree-listan, aldrig en sökvägsmatchning: ett workspace som
+# hamnat i komponentens inbyggda rot ligger utanför $WORK och städas annars
+# aldrig — och rapporteras aldrig heller.
+wt_lista() { git worktree list --porcelain | sed -n 's/^worktree //p' | LC_ALL=C sort; }
+# BEGRÄNSAD TILL KEDJANS TVÅ MÖJLIGA PLATSER, aldrig "allt nytt": en främmande
+# worktree — eller husets andra grind körd samtidigt — hade annars fällt en
+# korrekt kedja för något den aldrig gjort (mätt 2026-08-09: två levererade
+# grindar i samma utcheckning fällde varandra). Komponentens inbyggda rot är med
+# eftersom ett tappat rot-argument leder dit, och det är just det S14 fångar.
+WSROT_INBYGGD="$(cd "$(dirname "$(git rev-parse --show-toplevel)")" && pwd -P)/worktrees"
+wt_nya() {
+  wt_lista > "$WORK/wt-nu.txt"
+  comm -13 "$WORK/wt-fore.txt" "$WORK/wt-nu.txt" | while IFS= read -r w; do
+    case "$w" in
+      "$WORK"/*|"$WORK_KANON"/*|"$WSROT_INBYGGD"/*) echo "$w" ;;
+    esac
+  done
+}
+stada() {
+  if [ -f "$WORK/wt-fore.txt" ]; then
+    wt_nya 2>/dev/null | while IFS= read -r w; do
+      [ -n "$w" ] && "$WSP" "$(dirname "$w")" destroy "$(basename "$w")" >/dev/null 2>&1
+    done
+  fi
+  git worktree prune >/dev/null 2>&1
+  rm -rf "$WORK"
+}
+trap stada EXIT
+
+PY3="$(command -v python3)"
+[ -n "$PY3" ] || { echo "FAIL  harness — python3 saknas"; echo; echo "$pass PASS, 1 FAIL"; exit 1; }
+BAS="$(git rev-parse HEAD)"
+readonly BAS
+ROT_HEAD="$BAS"
+ROT_STATUS="$(git status --porcelain)"
+ROT_REFS="$(git for-each-ref --format='%(refname) %(objectname)' | sort)"
+wt_lista > "$WORK/wt-fore.txt"
+KODER=""
+
+# Kedjekörning med FRIST. Sätter KOD i anroparen — kommandosubstitution vore ett
+# subskal och tappat både kod och räknare. Kod 124 = fristen löpte ut.
+kor_kedjan() {  # kor_kedjan <config> <utfil> <felfil> [frist-s]
+  local frist="${4:-60}" pid i=0
+  "$CLI" run "$1" >"$2" 2>"$3" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -gt "$((frist * 10))" ]; then
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      KOD=124
+      return 0
+    fi
+    sleep 0.1
+  done
+  wait "$pid"; KOD=$?
+}
+
+# --- Fixtursessionen. ENDAST redigering; git rörs bara av c-egen-commit, som
+# är motfallet. Beteendet väljs på task_id ur kuvertet, och på hur många gånger
+# tasken redan startats — räknaren ligger i $UT, utanför varje workspace.
+cat > "$WORK/session.py" <<'SESSION'
+import json, os, subprocess, sys, time
+
+kuv = json.load(sys.stdin)
+task = kuv["task_id"]
+UT = os.environ["H016_UT"]
+
+rakn = os.path.join(UT, "starter-" + task)
+with open(rakn, "a") as f:
+    f.write("start\n")
+with open(rakn) as f:
+    n = sum(1 for r in f if r.strip())
+
+def skriv(namn, text):
+    os.makedirs("tests/kedjefix16", exist_ok=True)
+    with open("tests/kedjefix16/" + namn, "w") as f:
+        f.write(text)
+
+if task == "a-talar":
+    skriv(task + ".txt", "redigerad av sessionen\ncwd=%s\nspec=%s\n"
+          % (os.path.realpath(os.getcwd()), kuv["spec_sha256"]))
+    print("jag redigerade filen och rörde aldrig git")
+elif task == "b-tyst":
+    # Skriver INTE en rad på stdout och inget på stderr.
+    skriv(task + ".txt", "tyst redigering\n")
+elif task == "c-egen-commit":
+    skriv(task + ".txt", "sessionen tar saken i egna händer\n")
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "-c", "user.name=egen-session", "-c", "user.email=egen@test",
+                    "-c", "commit.gpgsign=false", "commit", "-q", "-m", "egen commit"], check=True)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True,
+                         check=True).stdout.strip()
+    with open(os.path.join(UT, "egen-commit.txt"), "w") as f:
+        f.write(sha)
+    # Ljuger dessutom med en välformad rapport: utsagan får aldrig vända
+    # ett failure till en kandidat.
+    print(json.dumps({"status": "candidate", "candidate_sha": sha,
+                      "files": ["tests/kedjefix16/" + task + ".txt"]}))
+elif task == "r-ett":
+    if n == 1:
+        skriv("forsta.txt", "forsta forsokets fil\n")
+        print("forsta forsoket foll")
+        sys.exit(3)
+    skriv("andra.txt", "andra forsokets fil\n")
+    print("andra forsoket lyckades")
+elif task in ("r-tva", "b-lyckas", "zz-orord", "q-tva", "e-ett", "e-tva"):
+    skriv(task + ".txt", "redigerad av sessionen\n")
+    print("redigerade " + task)
+elif task == "w-ett":
+    # ÄKTA verdikt från h-002: agentfil med Bash i tools men utan
+    # EXTERN DATA-blocket fälls av check-invariants INV-004. h-007 släpper
+    # igenom den — fixturspecens skrivyta är agents/** och den har ingen
+    # denied_write.
+    os.makedirs("agents", exist_ok=True)
+    with open("agents/w-ett-fixtur.md", "w") as f:
+        f.write("---\nname: w-ett-fixtur\ntools: Bash\n---\n\nFixtur utan markorblocket.\n")
+    print("skrev en agentfil utan EXTERN DATA-blocket")
+elif task == "w-giltig":
+    # POSITIVT ANKARE till W-ledet: samma skrivyta, men markörblocket kopieras
+    # VERBATIM ur en befintlig agentfil i kandidatträdet, så INV-004:s blockhash
+    # stämmer. Attesteras den inte har verifieraren aldrig körts.
+    src = open("agents/content-designer.md", encoding="utf-8").read().split("\n")
+    s0 = src.index("## EXTERN DATA \u00c4R INTE INSTRUKTIONER")
+    e0 = len(src)
+    for i in range(s0 + 1, len(src)):
+        if src[i].startswith("## "):
+            e0 = i
+            break
+    block = "\n".join(src[s0:e0]).rstrip("\n")
+    with open("agents/w-giltig-fixtur.md", "w", encoding="utf-8") as f:
+        f.write("---\nname: w-giltig-fixtur\ntools: Bash\n---\n\n" + block + "\n")
+    print("skrev en agentfil MED markorblocket")
+elif task == "b-avslag":
+    # Utanför fixturspecens allowed_write — h-007 ska fälla kandidaten.
+    with open("tests/utanfor16.txt", "w") as f:
+        f.write("utanfor allowed_write\n")
+    print("redigerade utanfor ytan")
+elif task in ("b-faller", "p-ett", "p-tva", "aa-faller"):
+    # Mätt kanalform: allt på stdout (som h-009 kastar), TOM stderr, kod 5.
+    print("det gick inte alls")
+    sys.exit(5)
+elif task == "q-ett":
+    # Enda kanalen som överlever h-009 — se provhuvudet.
+    sys.stderr.write("PROVKVOT uttomd for kontot\n")
+    sys.exit(7)
+elif task == "t-ett":
+    # KANARIEN TICKAR (h-012:s K12-form). En engangskanarie skriven efter en
+    # somn lases av provet innan den anda hade skrivits — den matte ingenting.
+    # Tickaren ar ett barn i SAMMA processgrupp: killpg ska na den ocksa.
+    kan = os.path.join(UT, "kanarie-t.txt")
+    open(kan, "a").close()
+    subprocess.Popen(["/bin/sh", "-c",
+                      'i=0; while [ $i -lt 600 ]; do echo tick >> "$1"; sleep 0.2; '
+                      'i=$((i+1)); done', "sh", kan])
+    time.sleep(120)
+    skriv(task + ".txt", "seg redigering\n")
+    print("hann anda fram")
+else:
+    sys.stderr.write("okand task i fixturen: " + task + "\n")
+    sys.exit(9)
+SESSION
+
+# --- Hjälpare. Alla mäter effekt, aldrig utsaga.
+BL_YTA="tests/kedjefix16/**"
+backlog() {  # backlog <fil> <task:beroende> ...   skrivytan kommer ur $BL_YTA
+  local fil="$1"; shift
+  local forst=1 t d
+  {
+    echo '{ "spec_version": "fixtur",'
+    echo '  "defaults": { "max_changed_files": 8, "max_added_lines": 600 },'
+    echo '  "tasks": ['
+    for post in "$@"; do
+      t="${post%%:*}"; d="${post#*:}"
+      [ "$d" = "$t" ] && d=""
+      [ "$forst" = 1 ] || echo ','
+      forst=0
+      printf '    { "id": "%s", "slice": 0, "title": "%s", "summary": "fixtur %s",\n' "$t" "$t" "$t"
+      printf '      "allowed_write": ["%s"], "exit_test": "verify/bin/ingen",\n' "$BL_YTA"
+      printf '      "exit_criterion": "-", "docs_impact": [], "depends_on": [%s] }' \
+             "$([ -n "$d" ] && printf '"%s"' "$d")"
+    done
+    echo; echo '  ]'; echo '}'
+  } > "$fil"
+}
+skriv_config() {  # skriv_config <fil> — läser CFG_* ur miljön
+cat > "$1" <<KONF
+{ "spec": "$CFG_SPEC", "attest_dir": "$CFG_AT", "state_dir": "$CFG_ST",
+  "lease_dir": "$CFG_LE", "lease_resurs": "kedjan", "workspace_rot": "$CFG_WS",
+  "base_sha": "$BAS", "worker_cmd": ["$PY3", "$WORK/session.py"],
+  "timeout_s": $CFG_TO, "verifier_id": "$CFG_VER", "run_id": "$CFG_RUN",
+  "brytare_rot": "$CFG_BR", "budget": $CFG_BUDGET, "troskel": $CFG_TROSKEL }
+KONF
+}
+rigga() {  # rigga <namn> — sätter CFG_* till husets standardvärden för fallet
+  CFG_AT="$WORK/$1-att"; CFG_ST="$WORK/$1-st"; CFG_LE="$WORK/$1-le"
+  CFG_WS="$WORK/$1-ws";  CFG_BR="$WORK/$1-br"; CFG_RUN="k16$1"
+  CFG_TO=60; CFG_VER="check-invariants"
+  mkdir -p "$CFG_WS"
+  "$ST" init "$CFG_ST" >/dev/null 2>&1
+}
+sha_ur_attest() { "$ATT" "$1" read "$2" --require-valid 2>/dev/null \
+  | "$PY3" -c 'import json,sys; print(json.load(sys.stdin)["candidate_sha"])' 2>/dev/null; }
+attesterad() { "$ATT" "$1" read "$2" --require-valid >/dev/null 2>&1; }
+har_status() { "$ST" rebuild "$1" 2>/dev/null | "$PY3" -c 'import json,sys
+d = {r["task"]: r["status"] for r in json.load(sys.stdin)}
+sys.exit(0 if d.get(sys.argv[1]) == sys.argv[2] else 1)' "$2" "$3"; }
+rader() { wc -l < "$1/events.jsonl" 2>/dev/null | tr -d ' '; }
+event_antal() { "$PY3" -c 'import json,sys
+n = 0
+for r in open(sys.argv[1] + "/events.jsonl", encoding="utf-8"):
+    r = r.strip()
+    if not r: continue
+    try: d = json.loads(r)
+    except Exception: continue
+    if d.get("task") == sys.argv[2]: n += 1
+print(n)' "$1" "$2" 2>/dev/null || echo PYFEL; }
+starter() { [ -f "$UT/starter-$1" ] && wc -l < "$UT/starter-$1" | tr -d ' ' || echo 0; }
+ev_antal() { ls "$EV" 2>/dev/null | grep -c "^$1-"; }
+brytstatus() { "$BR" status "$1" 2>/dev/null | "$PY3" -c 'import json,sys
+try: d = json.load(sys.stdin)
+except Exception: print("OPARSBAR"); raise SystemExit
+f = sys.argv[1]
+if f == "fp_ensam":
+    fp = d.get("fingerprints") or {}
+    print(list(fp)[0] if len(fp) == 1 else "")
+elif f == "fp_summa":
+    print(sum((d.get("fingerprints") or {}).values()))
+else:
+    print(d.get(f))' "$2" 2>/dev/null || echo PYFEL; }
+i_tradet() { [ -n "$(git ls-tree "$1" -- "$2" 2>/dev/null)" ]; }
+forfattare() { git log -1 --format=%an "$1" 2>/dev/null; }
+vakt() {
+  if [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ] || [ "$(git status --porcelain)" != "$ROT_STATUS" ]; then
+    echo "FAIL  harness — REPOROTEN RÖRD efter $1. Provet avbryts innan mer skada sker."
+    echo "  HEAD: $ROT_HEAD → $(git rev-parse HEAD)"
+    echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+  fi
+}
+
+# ============================ A — sessionen redigerar bara =====================
+backlog "$WORK/a-backlog.json" a-talar b-tyst c-egen-commit
+rigga a; CFG_SPEC="$WORK/a-backlog.json"; CFG_BUDGET=1; CFG_TROSKEL=9
+skriv_config "$WORK/config-a.json"
+kor_kedjan "$WORK/config-a.json" "$WORK/a-ut.txt" "$WORK/a-fel.txt"; kod_a=$KOD
+KODER="$KODER $kod_a"
+SHA_TALAR="$(sha_ur_attest "$WORK/a-att" a-talar)"
+SHA_TYST="$(sha_ur_attest "$WORK/a-att" b-tyst)"
+if [ "$kod_a" -ne 0 ]; then
+  no "K1 sessionen redigerar, kedjan attesterar" \
+     "exit $kod_a (väntat 0) — första felrad: $(head -1 "$WORK/a-fel.txt" 2>/dev/null)"
+elif [ -z "$SHA_TALAR" ] || ! git cat-file -e "$SHA_TALAR" 2>/dev/null; then
+  no "K1 attesterad kandidat finns i git" "attest ger '$SHA_TALAR' — ingen giltig attestation eller inget commit"
+elif ! i_tradet "$SHA_TALAR" tests/kedjefix16/a-talar.txt; then
+  no "K1 sessionens fil i kandidatens träd" "tests/kedjefix16/a-talar.txt saknas i $SHA_TALAR"
+else ok "K1 session som ENDAST redigerar → attestation, SHA i git med sessionens fil i trädet"; fi
+
+if [ -z "$SHA_TYST" ] || ! git cat-file -e "$SHA_TYST" 2>/dev/null; then
+  no "K2 tyst session attesteras" "attest ger '$SHA_TYST' — sessionen som aldrig skrev en rad gav ingen kandidat"
+elif ! i_tradet "$SHA_TYST" tests/kedjefix16/b-tyst.txt; then
+  no "K2 tyst sessions fil i trädet" "tests/kedjefix16/b-tyst.txt saknas i $SHA_TYST"
+elif [ "$SHA_TYST" = "$SHA_TALAR" ]; then
+  no "K2 egen kandidat" "tyst och talande session delar SHA — kedjan gjorde bara ett varv"
+else ok "K2 session utan en enda rad på stdout attesteras likaså"; fi
+
+FF_TALAR="$(forfattare "$SHA_TALAR")"; FF_TYST="$(forfattare "$SHA_TYST")"
+if [ -z "$FF_TALAR" ] || [ -z "$FF_TYST" ]; then
+  no "K3 författaren mätbar" "ingen commit att läsa författare ur: '$FF_TALAR' / '$FF_TYST'"
+elif [ "$FF_TALAR" != "nortropic-utforare" ] || [ "$FF_TYST" != "nortropic-utforare" ]; then
+  no "K3 författaren nortropic-utforare" \
+     "fick '$FF_TALAR' / '$FF_TYST' — commiten gjordes inte av utföraren"
+else ok "K3 kandidaterna bär författaren nortropic-utforare — sessionen stagade och committade aldrig"; fi
+
+EGEN="$(cat "$UT/egen-commit.txt" 2>/dev/null)"
+if [ -z "$EGEN" ] || ! git cat-file -e "$EGEN" 2>/dev/null; then
+  no "K4 självcommitten mätbar" "sessionens egen commit '$EGEN' finns inte i git — fallet är odömbart som skrivet"
+elif attesterad "$WORK/a-att" c-egen-commit; then
+  no "K4 självcommittande session ger ingen attestation" "c-egen-commit är attesterad"
+elif grep -rqF "$EGEN" "$WORK"/*-att/attestations.json 2>/dev/null; then
+  no "K4 commiten i ingen attestationsbutik" "$EGEN återfinns i en attestations.json"
+else ok "K4 session som committar själv: ingen attestation, commiten i ingen butik"; fi
+vakt "A"
+
+# ============================ R — omförsöket inuti claimet ====================
+backlog "$WORK/r-backlog.json" r-ett r-tva:r-ett
+rigga r; CFG_SPEC="$WORK/r-backlog.json"; CFG_BUDGET=3; CFG_TROSKEL=9
+skriv_config "$WORK/config-r.json"
+kor_kedjan "$WORK/config-r.json" "$WORK/r-ut.txt" "$WORK/r-fel.txt"; kod_r=$KOD
+KODER="$KODER $kod_r"
+SHA_R1="$(sha_ur_attest "$WORK/r-att" r-ett)"; SHA_R2="$(sha_ur_attest "$WORK/r-att" r-tva)"
+if [ "$kod_r" -ne 0 ]; then
+  no "K5 omförsök inuti claimet" "exit $kod_r (väntat 0) — första felrad: $(head -1 "$WORK/r-fel.txt" 2>/dev/null)"
+elif [ -z "$SHA_R1" ]; then
+  no "K5 attesteras i SAMMA körning" "r-ett föll första försöket och blev aldrig attesterad — inget omförsök inuti claimet"
+elif [ "$(starter r-ett)" != "2" ]; then
+  no "K5 startas exakt två gånger" "räknaren utanför workspacet visar $(starter r-ett) starter, väntade 2"
+else ok "K5 fixtur som faller först och lyckas sedan attesteras i samma körning, startad exakt två gånger"; fi
+
+if [ "$(starter r-ett)" != "2" ]; then
+  no "K6 två starter att räkna event emot" \
+     "$(starter r-ett) starter — utan ett andra försök mäter eventräkningen ingenting"
+elif [ "$(event_antal "$WORK/r-st" r-ett)" != "1" ]; then
+  no "K6 exakt ETT claimed-event" "eventloggen bär $(event_antal "$WORK/r-st" r-ett) event för r-ett — omförsöket claimade om"
+else ok "K6 omförsöket kostar inget nytt event: två starter, exakt ett claimed-event"; fi
+
+R_DIFF="$(git diff --name-only "$BAS" "$SHA_R1" 2>/dev/null | tr '\n' ' ')"
+if [ -z "$SHA_R1" ] || ! git cat-file -e "$SHA_R1" 2>/dev/null; then
+  no "K7 attesterat träd mätbart" "r-ett har ingen kandidat i git"
+elif ! i_tradet "$SHA_R1" tests/kedjefix16/andra.txt; then
+  no "K7 andra försökets fil i trädet" "tests/kedjefix16/andra.txt saknas i $SHA_R1"
+elif i_tradet "$SHA_R1" tests/kedjefix16/forsta.txt; then
+  no "K7 första försökets fil får inte följa med" \
+     "forsta.txt ligger i $SHA_R1 — försöket fick inte ett eget workspace på oförändrad base"
+elif [ "$(echo $R_DIFF)" != "tests/kedjefix16/andra.txt" ]; then
+  no "K7 ingen räknare i kandidaten" "diffen mot base är [$R_DIFF], väntade enbart tests/kedjefix16/andra.txt"
+else ok "K7 trädet bär andra försökets fil, inte det förstas, och ingen räknarfil"; fi
+
+if [ -z "$SHA_R2" ] || ! git cat-file -e "$SHA_R2" 2>/dev/null; then
+  no "K8 kedjande base efter omförsök" "r-tva blev aldrig attesterad ('$SHA_R2')"
+elif [ "$SHA_R2" = "$SHA_R1" ]; then
+  no "K8 eget varv för r-tva" "r-tva delar SHA med r-ett"
+elif ! i_tradet "$SHA_R2" tests/kedjefix16/andra.txt; then
+  no "K8 kedjande base överlever omförsöken" \
+     "r-tvas träd saknar r-etts fil — basen flyttades inte till den attesterade kandidaten"
+else ok "K8 kedjande base överlever omförsöken: r-tvas träd bär r-etts fil"; fi
+vakt "R"
+
+# ============================ B — budgeten är per task ========================
+backlog "$WORK/b-backlog.json" b-avslag b-faller b-lyckas
+rigga b; CFG_SPEC="$WORK/b-backlog.json"; CFG_BUDGET=2; CFG_TROSKEL=9
+skriv_config "$WORK/config-b.json"
+EV_FORE="$(ev_antal b-avslag)"
+kor_kedjan "$WORK/config-b.json" "$WORK/b-ut.txt" "$WORK/b-fel.txt"; kod_b=$KOD
+KODER="$KODER $kod_b"
+EV_EFTER="$(ev_antal b-avslag)"
+if [ "$kod_b" -ne 0 ]; then
+  no "K9 budget per task" "exit $kod_b (väntat 0) — första felrad: $(head -1 "$WORK/b-fel.txt" 2>/dev/null)"
+elif [ "$(starter b-faller)" != "2" ]; then
+  no "K9 den fallande startas exakt budget gånger" "$(starter b-faller) starter, väntade 2 (budget)"
+elif attesterad "$WORK/b-att" b-faller; then
+  no "K9 den fallande attesteras aldrig" "b-faller är attesterad"
+elif ! har_status "$WORK/b-st" b-faller claimed; then
+  no "K9 den fallande förblir claimed" "rebuild visar inte b-faller som claimed"
+elif ! attesterad "$WORK/b-att" b-lyckas; then
+  no "K9 den andra attesteras ändå" "b-lyckas saknar giltig attestation trots att b-faller brände sin budget"
+else ok "K9 budget per task: den fallande startad exakt 2 gånger och förblir claimed, den andra attesteras ändå"; fi
+
+# W — samma sak i det ANDRA nedströmsledet: verifieraren (h-002), inte policyn.
+# Ett led räcker inte; "nedströms om rapporten" är h-007 OCH h-002.
+BL_YTA="agents/**"; backlog "$WORK/w-backlog.json" w-ett w-giltig; BL_YTA="tests/kedjefix16/**"
+rigga w; CFG_SPEC="$WORK/w-backlog.json"; CFG_BUDGET=2; CFG_TROSKEL=9
+skriv_config "$WORK/config-w.json"
+kor_kedjan "$WORK/config-w.json" "$WORK/w-ut.txt" "$WORK/w-fel.txt"; kod_w=$KOD
+KODER="$KODER $kod_w"
+if [ "$(starter b-avslag)" != "2" ]; then
+  no "K10 policyavslag kostar försök" "$(starter b-avslag) starter, väntade 2 (budget) — det nedströms avvisade försöket räknades inte"
+elif attesterad "$WORK/b-att" b-avslag; then
+  no "K10 nedströms avslag attesteras aldrig" "b-avslag är attesterad trots skrivning utanför allowed_write"
+elif [ "$((EV_EFTER - EV_FORE))" != "2" ]; then
+  no "K10 varje försök nådde policyn" \
+     "policyns evidence växte med $((EV_EFTER - EV_FORE)) poster för b-avslag, väntade 2 — varvet dog före h-007"
+elif [ "$(brytstatus "$WORK/b-br/b-avslag" forbrukat)" != "2" ]; then
+  no "K10 försöket bokförs hos brytaren" \
+     "brytarens forbrukat för b-avslag är $(brytstatus "$WORK/b-br/b-avslag" forbrukat), väntade 2 — omförsöket gick förbi brytaren"
+elif [ "$kod_w" -ne 0 ]; then
+  no "K10 verifierarledet" "exit $kod_w (väntat 0) — första felrad: $(head -1 "$WORK/w-fel.txt" 2>/dev/null)"
+elif [ "$(starter w-ett)" != "2" ]; then
+  no "K10 verifierarens verdikt kostar försök" \
+     "$(starter w-ett) starter, väntade 2 (budget) — bara policyledet gjordes om"
+elif [ "$(brytstatus "$WORK/w-br/w-ett" forbrukat)" != "2" ]; then
+  no "K10 verifierarledets försök bokförs hos brytaren" \
+     "brytarens forbrukat för w-ett är $(brytstatus "$WORK/w-br/w-ett" forbrukat), väntade 2"
+elif attesterad "$WORK/w-att" w-ett; then
+  no "K10 verifierarens verdikt attesteras aldrig" "w-ett är attesterad trots att INV-004 fälldes"
+elif ! attesterad "$WORK/w-att" w-giltig; then
+  no "K10 verifieraren KÖRDES mot kandidatträdet" \
+     "w-giltig — samma skrivyta men med markörblocket verbatim — attesterades inte; varvet nådde aldrig h-002, och w-etts frånvaro av attestation bevisar då ingenting"
+else ok "K10 avslag nedströms kostar försök i BÅDA leden: h-007 och h-002 ger vardera 2 starter och forbrukat 2, ingen attestation"; fi
+vakt "B och W"
+
+# ============================ P — fingerprintar per task ======================
+backlog "$WORK/p-backlog.json" p-ett p-tva
+rigga p; CFG_SPEC="$WORK/p-backlog.json"; CFG_BUDGET=1; CFG_TROSKEL=2
+skriv_config "$WORK/config-p.json"
+kor_kedjan "$WORK/config-p.json" "$WORK/p-ut.txt" "$WORK/p-fel.txt"; kod_p=$KOD
+KODER="$KODER $kod_p"
+FP1="$(brytstatus "$WORK/p-br/p-ett" fp_ensam)"; FP2="$(brytstatus "$WORK/p-br/p-tva" fp_ensam)"
+if [ "$kod_p" -ne 0 ]; then
+  no "K11 samma fel i två OLIKA tasks öppnar aldrig" \
+     "exit $kod_p (väntat 0) — ett stopp här betyder att fingerprintarna räknas gemensamt"
+elif [ "$(starter p-ett)" != "1" ] || [ "$(starter p-tva)" != "1" ]; then
+  no "K11 båda tasksen fick sitt försök" \
+     "starter $(starter p-ett)/$(starter p-tva), väntade 1/1 — en delad katalog delar också budgeten"
+elif [ "$(brytstatus "$WORK/p-br/p-ett" oppen)" != "False" ] \
+  || [ "$(brytstatus "$WORK/p-br/p-tva" oppen)" != "False" ]; then
+  no "K11 ingen brytare öppnades" \
+     "oppen $(brytstatus "$WORK/p-br/p-ett" oppen)/$(brytstatus "$WORK/p-br/p-tva" oppen), väntade False/False"
+elif [ "$(brytstatus "$WORK/p-br/p-ett" fp_summa)" != "1" ] \
+  || [ "$(brytstatus "$WORK/p-br/p-tva" fp_summa)" != "1" ]; then
+  no "K11 en räkning i vardera katalogen" \
+     "summor $(brytstatus "$WORK/p-br/p-ett" fp_summa)/$(brytstatus "$WORK/p-br/p-tva" fp_summa), väntade 1/1"
+elif [ -z "$FP1" ] || [ "$FP1" != "$FP2" ]; then
+  no "K11 felet är verkligen SAMMA" \
+     "fingerprintarna är [$FP1] och [$FP2] — är de olika mäter kontrollen ingenting"
+else ok "K11 samma fingerprint i två OLIKA tasks: en rad i vardera katalogen, inget stopp"; fi
+vakt "P"
+
+# ============================ S — samma fel i SAMMA task ======================
+backlog "$WORK/s-backlog.json" aa-faller zz-orord
+rigga s; CFG_SPEC="$WORK/s-backlog.json"; CFG_BUDGET=5; CFG_TROSKEL=2
+skriv_config "$WORK/config-s.json"
+kor_kedjan "$WORK/config-s.json" "$WORK/s-ut.txt" "$WORK/s-fel.txt"; kod_s=$KOD
+KODER="$KODER $kod_s"
+if [ "$kod_s" -ne 3 ]; then
+  no "K12 öppen brytare avslutar drainet med exit 3" \
+     "exit $kod_s (väntat 3) — första felrad: $(head -1 "$WORK/s-fel.txt" 2>/dev/null)"
+elif [ "$(event_antal "$WORK/s-st" zz-orord)" != "0" ]; then
+  no "K12 stoppet sker FÖRE nästa claim" "zz-orord bär $(event_antal "$WORK/s-st" zz-orord) event"
+elif [ -e "$WORK/s-br/zz-orord" ]; then
+  no "K12 ingen rad i räknaren för den orörda" "$WORK/s-br/zz-orord finns — tasken rördes"
+elif attesterad "$WORK/s-att" zz-orord; then
+  no "K12 den orörda tasken attesteras inte" "zz-orord är attesterad"
+elif [ "$(starter zz-orord)" != "0" ]; then
+  no "K12 den orörda sessionen startades aldrig" "$(starter zz-orord) starter"
+else ok "K12 samma fel i SAMMA task når tröskeln: exit 3 före nästa claim, den orörda tasken orörd"; fi
+
+if [ -n "$("$LE" "$WORK/s-le" owner kedjan 2>/dev/null)" ]; then
+  no "K13 leasen är släppt efter stoppet" "ägare '$("$LE" "$WORK/s-le" owner kedjan 2>/dev/null)'"
+elif [ -n "$(wt_nya)" ]; then
+  no "K13 inga worktrees ligger kvar" "nya worktrees mot läget före körningen: $(wt_nya | tr '\n' ' ')"
+else ok "K13 efter stoppet: leasen släppt och inga worktrees kvar"; fi
+
+S_OPPEN="$(brytstatus "$WORK/s-br/aa-faller" oppen)"
+S_FORB="$(brytstatus "$WORK/s-br/aa-faller" forbrukat)"
+if [ "$S_OPPEN" != "True" ]; then
+  no "K14 öppningen på systerns eget tillstånd" \
+     "brytare status säger oppen=$S_OPPEN — kedjan stannade utan att brytaren öppnade"
+elif [ "$S_FORB" -ge 5 ] 2>/dev/null; then
+  no "K14 budget STRIKT högre än tröskeln" "forbrukat=$S_FORB av budget 5 — budgetstoppet maskerar öppningen"
+elif [ "$S_FORB" != "2" ]; then
+  no "K14 stoppet kom vid tröskeln" "forbrukat=$S_FORB, väntade 2 (tröskeln)"
+else ok "K14 öppningen mätt på brytarens eget tillstånd över processgränsen, forbrukat 2 < budget 5"; fi
+
+FORE_FALLNA="$(event_antal "$WORK/s-st" aa-faller)"
+kor_kedjan "$WORK/config-s.json" "$WORK/s2-ut.txt" "$WORK/s2-fel.txt"; kod_s2=$KOD
+KODER="$KODER $kod_s2"
+if [ "$kod_s2" -ne 0 ]; then
+  no "K15 stoppet kostar ingenting" \
+     "andra körningen gav exit $kod_s2 (väntat 0) — första felrad: $(head -1 "$WORK/s2-fel.txt" 2>/dev/null)"
+elif ! attesterad "$WORK/s-att" zz-orord; then
+  no "K15 den orörda tasken attesteras efteråt" "zz-orord saknar giltig attestation efter andra körningen"
+elif [ "$(event_antal "$WORK/s-st" aa-faller)" != "$FORE_FALLNA" ]; then
+  no "K15 inga nya event på den fallna" \
+     "aa-faller gick från $FORE_FALLNA till $(event_antal "$WORK/s-st" aa-faller) event"
+else ok "K15 ny körning direkt efteråt attesterar den orörda, inga nya event på den fallna"; fi
+vakt "S"
+
+# ============================ Q — kvotstopp ===================================
+backlog "$WORK/q-backlog.json" q-ett q-tva
+rigga q; CFG_SPEC="$WORK/q-backlog.json"; CFG_BUDGET=5; CFG_TROSKEL=9
+skriv_config "$WORK/config-q.json"
+mkdir -p "$WORK/q-br/q-ett" && printf 'PROVKVOT uttomd\n\n' > "$WORK/q-br/q-ett/kvot.monster"
+kor_kedjan "$WORK/config-q.json" "$WORK/q-ut.txt" "$WORK/q-fel.txt"; kod_q=$KOD
+KODER="$KODER $kod_q"
+Q_FORB="$(brytstatus "$WORK/q-br/q-ett" forbrukat)"
+if [ "$kod_q" -ne 3 ]; then
+  no "K16 kvotstopp stannar körningen" \
+     "exit $kod_q (väntat 3) — första felrad: $(head -1 "$WORK/q-fel.txt" 2>/dev/null)"
+elif [ "$(starter q-ett)" != "1" ]; then
+  no "K16 stannar redan vid FÖRSTA felet" "$(starter q-ett) starter, väntade 1"
+elif [ "$Q_FORB" != "0" ]; then
+  no "K16 forbrukat noll" "forbrukat=$Q_FORB — kvotstoppet förbrukade budget"
+elif [ "$(brytstatus "$WORK/q-br/q-ett" oppen)" != "True" ]; then
+  no "K16 brytaren öppnad av kvoten" "oppen=$(brytstatus "$WORK/q-br/q-ett" oppen)"
+elif [ "$(event_antal "$WORK/q-st" q-tva)" != "0" ]; then
+  no "K16 stoppet sker före nästa claim" "q-tva bär $(event_antal "$WORK/q-st" q-tva) event"
+else ok "K16 kvotstopp: körningen stannar vid första felet med forbrukat noll"; fi
+vakt "Q"
+
+# ============================ T — timeout och avbrottsraden ===================
+backlog "$WORK/t-backlog.json" t-ett
+rigga t; CFG_SPEC="$WORK/t-backlog.json"; CFG_BUDGET=1; CFG_TROSKEL=9; CFG_TO=2
+skriv_config "$WORK/config-t.json"
+kor_kedjan "$WORK/config-t.json" "$WORK/t-ut.txt" "$WORK/t-fel.txt"; kod_t=$KOD
+KODER="$KODER $kod_t"
+# EFFEKTMÄTNINGEN: kanarien TICKAR. Ett värde läst en gång, före den tidpunkt
+# då en icke-dödad session ändå hade avslöjat sig, mäter ingenting. Här mäts
+# radantalet, sedan sover provet och mäter IGEN: växer den vidare lever gruppen.
+sleep 1; KT1="$(wc -l < "$UT/kanarie-t.txt" 2>/dev/null | tr -d ' ')"
+sleep 2;  KT2="$(wc -l < "$UT/kanarie-t.txt" 2>/dev/null | tr -d ' ')"
+[ -n "$KT1" ] || KT1=0
+[ -n "$KT2" ] || KT2=0
+if [ "$kod_t" -ne 0 ]; then
+  no "K17 failure sväljs aldrig men fäller inte drainet" \
+     "exit $kod_t (väntat 0) — första felrad: $(head -1 "$WORK/t-fel.txt" 2>/dev/null)"
+elif [ "$(starter t-ett)" != "1" ]; then
+  no "K17 sessionen startade" "$(starter t-ett) starter, väntade 1 — kanariemätningen vore odömbar"
+elif [ "$KT1" = "0" ]; then
+  echo "SKIP  K17 kanariefågeln tickade aldrig — odömbart"
+  echo; echo "$pass PASS, $fail FAIL, ODÖMBART"; exit 2
+elif [ "$KT2" != "$KT1" ]; then
+  no "K17 timeout mäts på effekt" "kanariefågeln tickade vidare efter körningen: $KT1 → $KT2 — processgruppen dog inte"
+elif attesterad "$WORK/t-att" t-ett; then
+  no "K17 failure attesterar aldrig" "t-ett är attesterad trots timeout"
+else ok "K17 timeout mätt på effekt: sessionen startade, kanariefågeln slutade ticka ($KT1 rader), ingen attestation"; fi
+
+AVBROTT="$(grep 'avbrutet i ' "$WORK/t-ut.txt" 2>/dev/null | head -1)"
+stegord() { grep 'avbrutet i ' "$1" 2>/dev/null | head -1 | sed -n 's/^.*avbrutet i \([^ ]*\).*$/\1/p'; }
+STEG="$(stegord "$WORK/t-ut.txt")"
+STEG_B="$(stegord "$WORK/b-ut.txt")"
+STEG_W="$(stegord "$WORK/w-ut.txt")"
+FP_STATUS="$(brytstatus "$WORK/t-br/t-ett" fp_ensam)"
+# Klassen mäts på raden MED fingerprintvärdet borttaget: ordet timeout finns
+# självt i fingerprinten (5:-:timeout: …), så en grep på hela raden hade mättats
+# av den. Ingen positionsutsaga — kriteriet säger BÄR, inte var.
+UTAN_FP="${AVBROTT//"fingerprint: $FP_STATUS"/}"
+if [ -z "$AVBROTT" ]; then
+  no "K18 avbrottsraden finns" "ingen rad med 'avbrutet i ' i kedjans utdata"
+elif [ -z "$STEG" ]; then
+  no "K18 stegordet är icke-tomt" "raden namnger inget steg: [$AVBROTT]"
+elif [ "$STEG" = "t-ett" ] || [ "$STEG" = "timeout" ]; then
+  no "K18 stegordet namnger STEGET" "stegordet är [$STEG] — taskens id eller klassens namn upprepar data som redan står på raden"
+elif [ -z "$STEG_B" ] || [ -z "$STEG_W" ]; then
+  no "K18 stegorden kunde läsas" "b-ut/w-ut bär ingen avbrottsrad — [$STEG_B]/[$STEG_W]"
+elif [ "$STEG" = "$STEG_B" ] || [ "$STEG" = "$STEG_W" ]; then
+  # En KONSTANT etikett för varje avbrott passerade förut: mätt gav både "varvet"
+  # och enbart "x" full pott, och grindens PASS-text påstod att steget namngavs.
+  # Timeout (brytarledet), policyavslag och verifierarfall är olika STEG och får
+  # inte bära samma ord. Att b och w delar ord är däremot tillåtet — vokabulären
+  # dikteras inte, bara att raden skiljer leden åt.
+  no "K18 stegordet namnger STEGET" \
+     "samma ord för olika led: timeout=[$STEG] policy=[$STEG_B] verifierare=[$STEG_W] — en konstant etikett namnger ingenting"
+elif ! printf '%s' "$UTAN_FP" | grep -qF 'timeout'; then
+  no "K18 systerns klass ordagrant" \
+     "klassen timeout finns bara inuti fingerprinten, inte som systerns egen text: [$AVBROTT]"
+elif [ -z "$FP_STATUS" ]; then
+  no "K18 brytaren har en fingerprint att jämföra mot" "status för t-ett bär inte exakt en fingerprint"
+elif ! printf '%s' "$AVBROTT" | grep -qF "fingerprint: $FP_STATUS"; then
+  # FÖREKOMST, inte likhet mot radens svans: kriteriet säger att raden ska BÄRA
+  # fingerprint-raden ordagrant, inte att den ska avsluta den. Mätt att
+  # förekomstprövningen ändå fäller både stympning och förvanskning.
+  no "K18 fingerprintens VÄRDE ordagrant" \
+     "raden bär inte [fingerprint: $FP_STATUS] — värdet kortades eller ändrades på vägen: [$AVBROTT]"
+else ok "K18 avbrottsraden namnger steget ($STEG, skilt från $STEG_B/$STEG_W), bär klassen och fingerprintens värde ordagrant"; fi
+vakt "T"
+
+# ============================ E — brytarens anropsfel =========================
+backlog "$WORK/e-backlog.json" e-ett e-tva
+rigga e; CFG_SPEC="$WORK/e-backlog.json"; CFG_BUDGET=5; CFG_TROSKEL=9
+skriv_config "$WORK/config-e.json"
+# PROVOKATION SOM BARA `kor` KAN SE: brytarkatalogen är en FIL. kor faller på
+# mkdir ("File exists") medan status mot samma sökväg svarar exit 0 med färskt
+# tillstånd — ett status-förled framför kor ser alltså ingenting. En trasig
+# tillstand.json duger inte: den är läsbar för status lika väl som för kor.
+mkdir -p "$WORK/e-br" && printf 'inte en katalog\n' > "$WORK/e-br/e-ett"
+kor_kedjan "$WORK/config-e.json" "$WORK/e-ut.txt" "$WORK/e-fel.txt"; kod_e=$KOD
+KODER="$KODER $kod_e"
+E_START="$(starter e-ett)"
+# POSITIVT ANKARE: samma config utan provokationen måste gå igenom. Utan det
+# uppfylls K19:s fyra frånvaromätningar av en kedja som alltid faller.
+rigga e2; CFG_SPEC="$WORK/e-backlog.json"; CFG_BUDGET=5; CFG_TROSKEL=9
+skriv_config "$WORK/config-e2.json"
+kor_kedjan "$WORK/config-e2.json" "$WORK/e2-ut.txt" "$WORK/e2-fel.txt"; kod_e2=$KOD
+KODER="$KODER $kod_e2"
+if [ "$kod_e" -ne 1 ]; then
+  no "K19 brytarens anropsfel fäller körningen" \
+     "exit $kod_e (väntat 1)$([ "$kod_e" = "124" ] && echo ' — fristen löpte ut: kedjan gjorde om ett anropsfel som aldrig förbrukar budget') — ett tyst drain i stället för ett fel"
+elif ! cat "$WORK/e-ut.txt" "$WORK/e-fel.txt" 2>/dev/null | grep -qF 'anropsfel: tillståndskatalogen' \
+   || ! cat "$WORK/e-ut.txt" "$WORK/e-fel.txt" 2>/dev/null | grep -qF "$WORK/e-br/e-ett"; then
+  # BRYTARENS EGEN TEXT, ordagrant. Utan detta räckte det att NÅGOT föll på
+  # provokationen: en kedja som själv förskapar <brytare_rot>/<task> snubblar i
+  # sin egen mkdir, når aldrig brytaren, och uppfyllde ändå alla frånvaroleden.
+  no "K19 brytarens anropsfel bärs vidare" \
+     "varken stdout eller stderr bär brytarens egen orsak — felet kom inte FRÅN brytaren: [$(cat "$WORK/e-ut.txt" "$WORK/e-fel.txt" 2>/dev/null | head -2 | tr '\n' ' ')]"
+elif [ "$E_START" != "0" ]; then
+  no "K19 inget kommando startades" "$E_START starter för e-ett"
+elif [ "$(event_antal "$WORK/e-st" e-tva)" != "0" ] || attesterad "$WORK/e-att" e-tva; then
+  no "K19 drainet fortsatte inte" "e-tva bär $(event_antal "$WORK/e-st" e-tva) event eller är attesterad"
+elif [ -n "$("$LE" "$WORK/e-le" owner kedjan 2>/dev/null)" ]; then
+  no "K19 leasen släppt även vid fel" "ägare '$("$LE" "$WORK/e-le" owner kedjan 2>/dev/null)'"
+elif [ "$kod_e2" -ne 0 ] || ! attesterad "$WORK/e2-att" e-ett || ! attesterad "$WORK/e2-att" e-tva; then
+  no "K19 positivt ankare" \
+     "samma config UTAN provokationen gav exit $kod_e2 och attestationer $(attesterad "$WORK/e2-att" e-ett && echo ja || echo nej)/$(attesterad "$WORK/e2-att" e-tva && echo ja || echo nej) — exit 1 kom inte av brytarens anropsfel"
+else ok "K19 brytarens anropsfel fäller hela körningen med exit 1; utan provokationen attesterar samma config båda tasksen"; fi
+vakt "E"
+
+# ============================ C — config före leasen ==========================
+konfigfall() {  # konfigfall <namn> <rubrik> — config-c*.json är redan skriven
+  local n="$1" r="$2" k
+  kor_kedjan "$WORK/config-$n.json" "$WORK/$n-ut.txt" "$WORK/$n-fel.txt"; k=$KOD
+  KODER="$KODER $k"
+  if [ "$k" -ne 1 ]; then no "$r" "exit $k, väntat 1"
+  elif [ "$(rader "$WORK/$n-st")" != "0" ]; then
+    no "$r" "$(rader "$WORK/$n-st") rader i eventloggen, väntat 0"
+  elif [ -e "$WORK/$n-le" ]; then
+    no "$r" "lease-katalogen $WORK/$n-le skapades — configen prövades EFTER leasen"
+  elif [ -e "$WORK/$n-br" ]; then
+    no "$r" "brytarkatalogen $WORK/$n-br finns på disk"
+  else ok "$r"; fi
+}
+backlog "$WORK/c-backlog.json" c-ett
+rigga c1; CFG_SPEC="$WORK/c-backlog.json"; CFG_BUDGET=2; CFG_TROSKEL=9
+skriv_config "$WORK/config-c1.json"
+"$PY3" - "$WORK/config-c1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+del d["brytare_rot"]
+json.dump(d, open(p, "w"))
+PY
+konfigfall c1 "K20 saknat brytare_rot: exit 1, noll event, ingen lease, ingen brytarkatalog"
+
+rigga c2; CFG_SPEC="$WORK/c-backlog.json"; CFG_BUDGET=2; CFG_TROSKEL=9
+skriv_config "$WORK/config-c2.json"
+"$PY3" - "$WORK/config-c2.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["budget"] = "2"
+json.dump(d, open(p, "w"))
+PY
+konfigfall c2 "K21 icke-heltalig budget: exit 1, noll event, ingen lease, ingen brytarkatalog"
+
+rigga c3; CFG_SPEC="$WORK/c-backlog.json"; CFG_BUDGET=2; CFG_TROSKEL=9
+skriv_config "$WORK/config-c3.json"
+"$PY3" - "$WORK/config-c3.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d["troskel"] = 1.5
+json.dump(d, open(p, "w"))
+PY
+konfigfall c3 "K22 icke-heltalig tröskel: exit 1, noll event, ingen lease, ingen brytarkatalog"
+
+# ============================ Slutkontroller ==================================
+if [ "$BAS" != "$ROT_HEAD" ]; then
+  echo "FAIL  K23 basen flyttade sig — provet mätte mot ett rörligt mål"
+  echo; echo "$pass PASS, $((fail+1)) FAIL"; exit 1
+fi
+if [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ]; then no "K23 reporoten orörd" "HEAD ändrades"
+elif [ "$(git status --porcelain)" != "$ROT_STATUS" ]; then
+  no "K23 reporoten orörd" "arbetsträdet ändrades"
+elif [ "$(git for-each-ref --format='%(refname) %(objectname)' | sort)" != "$ROT_REFS" ]; then
+  no "K23 reporoten orörd" "refs tillkom eller ändrades"
+elif [ -n "$(wt_nya)" ]; then
+  no "K23 inga worktree-rester" "nya worktrees mot läget före körningen: $(wt_nya | tr '\n' ' ')"
+else ok "K23 reporotens HEAD, arbetsträd och refs orörda, inga worktree-rester"; fi
+
+if echo " $KODER " | grep -q " 2 "; then
+  no "K24 exitkod 2 används aldrig" "uppmätta koder:$KODER"
+else ok "K24 ingen väg gav exitkod 2 (koder:$KODER)"; fi
+
+summera
