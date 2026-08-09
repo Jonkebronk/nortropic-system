@@ -136,17 +136,31 @@ grep -rn "doctor #5\|doctor#5" . --include=*.js --include=*.mjs --include=*.md |
 | h-013 | 11 Brytaren | Fingerprints: samma fel = en klass, olika fel = två · `kvot_slut` skilt från `nonzero_exit`, öppnar utan att förbruka budget · öppen brytare stoppar med orsak, aldrig tyst · budget noll startar inget kommando |
 | h-014 | 12 Notisen | Fyra händelser ger notis, vanligt varv ger ingen · controllern skickar, aldrig workern · trasig webhook lämnar körningen ostörd · URL:en läcker inte till stdout, stderr eller fel |
 | h-015 | 13 Återtaget | Attesterat väljs inte om · fallet blir valbart igen med bevarad historik · öppen brytare överlever omstart · lease återtas efter TTL, aldrig före · två återstarter = en ägare |
+| h-016 | 14 Kedjan kopplas in | Session som ENDAST redigerar attesteras ändå, kandidaten bär författaren `nortropic-utforare` · session som committar själv ger ingen attestation · omförsök inuti claimet: eget workspace per försök på oförändrad base, exakt ett claimed-event · budget och fingerprints per task · öppen brytare avslutar drainet FÖRE nästa claim med exit 3 · brytarens anropsfel fäller körningen med exit 1 · config prövad i sin helhet före leasen |
 
 Skivorna 6b, 6c, 8 och 9 tillkom efter planens skrivning (LOOP-ÄGARHAND-16–27), skivorna 10–13
-2026-08-08 efter smoke-momentet. Specen och beslutsloggen är operativ ordning.
+2026-08-08 efter smoke-momentet, skiva 14 2026-08-09 (LOOP-ÄGARHAND-36). Specen och
+beslutsloggen är operativ ordning.
 
-**Skivorna 10–13 bär slutmålets kvarvarande klausuler.** Skiva 10 gör försöket fullbordbart —
+**Skivorna 10–14 bär slutmålets kvarvarande klausuler.** Skiva 10 gör försöket fullbordbart —
 mätt 2026-08-08: en session kan skriva i workspacet men inte committa, och kandidat-SHA:t hör
-hemma i controllerledet, inte i modellens verktygsdisciplin. Skiva 11 ersätter dagens
-attempt-budget-av-slump (en fallen task förblir claimed och är ovalbar resten av körningen).
-Skiva 12 är den enda vägen till "störs bara när en människa krävs". Skiva 13 är driftformen
-kör tills kvoten tar slut, börja om när den är tillbaka. Ordningen är bindande: 10 blockerar
-allt, 11 blockerar 12 och 13. Ingen kvotbokföring och inget veckotak byggs (ägarbeslut).
+hemma i controllerledet, inte i modellens verktygsdisciplin. Skiva 11 bär attempt-budget och
+circuit. Skiva 12 är den enda vägen till "störs bara när en människa krävs". Skiva 13 är
+driftformen kör tills kvoten tar slut, börja om när den är tillbaka. **Skiva 14 är
+inkopplingen:** utan den anropar `controller/loop/cli` fortfarande `controller/launch/cli`
+direkt, och skivorna 10 och 11 är byggda men verkningslösa — de har ingen anropare i repot.
+
+**Ordningen är bindande: 10 blockerar allt, 11 blockerar 14, och 14 blockerar 12 och 13.**
+Formuleringen *11 blockerar 12 och 13* var ofullständig (rättat 2026-08-09, LOOP-ÄGARHAND-36):
+h-014 och h-015 kräver båda att loopen faktiskt anropar det de vilar på — notisen ska skickas
+ur ett verkligt varv, och återtaget förutsätter en bevarad failure-historik som bara uppstår
+när kedjan går genom brytaren. Inkopplingen måste därför ske FÖRE dem.
+
+**Och att skiva 11 ersätter dagens attempt-budget-av-slump** (en fallen task förblir claimed
+och är ovalbar resten av körningen, så varje task får exakt ett försök) blir sant först av
+skiva 14, inte av skiva 11: budgeten får verkan genom att ett fallet försök görs OM inuti
+claimet. Utan omförsöket är per-task-budgeten död kod. Ingen kvotbokföring och inget veckotak
+byggs (ägarbeslut).
 
 ### 7.1 Doctor #5-luckan — tre invarianter, egen HÖGRISK-commit
 

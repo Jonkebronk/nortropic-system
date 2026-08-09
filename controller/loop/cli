@@ -1,14 +1,16 @@
 #!/usr/bin/env python3.12
-"""controller/loop/cli — skiva 9: huvudloopen, kedjan.
+"""controller/loop/cli — skiva 9: huvudloopen, kedjan. Skiva 14: inkopplad.
 
     run <config.json>
         0   körningen slutförd (drain, även noll varv)
         1   fel, inklusive upptagen lease FÖRE första varvet
+        3   rent stopp: brytaren är öppen, drainet avslutades före nästa claim
 
 Varvet är v4.1 §13, och varje led är en systerkomponent:
 
     taskval  select/claim      →  workspace på aktuell base
-    envelope kuvert            →  launch  konfigurerat kommando med timeout
+    envelope kuvert            →  brytare  försöket, med budget och fingerprints
+                                  (som i sin tur kör utforare, som kör launch)
     worker   strikt parse      →  policy  diffpolicy mot samma spec
     verify   registrerad grind mot kandidatträdet
     attest   attestation vid grönt
@@ -16,17 +18,36 @@ Varvet är v4.1 §13, och varje led är en systerkomponent:
 Kedjan bygger ingenting själv. Den beordrar, läser utfall och binder varven —
 all logik som redan bor i en syster hämtas därifrån, aldrig i en kopia här.
 Att duplicera en systers regel hade gett två sanningar som driftar isär,
-vilket är samma defektklass som INV-006 finns till för att fånga.
+vilket är samma defektklass som INV-006 finns till för att fånga. Brytaren
+bokför budgeten och fingerprintarna; kedjan för ingen egen räkning.
+
+**Försöket går genom brytaren, aldrig genom launch direkt** (skiva 14). Fram
+till dess var skiva 10 och 11 byggda men verkningslösa: sessionen fick själv
+staga och committa, och attempt-budgeten hade ingen anropare. Nu föds
+kandidat-SHA:t i controllerledet, och kandidatvägen är byte-identisk med
+utförarens rapport — h-006, h-007, h-002 och h-003 står orörda.
+
+**Omförsöket sker INUTI claimet.** Ett fallet försök görs om utan nytt claim
+och utan nytt event; tasken är redan claimad, och claimed är inte valbart
+(skiva 8). Utan omförsök vore per-task-budgeten död kod: en fallen task
+förblir ovalbar resten av körningen, så varje task hade fått exakt ett
+försök av en slump (LOOP-ÄGARHAND-36, ägarbeslut 2026-08-09). Varje försök
+får ett EGET workspace på OFÖRÄNDRAD base — bara attesterade kandidater
+flyttar basen.
+
+**Brytarkatalogen är en per task, `<brytare_rot>/<task-id>`.** Fingerprinten
+bär ingen task-identitet (skiva 11), så katalogsökvägen är det enda som gör
+räkningen per task, och h-015:s bevarade failure-historik förutsätter den.
+Katalogen skapas av brytaren, aldrig här: förskapade kedjan den, skulle
+brytarens egna anropsfel döljas bakom kedjans.
 
 **Integration är kedjande base.** Nästa varv byggs på förra ATTESTERADE
 kandidat-SHA:t, aldrig på en kandidat som inte tog sig igenom. Ett varv som
 faller lämnar därför basen orörd, och nästa task bygger på det som faktiskt
 höll.
 
-**Failure attesterar aldrig.** Tasken förblir claimed, och claimed är inte
-valbart (skiva 8) — den är alltså ovalbar resten av körningen. Retry,
-attempt-budget och circuit är v4.1 §16–17 och har ingen spec-rad; de byggs
-INTE här (byggplan v3 §10, stoppregel 1: komponent utan spec-rad → avböj).
+**Failure attesterar aldrig.** Är budgeten slut förblir tasken claimed och är
+ovalbar resten av körningen.
 
 **Varje avbrott namnger STEGET och bär systerns egen klass ordagrant.** En
 kedja som sväljer `timeout` eller `unparseable_output` tvingar den som
@@ -37,7 +58,7 @@ kostnad på ägarhandens referenskedja (LOOP-ÄGARHAND-26).
 lease_acquired, run_completed …) kräver ett eventschema som skiva 1 inte har:
 dess event är {task, status} och rymmer ingen körningshändelse. Att uppfinna
 ett andra schema här vore en ny komponent på ett fel. Enda eventet i ett varv
-är därför skiva 8:s claim.
+är därför skiva 8:s claim — ett per claim, inte ett per försök.
 
 Config är INDATA i sin helhet. Komponenten har ingen inbyggd sökväg, ingen
 inbyggd backlog och antar aldrig ett namnschema.
@@ -57,7 +78,7 @@ ROT = Path(__file__).resolve().parents[2]
 TASKVAL = ROT / "controller/taskval/cli"
 WORKSPACE = ROT / "controller/workspace/cli"
 ENVELOPE = ROT / "controller/envelope/cli"
-LAUNCH = ROT / "controller/launch/cli"
+BRYTARE = ROT / "controller/brytare/cli"
 WORKER = ROT / "controller/worker/cli"
 POLICY = ROT / "controller/policy/cli"
 VERIFY = ROT / "controller/verify/cli"
@@ -70,8 +91,24 @@ LEASE = ROT / "controller/lease/cli"
 # därför återtas av en annan controller. Skrivet här i stället för antaget.
 LEASE_TTL = "180"
 
+# Körningens exitkoder. 3 är RENT STOPP och hålls skilt från både slutförd
+# drain (0) och fel (1): driftformen är kör tills kvoten tar slut, börja om,
+# och en cron måste kunna skilja stoppet från en färdig drain utan att parsa
+# prosa. 2 används aldrig — verify/bin/_lib.sh binder den till ODÖMBART.
+RENT_STOPP = 3
+
+# Brytarens exitkoder, skiva 11:s kontrakt. Läses här, dupliceras inte:
+# klassningen görs av brytaren, kedjan väljer bara väg på utfallet.
+BR_KANDIDAT, BR_ANROPSFEL, BR_OPPEN, BR_BUDGET_SLUT = 0, 1, 9, 10
+BR_FAILURE = range(3, 9)
+
 TEXTFALT = ("spec", "attest_dir", "state_dir", "lease_dir", "lease_resurs",
-            "workspace_rot", "base_sha", "verifier_id", "run_id")
+            "workspace_rot", "base_sha", "verifier_id", "run_id", "brytare_rot")
+HELTALSFALT = ("budget", "troskel")
+
+# Varvets utfall. Att de är strängar och inte koder är avsiktligt: de läses
+# bara här, och en kod till hade blandats ihop med systrarnas.
+ATTESTERAD, FALLET, VARV_SLUT, STOPP = "attesterad", "fallet", "varv_slut", "stopp"
 
 
 class Avbryt(Exception):
@@ -104,7 +141,8 @@ def sista(text: str) -> str:
 
 def las_config(fil: Path) -> dict:
     """Config prövas i sin helhet före leasen. Ett fält som saknas ska fälla
-    körningen innan den rör en lease, en logg eller ett workspace."""
+    körningen innan den rör en lease, en logg, ett workspace eller en
+    brytarkatalog."""
     try:
         k = json.loads(fil.read_text(encoding="utf-8"))
     except OSError as e:
@@ -117,6 +155,14 @@ def las_config(fil: Path) -> dict:
     for f in TEXTFALT:
         if not isinstance(k.get(f), str) or not k[f]:
             raise Avbryt(f"config: {f} saknas eller är ingen icke-tom sträng")
+
+    for f in HELTALSFALT:
+        v = k.get(f)
+        # bool är en int i Python; True som budget vore ett tal av misstag.
+        # Värdeområdet prövas av brytaren, som äger budgeten — en andra regel
+        # om samma tal hade blivit den andra sanningen.
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise Avbryt(f"config: {f} måste vara ett heltal, fick {v!r}")
 
     kommando = k.get("worker_cmd")
     if not isinstance(kommando, list) or not kommando or not all(
@@ -138,84 +184,91 @@ def utsaga(nr: int, task: str, steg: str, text: str) -> None:
     return None
 
 
-def kandidattradet(ws: str, sha: str) -> str | None:
-    """Är workspacets träd kandidatens träd? Annars skälet.
+def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int) -> tuple[str, str | None]:
+    """Ett försök inuti claimet. Kandidatens SHA vid attestation, annars None.
 
-    Verifieraren dömer en KATALOG; policyn dömde ett COMMIT. Är de inte samma
-    sak attesterar vi ett träd som ingen kandidat bär: HEAD kan peka någon
-    annanstans än det workern påstod, och ocommitterat arbete ligger utanför
-    varje SHA. Attestationen är SHA-bunden (v4.1 §2 invariant 4) — då måste
-    det som verifieras vara det SHA:t.
+    Eget workspace, eget kuvert, ett anrop till brytaren. Basen är densamma
+    för varje försök: ett fallet försök flyttar ingenting.
     """
-    r = kor(["git", "-C", ws, "rev-parse", "HEAD"])
-    if r.returncode != 0:
-        return f"workspacets HEAD kunde inte läsas — {sista(r.stderr)}"
-    if r.stdout.strip() != sha:
-        return (f"workspacets HEAD är {r.stdout.strip()}, inte kandidaten {sha} — "
-                "trädet som skulle verifieras är inte kandidatens")
-    r = kor(["git", "-C", ws, "status", "--porcelain"])
-    if r.returncode != 0:
-        return f"workspacets status kunde inte läsas — {sista(r.stderr)}"
-    if r.stdout.strip():
-        return (f"ocommitterat kvar i workspacet: {enrad(r.stdout, 120)} — "
-                "trädet är inte kandidatens")
-    return None
-
-
-def varv(k: dict, task: str, base: str, tmpkat: Path, nr: int) -> str | None:
-    """Ett varv enligt v4.1 §13. Kandidatens SHA vid attestation, annars None."""
-    attempt = f"{k['run_id']}-{task}"
+    attempt = f"{k['run_id']}-{task}-{f}"
     ws = None
     try:
         # attempt-id:ts form prövas av skiva 5, inte här: en andra regel om
         # samma sträng hade blivit den andra sanningen.
         r = kor([WORKSPACE, k["workspace_rot"], "create", attempt, base])
         if r.returncode != 0:
-            return utsaga(nr, task, "workspace", r.stderr or r.stdout)
+            utsaga(nr, task, "workspace", r.stderr or r.stdout)
+            return VARV_SLUT, None
         ws = r.stdout.strip()
 
         r = kor([ENVELOPE, "build", k["run_id"], task, base, k["spec"]])
         if r.returncode != 0:
-            return utsaga(nr, task, "kuvert", r.stdout)
-        # Kuvertet läggs ALDRIG i workspacet: workern stageer där, och kuvertet
-        # hade följt med in i kandidaten (skiva 6c, samma skäl).
+            utsaga(nr, task, "kuvert", r.stdout)
+            return VARV_SLUT, None
+        # Kuvertet läggs ALDRIG i workspacet: utföraren kör `git add -A` där,
+        # och kuvertet hade följt med in i kandidaten (skiva 6c, samma skäl).
         kuvertfil = tmpkat / f"{attempt}.kuvert.json"
         kuvertfil.write_text(r.stdout, encoding="utf-8")
 
-        r = kor([LAUNCH, "run", ws, kuvertfil, k["timeout_s"], "--", *k["worker_cmd"]],
-                text=False)
-        if r.returncode != 0:
-            return utsaga(nr, task, "launch", r.stdout.decode("utf-8", "replace"))
-        # Rapporten går till fil i BYTES. Skiva 6 dömer själv om den är läsbar
-        # UTF-8; en avkodning här hade gjort en oparsbar rapport parsbar.
+        r = kor([BRYTARE, "kor", Path(k["brytare_rot"]) / task, task,
+                 k["budget"], k["troskel"], ws, kuvertfil, k["timeout_s"],
+                 "--", *k["worker_cmd"]], text=False)
+        # Rapporten hålls i BYTES hela vägen. Skiva 6 dömer själv om den är
+        # läsbar UTF-8; en avkodning här hade gjort en oparsbar rapport
+        # parsbar. Avkodningen nedan är bara till utsagorna.
+        kod, rapport = r.returncode, r.stdout
+        ut = rapport.decode("utf-8", "replace")
+
+        if kod == BR_ANROPSFEL:
+            # Brytaren startade inget kommando och förbrukade ingen budget.
+            # Ett omförsök hade snurrat för evigt; ett tyst drain hade dolt
+            # att försöket aldrig ens gjordes.
+            raise Avbryt(f"brytare: {enrad(ut)}")
+        if kod == BR_BUDGET_SLUT:
+            print(f"varv {nr} {task}: {enrad(ut)}")
+            return VARV_SLUT, None
+        if kod == BR_OPPEN:
+            utsaga(nr, task, "forsok", ut)
+            return STOPP, None
+        if kod in BR_FAILURE:
+            utsaga(nr, task, "forsok", ut)
+            return FALLET, None
+        if kod != BR_KANDIDAT:
+            raise Avbryt(f"brytare: exitkod {kod} utanför kontraktet 0/1/3–8/9/10 "
+                         f"— {enrad(ut)}")
+
         rapportfil = tmpkat / f"{attempt}.rapport"
-        rapportfil.write_bytes(r.stdout)
+        rapportfil.write_bytes(rapport)
 
         r = kor([WORKER, "parse", rapportfil])
         if r.returncode != 0:
-            return utsaga(nr, task, "parse", r.stdout)
+            utsaga(nr, task, "parse", r.stdout)
+            return FALLET, None
         sha = r.stdout.strip()
 
         r = kor([POLICY, "check", task, base, sha, k["spec"]])
         if r.returncode != 0:
-            return utsaga(nr, task, "policy", r.stdout)
+            utsaga(nr, task, "policy", r.stdout)
+            return FALLET, None
 
-        skäl = kandidattradet(ws, sha)
-        if skäl is not None:
-            return utsaga(nr, task, "kandidatträd", skäl)
-
+        # Ingen kandidatträdskontroll. Utföraren gör "HEAD är kandidaten" och
+        # "rent träd" sanna i samma andetag, så en kontroll här kunde per
+        # konstruktion aldrig fälla — precis det oombedda skyddslager regel 9
+        # talar om (LOOP-ÄGARHAND-36, avgörande 5).
         r = kor([VERIFY, "run", k["verifier_id"], ws])
         if r.returncode != 0:
-            return utsaga(nr, task, "verifierare", r.stdout or r.stderr)
+            utsaga(nr, task, "verifierare", r.stdout or r.stderr)
+            return FALLET, None
 
         r = kor([ATTEST, k["attest_dir"], "write", task, sha])
         if r.returncode != 0:
-            return utsaga(nr, task, "attest", r.stderr or r.stdout)
+            utsaga(nr, task, "attest", r.stderr or r.stdout)
+            return FALLET, None
 
         print(f"varv {nr} {task}: attesterad {sha}")
-        return sha
+        return ATTESTERAD, sha
     finally:
-        # Workspacet rivs efter varvet — kandidatens commit är beviset, inte
+        # Workspacet rivs efter försöket — kandidatens commit är beviset, inte
         # katalogen. En städning som inte städade får aldrig passera tyst:
         # skiva 5 rapporterar utfallet, och den rapporten bärs vidare.
         if ws is not None:
@@ -224,7 +277,22 @@ def varv(k: dict, task: str, base: str, tmpkat: Path, nr: int) -> str | None:
                 raise Avbryt(f"workspace: {attempt} kunde inte rivas — {sista(r.stderr)}")
 
 
-def drain(k: dict, tmpkat: Path) -> None:
+def varv(k: dict, task: str, base: str, tmpkat: Path, nr: int) -> tuple[str, str | None]:
+    """Ett varv = ETT claim och ett eller flera försök.
+
+    Loopen tar slut av sig själv: brytaren räknar varje startat försök och
+    svarar BUDGET_SLUT när taket är nått. Anropsfel och öppen brytare lämnar
+    den på egen hand, och kedjefel före brytaren gör aldrig om något.
+    """
+    f = 0
+    while True:
+        f += 1
+        utfall, sha = forsok(k, task, base, tmpkat, nr, f)
+        if utfall is not FALLET:
+            return utfall, sha
+
+
+def drain(k: dict, tmpkat: Path) -> int:
     base, nr, attesterade = k["base_sha"], 0, 0
     sedda: set[str] = set()
     while True:
@@ -242,10 +310,17 @@ def drain(k: dict, tmpkat: Path) -> None:
             raise Avbryt(f"taskval: {task} valdes två gånger — claimet tog inte")
         sedda.add(task)
         nr += 1
-        sha = varv(k, task, base, tmpkat, nr)
-        if sha is not None:
+        utfall, sha = varv(k, task, base, tmpkat, nr)
+        if utfall is ATTESTERAD:
             base, attesterade = sha, attesterade + 1
+        elif utfall is STOPP:
+            # FÖRE nästa claim: nästa task ska vara helt orörd när körningen
+            # tas om, annars kostar stoppet en task per omstart.
+            print(f"drain stoppat: brytaren öppen på {task} — "
+                  f"{nr} varv, {attesterade} attesterade, base {base}")
+            return RENT_STOPP
     print(f"drain klar: {nr} varv, {attesterade} attesterade, base {base}")
+    return 0
 
 
 def gor_run(configfil: Path) -> int:
@@ -259,14 +334,13 @@ def gor_run(configfil: Path) -> int:
 
     tmpkat = Path(tempfile.mkdtemp(prefix="nortropic-loop-"))
     try:
-        drain(k, tmpkat)
+        return drain(k, tmpkat)
     finally:
         try:
             shutil.rmtree(tmpkat)
         except OSError as e:
             print(f"VARNING: temp-katalogen {tmpkat} blev kvar — {e}", file=sys.stderr)
         kor([LEASE, k["lease_dir"], "release", k["lease_resurs"]])
-    return 0
 
 
 def main(argv: list[str]) -> int:
