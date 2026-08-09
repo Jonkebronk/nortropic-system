@@ -137,6 +137,7 @@ grep -rn "doctor #5\|doctor#5" . --include=*.js --include=*.mjs --include=*.md |
 | h-014 | 12 Notisen | Fyra händelser ger notis, vanligt varv ger ingen · controllern skickar, aldrig workern · trasig webhook lämnar körningen ostörd · URL:en läcker inte till stdout, stderr eller fel |
 | h-015 | 13 Återtaget | Attesterat väljs inte om · fallet blir valbart igen med bevarad historik · öppen brytare överlever omstart · lease återtas efter TTL, aldrig före · två återstarter = en ägare |
 | h-016 | 14 Kedjan kopplas in | Session som ENDAST redigerar attesteras ändå, kandidaten bär författaren `nortropic-utforare` · session som committar själv ger ingen attestation · omförsök inuti claimet: eget workspace per försök på oförändrad base, exakt ett claimed-event · budget och fingerprints per task · öppen brytare avslutar drainet FÖRE nästa claim med exit 3 · brytarens anropsfel fäller körningen med exit 1 · config prövad i sin helhet före leasen |
+| h-017 | 15 Per-task-domen | Taskens egen grind körs mot kandidatträdet UTÖVER configens verifierare — båda måste vara gröna · grinden slås upp på SÖKVÄG ur spec-radens `exit_test`, aldrig på id, så den som skriver registret aldrig kan peka om sin egen task · registret prövas i sin helhet FÖRE leasen och taskens post överst i varvet, så riggfel stannar innan modellkvot bränns · röd grind kostar försök som varje annat nedströmsavslag · domen bokförs i attestationen med `grind_id`, och en ogrindad task attesteras som förut men UTAN det fältet |
 
 Skivorna 6b, 6c, 8 och 9 tillkom efter planens skrivning (LOOP-ÄGARHAND-16–27), skivorna 10–13
 2026-08-08 efter smoke-momentet, skiva 14 2026-08-09 (LOOP-ÄGARHAND-36). Specen och
@@ -155,6 +156,15 @@ Formuleringen *11 blockerar 12 och 13* var ofullständig (rättat 2026-08-09, LO
 h-014 och h-015 kräver båda att loopen faktiskt anropar det de vilar på — notisen ska skickas
 ur ett verkligt varv, och återtaget förutsätter en bevarad failure-historik som bara uppstår
 när kedjan går genom brytaren. Inkopplingen måste därför ske FÖRE dem.
+
+**Skiva 15 ligger före 12 och 13, och skälet är vad autonomin är värd.** Efter skiva 14
+betyder en attestation *diffen var laglig och de globala invarianterna höll* — inte att
+tasken är löst; taskens `exit_test` körs aldrig av kedjan, eftersom fältet medvetet
+utelämnas ur kuvertet så workern inte kan tuna mot sin egen grind. Så länge det står
+skalar autonomin med hur mycket diff en människa orkar läsa, och mer uthållighet
+(notis, återtag) ger bara fler okontrollerade kandidater. Skiva 15 låter CONTROLLERN köra
+grinden — workern ser den fortfarande aldrig — och gör därmed attestationen värd namnet.
+Ordningen blir: **14 → 15 → 12 → 13.**
 
 **Och att skiva 11 ersätter dagens attempt-budget-av-slump** (en fallen task förblir claimed
 och är ovalbar resten av körningen, så varje task får exakt ett försök) blir sant först av
