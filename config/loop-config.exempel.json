@@ -1,0 +1,16 @@
+{
+  "spec": "config/premiar-backlog.json",
+  "attest_dir": "/Users/elinhaggstrom/.nortropic/kor/attest",
+  "state_dir": "/Users/elinhaggstrom/.nortropic/kor/state",
+  "lease_dir": "/Users/elinhaggstrom/.nortropic/kor/lease",
+  "lease_resurs": "kedjan",
+  "workspace_rot": "/Users/elinhaggstrom/.nortropic/kor/workspaces",
+  "brytare_rot": "/Users/elinhaggstrom/.nortropic/kor/brytare",
+  "base_sha": "ERSÄTT-MED-git-rev-parse-HEAD",
+  "verifier_id": "check-invariants",
+  "run_id": "ERSÄTT-MED-unikt-id-per-körning",
+  "worker_cmd": ["bash", "config/worker-prompt.sh"],
+  "timeout_s": 900,
+  "budget": 3,
+  "troskel": 2
+}
