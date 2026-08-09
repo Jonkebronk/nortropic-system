@@ -78,9 +78,26 @@ attestationer, noll omförsök, verkliga Claude-sessioner. Sessionerna tog 10–
 - **Grindarnas kostnad är mätt:** h-002 0,2 s · h-007 2,4 s · h-013 7,7 s · h-011 10,7 s ·
   p-001 17 s · h-016 29 s. Ingen grind når en minut.
 
+### Repository identity — MÄTT efter ägarbeslutad transfer (2026-08-09)
+
+```
+REPOSITORY_IDENTITY_BEFORE = Jonkebronk/nortropic-system
+REPOSITORY_IDENTITY_AFTER  = Nortropic/nortropic-system
+REPOSITORY_ID              = OFÖRÄNDRAT
+DEFAULT_BRANCH             = main
+origin/main efter transfer = exakt samma commit som före
+plan/autonomous-loop-v1    = följde med, tip 9bc1c6187da44173d5e29d440cf97d72dae22b0a
+```
+
+Transfern flyttade ägarskapet till organisationen `Nortropic`. Eftersom repository-id är
+oförändrat och `origin/main` inte rörde sig, är **ingen mätning i denna plan ogiltigförklarad av
+transfern** — bara identiteten den uttrycks i. Promotion-scope och GitHub App-målbilden är
+omskrivna därefter; allt annat står orört.
+
 ### GitHub-läget — MÄTT av ägaren utanför sandboxen (2026-08-09)
 
-Detta ersätter revision 1:s OVERIFIERAT om branch protection.
+Detta ersätter revision 1:s OVERIFIERAT om branch protection. Classic branch protection **följde
+med transfern** och är mätt igen efteråt.
 
 ```
 CLASSIC BRANCH PROTECTION på main
@@ -94,8 +111,9 @@ CLASSIC BRANCH PROTECTION på main
   conversation resolution     = NO
 
 ACTIVE RULES ON main          = []
-REPOSITORY RULESET            id=20553421  name=main  target=branch  enforcement=active
-  rules/branches/main         = []
+REPOSITORY RULESET            id=20553421  följde med transfern
+  status                      = EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN
+  rules/branches/main         = []   (fortfarande tomt efter transfern)
 ```
 
 **Följd för planen:** auto-promotion faller mot dagens `main` — PR krävs och `enforce admins`
@@ -104,9 +122,12 @@ S7 måste hantera med en avgränsad bypass (se PROMOTION_PLAN §PR-BYPASS). Att 
 radering redan är avstängda på GitHub-sidan är en **andra spärr** bakom planens egen regel —
 inte planens enda skydd.
 
-**OVERIFIERAT kvar:** rulesetet `id=20553421` är aktivt men `rules/branches/main` svarade tomt.
-Dess exakta detaljkonfiguration är inte tillräckligt analyserad för att vara promotion-policy.
-Måste läsas i sin helhet innan S7 byggs.
+**Ruleset `id=20553421` — `EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN`.** Det följde med transfern,
+men `rules/branches/main` returnerar fortfarande `[]`. **Det ska därför inte behandlas som ett
+bevisat aktivt skydd för `main`** — varken som något planen får luta sig mot eller som något
+planen får anta blockerar promotion. De skydd planen räknar med är classic branch protection,
+som ÄR mätt. Rulesetets faktiska innehåll måste ändå läsas i sin helhet innan S7 byggs, eftersom
+ett skydd som inte syns i den vyn kan visa sig först vid en push.
 
 ---
 
@@ -696,7 +717,7 @@ NEGATIVE_CONTROLS                  attestation utan grind_id befordras · main r
                                    dubbelkörning ger två promotions · promotion efter leaseförlust ·
                                    credential läsbar för buildern · credential i controllerns
                                    miljövariabler · promotion mot annat repo än
-                                   Jonkebronk/nortropic-system
+                                   Nortropic/nortropic-system
 TRUST_IMPACT                       HÖGST i hela planen. Tar bort människan ur merge-gaten.
 STATE_IMPACT                       ny promotion-state med intent, utfall och post-check. Måste
                                    vara idempotent och crash-safe (se PROMOTION_PLAN).
@@ -984,12 +1005,13 @@ försök** — annars lämnas workspace och lease i obestämt läge.
 ## PROMOTION_PLAN
 
 ```
-AUTHORITATIVE_MAIN            = origin/main hos Jonkebronk/nortropic-system
+AUTHORITATIVE_MAIN            = origin/main hos Nortropic/nortropic-system
 LOCAL_MAIN_ROLE               = arbetskopia/cache. ALDRIG promotion-authority.
 ORIGIN_MAIN_ROLE              = sanning. Läses maskinellt och verifieras vid varje promotion.
 PROMOTION_IDENTITY            = DEDICATED_GITHUB_APP_INSTALLATION
 PROMOTION_APP                 = Nortropic Promoter
-PROMOTION_REPOSITORY_SCOPE    = Jonkebronk/nortropic-system only
+PROMOTION_OWNER               = Nortropic organization
+PROMOTION_REPOSITORY_SCOPE    = Nortropic/nortropic-system only
 PROMOTION_PERMISSIONS         = Metadata: Read · Contents: Read & Write   (inget mer)
 PROMOTION_MODE                = FAST_FORWARD_ONLY, NON-FORCE
 FORCE_SEMANTICS_ALLOWED       = NEJ, i ingen väg
@@ -1300,7 +1322,7 @@ körning → hela batteriet → **körning i ägarterminalen före merge**.
 
 **Ägarens prerequisites som inte är slices** (görs utanför loopen, före S7 byggs):
 skapa GitHub App *Nortropic Promoter* med Metadata:Read + Contents:Read&Write, scope enbart
-`Jonkebronk/nortropic-system` · lägg appen i `bypass_pull_request_allowances.apps` · läs
+`Nortropic/nortropic-system` · lägg appen i `bypass_pull_request_allowances.apps` · läs
 ruleset `id=20553421` i sin helhet.
 
 ---
@@ -1402,7 +1424,7 @@ Granskningen kördes om mot faktisk kod efter att ägarbesluten skrivits in.
 | 18 | Finns NEEDS_SPEC? | **Ja**, med `BUILDER_STARTS = 0` som mätbart utfall i både S10 och S11. |
 | 19 | Kan event projection bli authority? | **Fynd, rättat.** S5 bär nu kravet att en körning med raderad eventström ger identiska domar, plus negativ kontroll mot komponenter som fattar beslut ur strömmen. |
 | 20 | Kan dashboardfailure påverka controllern? | **Fynd, rättat.** Både S6 och S13 kräver nu att en nere/trasig yta ger identiska attestationer och exitkod. |
-| 21 | Kan promotionmekanismen börja skriva kundrepo? | **Nej.** `PROMOTION_REPOSITORY_SCOPE = Jonkebronk/nortropic-system only` står i appens installation, i S7:s kriterium och som negativ kontroll. |
+| 21 | Kan promotionmekanismen börja skriva kundrepo? | **Nej.** `PROMOTION_REPOSITORY_SCOPE = Nortropic/nortropic-system only` står i appens installation, i S7:s kriterium och som negativ kontroll. |
 | 22 | Är repository scope explicit? | **Ja**, uttryckligen i denna version. |
 
 **Korrigeringar som runda 2 gjorde i planen:** credentialen flyttad ut ur miljön (fynd 8) ·
@@ -1416,9 +1438,10 @@ kriterium · `--force-with-lease` struket överallt.
 
 ## OVERIFIERAT
 
-- **Ruleset `id=20553421`.** Aktivt på `main`, men `rules/branches/main` svarade tomt. Dess
-  exakta detaljkonfiguration är inte tillräckligt analyserad för att vara promotion-policy och
-  **måste läsas i sin helhet före S7 byggs.**
+- **Ruleset `id=20553421` — `EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN`.** Det följde med transfern
+  till `Nortropic`, men `rules/branches/main` returnerar fortfarande `[]`. Det behandlas därför
+  varken som ett bevisat skydd eller som ett bevisat icke-skydd, och **måste läsas i sin helhet
+  före S7 byggs.**
 - **Att G20:s krav går att uppfylla.** Kravet är formulerat och mätbart, men ingen har byggt
   provet. Att en trust-critical kandidat med saboterad komponent faktiskt kan stoppas är
   konstruerat, inte mätt.

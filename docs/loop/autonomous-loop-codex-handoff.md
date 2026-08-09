@@ -25,10 +25,15 @@ Revision 1 (`d2394d6`) föreslog `--force-with-lease` och är **överspelad**.
 START=S1/h-017
 G20_BLOCKING=YES
 
+REPOSITORY=Nortropic/nortropic-system
 PROMOTION_IDENTITY=Nortropic Promoter GitHub App
+PROMOTION_APP=Nortropic Promoter
+PROMOTION_OWNER=Nortropic organization
+PROMOTION_REPOSITORY_SCOPE=Nortropic/nortropic-system only
 PROMOTION_FORCE_ALLOWED=NO
 PROMOTION_MODE=FAST_FORWARD_ONLY
 AUTHORITATIVE_MAIN=origin/main
+RULESET_20553421=EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN
 
 ATTESTATION_WITHOUT_TASK_GATE_PROMOTABLE=NO
 
@@ -131,11 +136,13 @@ Mergevillkoret kedjas: `./verify/bin/h-0NN-exit && gh pr merge --rebase --delete
 
 Stanna och fråga ägaren när något av detta inträffar:
 
-- **Ruleset `id=20553421`** visar sig kräva något som kolliderar med promotionmodellen. Det är
-  aktivt på `main` men `rules/branches/main` svarade tomt — **läs det i sin helhet före S7**.
+- **Ruleset `id=20553421`** visar sig kräva något som kolliderar med promotionmodellen. Status:
+  `EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN` — det följde med transfern men `rules/branches/main`
+  returnerar fortfarande `[]`, så det är inte ett bevisat aktivt skydd för `main`.
+  **Läs det i sin helhet före S7.**
 - **GitHub App *Nortropic Promoter* finns inte ännu.** Den skapas av ägaren, inte av en byggsession.
-  Scope: `Jonkebronk/nortropic-system` only. Permissions: Metadata Read, Contents Read & Write —
-  inget mer utan konkret mekaniskt behov.
+  Owner: `Nortropic` organization. Scope: `Nortropic/nortropic-system` only. Permissions:
+  Metadata Read, Contents Read & Write — inget mer utan konkret mekaniskt behov.
 - En slice kräver ändring i en fil **utanför sin `allowed_write`** — det är en spec-radsfråga,
   inte en implementationsfråga. (Hände redan en gång: bokföringsklausulen i h-017 gick inte att
   uppfylla i sin egen yta, ÄGARHAND-42.)
@@ -148,9 +155,15 @@ Stanna och fråga ägaren när något av detta inträffar:
 
 ---
 
-## MÄTT GITHUB-LÄGE (ägaren, 2026-08-09)
+## MÄTT GITHUB-LÄGE (ägaren, 2026-08-09, efter ägarbeslutad transfer)
 
 ```text
+REPOSITORY_IDENTITY         = Nortropic/nortropic-system   (var Jonkebronk/nortropic-system)
+repository id               = OFÖRÄNDRAT
+default branch              = main
+origin/main efter transfer  = exakt samma commit som före
+plan/autonomous-loop-v1     = följde med, tip 9bc1c6187da44173d5e29d440cf97d72dae22b0a
+
 require pull request        = YES
 required approving reviews  = 0
 enforce admins              = YES
@@ -160,9 +173,14 @@ force pushes                = DISABLED
 deletions                   = DISABLED
 conversation resolution     = NO
 ACTIVE RULES ON main        = []
-REPOSITORY RULESET          id=20553421 name=main target=branch enforcement=active
-                            rules/branches/main = []   ← OVERIFIERAT, läs före S7
+REPOSITORY RULESET          id=20553421 följde med transfern
+                            EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN
+                            rules/branches/main = []   ← läs i sin helhet före S7
 ```
+
+Classic branch protection följde med transfern och är mätt efteråt: force push och deletion är
+fortsatt förbjudna, PR-kravet finns kvar. Rulesetet är INTE ett bevisat aktivt skydd för `main`
+och ska inte behandlas som ett.
 
 Auto-promotion faller mot dagens `main` tills *Nortropic Promoter* ligger i
 `bypass_pull_request_allowances.apps`. **Bypassen gäller endast PR-kravet** — ingen generell
