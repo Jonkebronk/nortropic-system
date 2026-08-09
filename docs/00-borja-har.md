@@ -58,7 +58,8 @@ puttandet: det läser nästa uppgift ur 100-dagarsprogrammet, startar en färsk 
 gör exakt den uppgiften i ett eget rum, kontrollerar mekaniskt att den höll sig innanför
 ramarna, och lägger fram resultatet för dig att godkänna. Det bygger och förbättrar bara
 fabriken — kundflödet rör det aldrig, och grundlagen ([07-konstitution.md](07-konstitution.md))
-rör bara du. Planen står i [docs/loop/byggplan-v3.md](loop/byggplan-v3.md).
+rör bara du. Planen står i [docs/loop/byggplan-v3.md](loop/byggplan-v3.md), och hur du
+kör den står i [docs/loop/drift.md](loop/drift.md).
 
 ## Vakten som läser förslaget innan du gör det
 
