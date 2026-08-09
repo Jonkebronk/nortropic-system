@@ -53,6 +53,14 @@ REVIDERAD FÖR SKIVA 14 (h-016). Kedjan går nu genom brytaren och utföraren:
   B10 Budget och fingerprints räknas per task, i `<brytare_rot>/<task-id>`.
   B11 Öppen brytare ger exit 3 — skilt från både drain och fel.
   B12 Brytaren bokför varje STARTAT försök, även det som lyckades.
+  B13 Brytarens anropsfel fäller körningen — och kedjan snurrar aldrig.
+
+MÄTT 2026-08-09, sju defekta varianter av `controller/loop/cli` mot båda
+proven, en namngiven defekt var: förbi brytaren med egen räknare · eget event
+per försök · återanvänt workspace mellan försöken · gemensam brytarkatalog ·
+öppen brytare sväljd · config prövad efter leasen · anropsfel behandlat som ett
+vanligt fallet försök. h-016-grinden fällde ALLA sju. Fallfilen fällde sex —
+den sista, anropsfelet, passerade orört, och det hålet är B13 plus `FRIST`.
 """
 
 import hashlib
@@ -67,7 +75,14 @@ ROT = Path(__file__).resolve().parents[3]
 CLI = ROT / "controller/loop/cli"
 ST = ROT / "controller/state/cli"
 ATT = ROT / "controller/attest/cli"
+LE = ROT / "controller/lease/cli"
 PY = sys.executable
+
+# VARJE KEDJEKÖRNING HAR EN FRIST. En implementation som snurrar — t.ex. en som
+# gör om ett anropsfel som per konstruktion aldrig förbrukar budget — ska ge ett
+# högljutt fall, aldrig en hängd fallfil. Kod 124 är ingen komponentkod, så
+# ingen gren kan råka vänta sig den.
+FRIST = 180
 
 # Husets standardtal. TRÖSKELN ÄR STRIKT HÖGRE ÄN BUDGETEN: utförarens kod 6
 # fingerprintas, så en tröskel som kan nås hade gjort ett väntat exit 0 till
@@ -182,7 +197,14 @@ def rigga(kat: Path, namn: str, tasks: list[dict], worker: str, **override) -> P
 
 
 def kor(config: Path) -> subprocess.CompletedProcess:
-    return subprocess.run([str(CLI), "run", str(config)], capture_output=True, text=True)
+    try:
+        return subprocess.run([str(CLI), "run", str(config)],
+                              capture_output=True, text=True, timeout=FRIST)
+    except subprocess.TimeoutExpired as e:
+        ut = e.stdout or b""
+        return subprocess.CompletedProcess(
+            e.cmd, 124, ut.decode("utf-8", "replace") if isinstance(ut, bytes) else ut,
+            f"FRISTEN {FRIST} s LÖPTE UT — kedjan snurrade i stället för att svara")
 
 
 def task(tid: str, yta: str, dep: list[str] | None = None) -> dict:
@@ -230,6 +252,12 @@ def brytfalt(config: Path, tid: str, namn: str):
         return None
     # .get(), aldrig []: ett tillstånd utan fältet ska bli FEL, inte traceback.
     return json.loads(f.read_text(encoding="utf-8")).get(namn)
+
+
+def lease_agare(config: Path) -> str:
+    return subprocess.run([str(LE), falt(config, "lease_dir"), "owner",
+                           falt(config, "lease_resurs")],
+                          capture_output=True, text=True).stdout.strip()
 
 
 def starter(ut: Path, tid: str) -> int:
@@ -392,6 +420,30 @@ def main() -> int:
         c_fel = rigga(kat, "b11c", [task("gron", "tests/kedjefix/**")], ren, budget="1")
         krav(kor(c_ok).returncode == 0 and kor(c_fel).returncode == 1,
              "B11 exit 3 är skilt från både slutförd drain (0) och fel (1)")
+
+        # B13 — brytarens anropsfel fäller körningen, och kedjan snurrar aldrig.
+        # Provokationen är en KATALOGPLATS SOM ÄR EN FIL: brytaren faller på sin
+        # mkdir. Ett anropsfel förbrukar per konstruktion INGEN budget, så en
+        # kedja som gör om det snurrar tills fristen fäller den — mätt 2026-08-09
+        # som den enda av sju defekta varianter fallfilen INTE fångade.
+        c = rigga(kat, "b13", [task("e-ett", "tests/kedjefix/**"),
+                               task("e-tva", "tests/kedjefix/**")], FALLER,
+                  budget=5, troskel=9)
+        br = Path(falt(c, "brytare_rot"))
+        br.mkdir(parents=True, exist_ok=True)
+        (br / "e-ett").write_text("inte en katalog\n", encoding="utf-8")
+        r = kor(c)
+        krav(r.returncode == 1,
+             "B13 brytarens anropsfel fäller HELA körningen med exit 1, aldrig ett tyst drain")
+        # Brytarens EGEN text, ordagrant: utan den räcker det att NÅGOT föll på
+        # provokationen — en kedja som själv förskapar katalogen snubblar i sin
+        # egen mkdir och når aldrig brytaren.
+        krav("anropsfel" in (r.stdout + r.stderr) and str(br / "e-ett") in (r.stdout + r.stderr),
+             "B13 brytarens egen orsak bärs vidare — felet kom FRÅN brytaren")
+        krav(starter(ut, "e-ett") == 0, "B13 inget kommando startades")
+        krav(eventrader(c) == 1 and not giltig(c, "e-tva"),
+             "B13 drainet fortsatte inte till nästa task")
+        krav(lease_agare(c) == "", "B13 leasen är släppt även när körningen faller")
 
     print()
     print(f"{len(fel)} FEL" if fel else "alla fall håller")
