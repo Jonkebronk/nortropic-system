@@ -30,6 +30,15 @@ ett fel, aldrig ett färskt tillstånd och startar aldrig kommandot (kanarie)
 — en öppen brytare får inte nollställas tyst eller köras förbi · toppvakten (utforaren saknas → internt fel på stdout,
 aldrig stackspår) · exitkod 2 aldrig, svept över samtliga fall.
 
+Sist ligger ÄGARHAND-35:s tre registrerade men OBUNDNA fynd, dokumenterade
+som uppmätt beteende och inte åtgärdade: h-009:s klipp vid 200 tecken
+splittrar samma fel i flera fingerprints när prefixet varierar i LÄNGD ·
+VAG:s giriga match med `:` i gränsklassen raderar värdnamnet ur en URL, så
+två fel mot olika ändpunkter smälter ihop till en klass · fingerprint-
+nycklarna gallras aldrig, så tillstand.json växer monotont. Fallen SKRIVER
+NED felmoderna, de påstår inte att de är önskade; faller något av dem har
+beteendet ändrats, vilket är precis vad de finns till för att märka.
+
 Workspaces är FRISTÅENDE temp-repon, med avsikt (h-012-formen): brytaren
 arbetar via utforaren som arbetar uteslutande `git -C <ws>`. Delad
 objektdatabas med roten är h-006:s behov och prövas av grinden via h-005;
@@ -49,6 +58,11 @@ CLI = ROT / "controller/brytare/cli"
 UTFORARE = ROT / "controller/utforare/cli"
 ANROP, LAUNCH, NONZERO, TIMEOUT, INGEN_KANDIDAT, GITFEL, INTERNT = 1, 3, 4, 5, 6, 7, 8
 OPPEN, BUDGET_SLUT = 9, 10
+
+# Längre än h-009:s klipp (controller/launch/cli `kort`, 200 tecken), utan
+# siffror och snedstreck så varken SIFFROR eller VAG rör svansen: det enda som
+# kan skilja två normaliserade svansar åt är hur många tecken klippet lämnade.
+SVANS = "x" * 300
 
 SKRIPT = {
     "andra.sh": '#!/usr/bin/env bash\necho ny > fil.txt\n',
@@ -73,6 +87,22 @@ SKRIPT = {
     "proc64.sh": '#!/usr/bin/env bash\necho "usage: worker [flaggor]"\nexit 64\n',
     "sig-term.sh": '#!/usr/bin/env bash\nkill -s TERM $$\n',
     "sig-kill.sh": '#!/usr/bin/env bash\nkill -s KILL $$\n',
+    # ÄGARHAND-35:s tre registrerade men obundna fynd, en fixturfamilj var.
+    # (1) Svansen är längre än h-009:s klipp, prefixen olika LÅNGA (7/12/7
+    # tecken) med samma siffernormaliserade form — klipputfallet skiljer sig
+    # alltså bara när längden gör det. Samma processkod (3) i alla tre, så
+    # processkodsledet inte kan förklara någon skillnad.
+    "klipp-kort.sh": f'#!/usr/bin/env bash\necho "fel 7: {SVANS}" >&2\nexit 3\n',
+    "klipp-lang.sh": f'#!/usr/bin/env bash\necho "fel 123456: {SVANS}" >&2\nexit 3\n',
+    "klipp-lika.sh": f'#!/usr/bin/env bash\necho "fel 8: {SVANS}" >&2\nexit 3\n',
+    # (2) Två OLIKA ändpunkter, allt annat identiskt inklusive processkoden.
+    "url-alfa.sh": '#!/usr/bin/env bash\n'
+                   'echo "anslutningen mot https://api.alfa.example/v1/kor nekades" >&2\nexit 5\n',
+    "url-beta.sh": '#!/usr/bin/env bash\n'
+                   'echo "anslutningen mot https://api.beta.example/v2/stang nekades" >&2\nexit 5\n',
+    # (3) Sorten kommer som argument och är en BOKSTAV — siffror hade jämnats
+    # ut av normaliseringen till en enda nyckel, och då mäts ingen tillväxt.
+    "sort.sh": '#!/usr/bin/env bash\necho "fel av sorten $1 i steget" >&2\nexit 3\n',
 }
 
 
@@ -426,6 +456,99 @@ def main() -> int:
          "klassen internt fel på stdout")
     doma("toppvakt/ingen-traceback", "traceback" not in r.stderr.lower(), r.stderr.strip()[:60],
          "stderr utan stackspår")
+
+    # --- ÄGARHAND-35:S TRE REGISTRERADE MEN OBUNDNA FYND ---
+    # De mättes och åtgärdades MEDVETET inte. Fallen nedan ändrar ingenting i
+    # komponenten: de skriver ned det uppmätta beteendet så att en framtida
+    # ändring inte kan göra något av dem värre utan att något mäter det. Faller
+    # ett av dem har beteendet ändrats — inte nödvändigtvis till det sämre, men
+    # aldrig längre omärkt. Alla tre håller processkoden konstant inom sitt
+    # par, så processkodsledet aldrig kan förklara utfallet.
+
+    # (1) KLIPPET VID 200 TECKEN SPLITTRAR. h-009 kortar stderr i `kort()`
+    # innan brytaren ser texten. Varierar prefixet i LÄNGD flyttas klippunkten,
+    # svansen blir olika lång, och normaliseringen — som möts först nedströms —
+    # kan inte längre jämna ut skillnaden. Felmoden är hopsmältningens motsats:
+    # samma fel blir många fingerprints, budgeten bränns och brytaren öppnar
+    # aldrig. Tröskel 2 ska alltså INTE öppna, tvärtemot vad felets identitet
+    # säger.
+    dkl = str(kat / "d-klipp-splittrar")
+    k1, u1, _ = kor("kor", dkl, "h-x", "9", "2", str(FW), str(kuv), "30",
+                    "--", str(kat / "klipp-kort.sh"))
+    k2, u2, _ = kor("kor", dkl, "h-x", "9", "2", str(FW), str(kuv), "30",
+                    "--", str(kat / "klipp-lang.sh"))
+    doma("klipp200/oppnar-inte", k1 == NONZERO and k2 == NONZERO, f"koder {k1}/{k2}",
+         f"{NONZERO} båda gångerna — klippet splittrar samma fel, brytaren öppnar aldrig")
+    doma("klipp200/tva-fingerprints",
+         bool(fprader(u1)) and bool(fprader(u2)) and fprader(u1)[0] != fprader(u2)[0],
+         f"{fprader(u1)[0][-20:] if fprader(u1) else '-'} / "
+         f"{fprader(u2)[0][-20:] if fprader(u2) else '-'}",
+         "olika prefixLÄNGD ger två fingerprints trots att felet är ett")
+    doma("klipp200/svansen-kortad",
+         bool(fprader(u1)) and bool(fprader(u2))
+         and 0 < fprader(u1)[0].count("x") < len(SVANS)
+         and fprader(u1)[0].count("x") != fprader(u2)[0].count("x"),
+         f"{fprader(u1)[0].count('x') if fprader(u1) else '-'} mot "
+         f"{fprader(u2)[0].count('x') if fprader(u2) else '-'} av {len(SVANS)}",
+         "svansen är klippt, och de två klippen är olika långa — klippet är orsaken")
+
+    # Motpolen som visar att det är LÄNGDEN och inte siffran som splittrar:
+    # prefix av samma längd ("fel 7: " mot "fel 8: ") klipps på samma ställe,
+    # normaliseras lika och är EN klass — tröskel 2 öppnar som den ska.
+    dkls = str(kat / "d-klipp-lika-langd")
+    k1, _, _ = kor("kor", dkls, "h-x", "9", "2", str(FW), str(kuv), "30",
+                   "--", str(kat / "klipp-kort.sh"))
+    k2, _, _ = kor("kor", dkls, "h-x", "9", "2", str(FW), str(kuv), "30",
+                   "--", str(kat / "klipp-lika.sh"))
+    doma("klipp200/lika-langd-oppnar", k1 == NONZERO and k2 == OPPEN, f"koder {k1}/{k2}",
+         f"{NONZERO} sedan {OPPEN} — prefix av samma längd är EN klass; längden splittrar, "
+         "inte siffran")
+
+    # (2) VÄRDNAMNET FÖRSVINNER UR EN URL. VAG:s gränsklass rymmer `:` och
+    # `\\S+` matchar girigt, så matchningen startar på snedstrecket EFTER
+    # "https:" och sväljer värdnamnet tillsammans med sökvägen. Två fel mot
+    # OLIKA ändpunkter blir en klass — hopsmältning, och brytaren öppnar på fel
+    # som inte hör ihop. Tröskel 2 öppnar alltså på två skilda fel.
+    durl = str(kat / "d-url-smalter")
+    k1, u1, _ = kor("kor", durl, "h-x", "9", "2", str(FW), str(kuv), "30",
+                    "--", str(kat / "url-alfa.sh"))
+    k2, u2, _ = kor("kor", durl, "h-x", "9", "2", str(FW), str(kuv), "30",
+                    "--", str(kat / "url-beta.sh"))
+    doma("url-vardnamn/smalter-ihop", k1 == NONZERO and k2 == OPPEN, f"koder {k1}/{k2}",
+         f"{NONZERO} sedan {OPPEN} — två fel mot olika ändpunkter öppnar vid tröskel 2")
+    doma("url-vardnamn/raderat",
+         bool(fprader(u1)) and "https:‹väg›" in fprader(u1)[0]
+         and "alfa" not in fprader(u1)[0] and "example" not in fprader(u1)[0],
+         str(fprader(u1)[:1])[:80],
+         "värdnamnet raderas tillsammans med sökvägen — kvar står bara 'https:‹väg›'")
+    doma("url-vardnamn/samma-fp", bool(fprader(u1)) and bool(fprader(u2))
+         and fprader(u1)[0] == fprader(u2)[0],
+         f"{fprader(u1)[:1]} / {fprader(u2)[:1]}",
+         "de två ändpunkterna ger EN och samma fingerprintsträng")
+
+    # (3) FINGERPRINT-NYCKLARNA GALLRAS ALDRIG. Varje ny klass lägger en nyckel
+    # i tillstand.json; ingen tas någonsin bort, ingen räknare åldras. Filen
+    # växer monotont så länge katalogen lever. Budget och tröskel högt satta så
+    # varken budgetstopp eller öppning kan avbryta mätningen.
+    dg = kat / "d-gallras-aldrig"
+    forsta = ""
+    storlekar: list[int] = []
+    for i, sorten in enumerate("abcdef"):
+        _, u, _ = kor("kor", str(dg), "h-x", "99", "99", str(FW), str(kuv), "30",
+                      "--", str(kat / "sort.sh"), sorten)
+        if i == 0 and fprader(u):
+            forsta = fprader(u)[0].removeprefix("fingerprint: ")
+        storlekar.append((dg / "tillstand.json").stat().st_size)
+    fps = status(str(dg)).get("fingerprints", {})
+    doma("gallring/ingen-nyckel-tas-bort", len(fps) == 6 and forsta in fps,
+         f"{len(fps)} nycklar, första kvar={forsta in fps}",
+         "sex skilda fel ger sex nycklar, och den första ligger kvar efter den sjätte")
+    # STRIKT växande, inte bara icke-krympande: ett tak som gallrar den äldsta
+    # nyckeln när en ny läggs till håller filen på samma storlek, och en
+    # icke-krympande utsaga hade passerat en sådan gallring utan att märka den.
+    doma("gallring/filen-vaxer-monotont",
+         len(storlekar) == 6 and all(a < b for a, b in zip(storlekar, storlekar[1:])),
+         str(storlekar), "tillstand.json växer vid VARJE ny klass och krymper aldrig")
 
     # --- EXITKOD 2 ALDRIG — svept över samtliga uppmätta koder ---
     doma("ej-2/svep", 2 not in KODER, f"koder: {sorted(set(KODER))}",
