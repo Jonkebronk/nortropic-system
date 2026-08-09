@@ -4,7 +4,8 @@
 Ett verifierat resultat binds till den candidate-SHA det gällde. Attestationen
 är därför aldrig en allmän utsaga om en task, utan om en task PÅ ett commit.
 
-    <dir> write <task> <sha>          skriver attestation bunden till candidate-SHA
+    <dir> write <task> <sha> [<grind-id> <grind-sha256>]
+                                      skriver attestation bunden till candidate-SHA
     <dir> read <task> [--require-valid]   läser attestationen; flaggan kräver giltig
     <dir> invalidate <sha>            markerar attestationer som SHA:t träffar stale
 
@@ -26,6 +27,7 @@ ROT = Path(__file__).resolve().parents[2]
 FIL = "attestations.json"
 KOMMANDON = ("write", "read", "invalidate")
 SHA_FORM = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+SHA256_FORM = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 
 
 def fel(text: str) -> int:
@@ -48,18 +50,29 @@ def skriv(kat: Path, state: dict) -> None:
         f.write("\n")
 
 
-def kmd_write(kat: Path, task: str, sha: str) -> int:
+def kmd_write(kat: Path, task: str, sha: str,
+              grind_id: str | None = None, grind_sha256: str | None = None) -> int:
     if not SHA_FORM.match(sha):
         return fel(f"write: {sha} är ingen candidate-SHA (40 hex)")
     state = las(kat)
     # En ny attestation ersätter den gamla och är giltig igen: den gäller ett
     # annat commit. Utan det hade en stale markering överlevt sitt eget commit.
-    state["attestations"][task] = {
+    post = {
         "task": task,
         "candidate_sha": sha.lower(),
         "invalidates_on": [sha.lower()],
         "stale": False,
     }
+    if (grind_id is None) != (grind_sha256 is None):
+        return fel("write: grind_id och grind_sha256 måste anges tillsammans")
+    if grind_id is not None:
+        if not grind_id:
+            return fel("write: grind_id får inte vara tomt")
+        if not SHA256_FORM.match(grind_sha256 or ""):
+            return fel(f"write: {grind_sha256} är ingen grind-SHA-256 (64 hex)")
+        post["grind_id"] = grind_id
+        post["grind_sha256"] = grind_sha256.lower()
+    state["attestations"][task] = post
     state["omtest_ko"] = [t for t in state["omtest_ko"] if t != task]
     skriv(kat, state)
     return 0
@@ -97,7 +110,7 @@ def kmd_invalidate(kat: Path, sha: str) -> int:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        return fel("användning: cli [<dir>] write <task> <sha> | read <task> [--require-valid]")
+        return fel("användning: cli [<dir>] write <task> <sha> [<grind-id> <grind-sha256>] | read <task> [--require-valid]")
     # Katalogen är första argumentet. Är den utelämnad börjar argumenten
     # direkt med ett kommandonamn.
     if argv[1] in KOMMANDON:
@@ -105,13 +118,13 @@ def main(argv: list[str]) -> int:
     else:
         kat, arg = Path(argv[1]), argv[2:]
     if not arg:
-        return fel("användning: cli [<dir>] write <task> <sha> | read <task> [--require-valid]")
+        return fel("användning: cli [<dir>] write <task> <sha> [<grind-id> <grind-sha256>] | read <task> [--require-valid]")
 
     kommando = arg[0]
     if kommando == "write":
-        if len(arg) != 3:
-            return fel("användning: cli [<dir>] write <task> <sha>")
-        return kmd_write(kat, arg[1], arg[2])
+        if len(arg) not in (3, 5):
+            return fel("användning: cli [<dir>] write <task> <sha> [<grind-id> <grind-sha256>]")
+        return kmd_write(kat, arg[1], arg[2], *(arg[3:] if len(arg) == 5 else (None, None)))
     if kommando == "read":
         if len(arg) == 2:
             return kmd_read(kat, arg[1], False)
