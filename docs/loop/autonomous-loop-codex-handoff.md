@@ -7,12 +7,15 @@ PLAN_BASE_SHA      = 1eaa0724be990e14ae095b3be3910496d47d062e
 PLAN_PATH          = docs/loop/autonomous-loop-plan-v1.md
 PLAN_BRANCH        = plan/autonomous-loop-v1
 PLAN_REV1_COMMIT   = d2394d66b4b556178f34f6df693a95b1e921066e
-PLAN_COMMIT_SHA    = <slutlig ägarrevision — grenspetsen på plan/autonomous-loop-v1>
+PLAN_COMMIT_SHA    = a84d84e0fa3b1f5abc2eb1b0ec244ec041c50ba8
 START_SLICE        = S1 · h-017 per-task-domen
 ```
 
-Läs planen ur grenspetsen på `plan/autonomous-loop-v1`. Revision 2 är den ägarlåsta versionen;
-revision 1 (`d2394d6`) föreslog `--force-with-lease` och är **överspelad**.
+`PLAN_COMMIT_SHA` är commiten som bär **revision 2**, den ägarlåsta versionen. Läs planen därur —
+den är oförändrad sedan dess. Denna rad kunde inte skrivas i den commiten (en fil kan inte bära
+sitt eget commit-SHA) och fylldes i av en följdcommit på samma gren.
+
+Revision 1 (`d2394d6`) föreslog `--force-with-lease` och är **överspelad**.
 
 ---
 
