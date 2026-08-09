@@ -4,10 +4,15 @@ Kort och exekverbart. Den fullständiga planen är auktoritativ; detta är ingå
 
 ```text
 PLAN_BASE_SHA      = 1eaa0724be990e14ae095b3be3910496d47d062e
-PLAN_COMMIT_SHA    = <fylls i efter commit — se nedan>
+PLAN_COMMIT_SHA    = d2394d66b4b556178f34f6df693a95b1e921066e
 PLAN_PATH          = docs/loop/autonomous-loop-plan-v1.md
+PLAN_BRANCH        = plan/autonomous-loop-v1
 START_SLICE        = S1 · h-017 per-task-domen
 ```
+
+`PLAN_COMMIT_SHA` är commiten som införde planen. Denna rad kunde inte skrivas i den commiten —
+en fil kan inte bära sitt eget commit-SHA — så den fylldes i av en följdcommit på samma gren.
+Läs planen ur `PLAN_COMMIT_SHA`; den är oförändrad sedan dess.
 
 ## DO_NOT_REDESIGN
 
