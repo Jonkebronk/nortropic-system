@@ -111,9 +111,13 @@ CLASSIC BRANCH PROTECTION på main
   conversation resolution     = NO
 
 ACTIVE RULES ON main          = []
-REPOSITORY RULESET            id=20553421  följde med transfern
-  status                      = EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN
-  rules/branches/main         = []   (fortfarande tomt efter transfern)
+REPOSITORY RULESET            id=20553421  följde med transfern — LÄST I SIN HELHET
+  RULESET_20553421_EXISTS               = YES
+  RULESET_20553421_ENFORCEMENT          = active
+  RULESET_20553421_REF_INCLUDE_COUNT    = 0
+  RULESET_20553421_EFFECTIVE_ON_MAIN    = NO
+  RULESET_20553421_EFFECTIVE_ON_ANY_REF = NO
+  RULESET_20553421_CURRENT_TRUST_ROLE   = NONE
 ```
 
 **Följd för planen:** auto-promotion faller mot dagens `main` — PR krävs och `enforce admins`
@@ -122,12 +126,28 @@ S7 måste hantera med en avgränsad bypass (se PROMOTION_PLAN §PR-BYPASS). Att 
 radering redan är avstängda på GitHub-sidan är en **andra spärr** bakom planens egen regel —
 inte planens enda skydd.
 
-**Ruleset `id=20553421` — `EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN`.** Det följde med transfern,
-men `rules/branches/main` returnerar fortfarande `[]`. **Det ska därför inte behandlas som ett
-bevisat aktivt skydd för `main`** — varken som något planen får luta sig mot eller som något
-planen får anta blockerar promotion. De skydd planen räknar med är classic branch protection,
-som ÄR mätt. Rulesetets faktiska innehåll måste ändå läsas i sin helhet innan S7 byggs, eftersom
-ett skydd som inte syns i den vyn kan visa sig först vid en push.
+**Ruleset `id=20553421` — LÄST I SIN HELHET, träffar ingenting.** Rulesetet finns och står som
+`enforcement: active`, och det BÄR regler: `deletion`, `non_fast_forward` och `pull_request` med
+`required_approving_review_count: 1`. Men dess villkor är
+
+```json
+"conditions": { "ref_name": { "include": [], "exclude": [] } }
+```
+
+och GitHubs dokumenterade `ref_name`-semantik kräver att **minst ett värde i `include` matchar**
+för att villkoret ska passera. Med `include: []` kan ingen ref matcha. Det stämmer med den
+separata mätningen: `gh api repos/Nortropic/nortropic-system/rules/branches/main` → `[]`.
+
+**Följd:** rulesetet har i dag ingen trust-roll alls. Planen får varken räkna det som ett skydd
+eller anta att det blockerar promotion. **Den uppmätta och effektiva main-protectionen är classic
+branch protection**, ovan.
+
+**Detta betyder inte att rulesetet ska tas bort eller ändras** — det görs inte i denna session.
+Men två saker i det är värda att bära med sig till S7: `bypass_actors` är **tomt**, och
+`pull_request` kräver **en approval** (mot classic protections noll). Skulle rulesetet någon gång
+få en `include`-post blir det alltså strängare än dagens skydd och skulle stoppa auto-promotion
+även med appen på plats. Därför ska GitHub-skydd och ruleset-konfiguration granskas om före S7 —
+den framtida Nortropic Promoter-konfigurationen finns ju ännu inte.
 
 ---
 
@@ -401,8 +421,12 @@ STATUS = MÄTT av ägaren 2026-08-09, se CURRENT_STATE. main kräver PR, enforce
          force push och radering är AVSTÄNGDA, linear history är AV.
 FÖLJD  = auto-promotion kräver en avgränsad PR-bypass för promotionsidentiteten. Se
          PROMOTION_PLAN §PR-BYPASS.
-KVAR OVERIFIERAT = ruleset id=20553421 svarade tomt på rules/branches/main. Måste läsas i sin
-         helhet före S7.
+RULESET = id=20553421 är LÄST i sin helhet. Det finns och är enforcement=active, men
+         conditions.ref_name.include är TOMT, så det träffar ingen ref — varken main eller någon
+         annan. EFFECTIVE_ON_MAIN=NO, CURRENT_TRUST_ROLE=NONE. Planen räknar det INTE som ett
+         skydd. Den effektiva main-protectionen är classic branch protection.
+KVAR ATT GÖRA FÖRE S7 = granska GitHub-skydd och ruleset-konfiguration på nytt, eftersom
+         Nortropic Promoter-konfigurationen ännu inte finns.
 ```
 
 ### G18 · Credential och privilegieseparation — **BESLUTAT**
@@ -1322,8 +1346,9 @@ körning → hela batteriet → **körning i ägarterminalen före merge**.
 
 **Ägarens prerequisites som inte är slices** (görs utanför loopen, före S7 byggs):
 skapa GitHub App *Nortropic Promoter* med Metadata:Read + Contents:Read&Write, scope enbart
-`Nortropic/nortropic-system` · lägg appen i `bypass_pull_request_allowances.apps` · läs
-ruleset `id=20553421` i sin helhet.
+`Nortropic/nortropic-system` · lägg appen i `bypass_pull_request_allowances.apps` · granska
+GitHub-skydd och ruleset-konfiguration på nytt när appen finns (ruleset `id=20553421` är redan
+läst och träffar ingen ref, men konfigurationen ändras av att appen tillkommer).
 
 ---
 
@@ -1438,10 +1463,11 @@ kriterium · `--force-with-lease` struket överallt.
 
 ## OVERIFIERAT
 
-- **Ruleset `id=20553421` — `EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN`.** Det följde med transfern
-  till `Nortropic`, men `rules/branches/main` returnerar fortfarande `[]`. Det behandlas därför
-  varken som ett bevisat skydd eller som ett bevisat icke-skydd, och **måste läsas i sin helhet
-  före S7 byggs.**
+- **Den framtida GitHub-skyddskonfigurationen.** Ruleset `id=20553421` är numera LÄST och står
+  under CURRENT_STATE som mätt fakta — det träffar ingen ref och har ingen trust-roll, så det är
+  inte längre en öppen post. Det som återstår är att skydds- och ruleset-konfigurationen måste
+  granskas om **före S7**, eftersom Nortropic Promoter-konfigurationen ännu inte finns och
+  tillkomsten av en bypass-aktör ändrar bilden.
 - **Att G20:s krav går att uppfylla.** Kravet är formulerat och mätbart, men ingen har byggt
   provet. Att en trust-critical kandidat med saboterad komponent faktiskt kan stoppas är
   konstruerat, inte mätt.

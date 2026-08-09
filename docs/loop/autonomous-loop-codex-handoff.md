@@ -33,7 +33,12 @@ PROMOTION_REPOSITORY_SCOPE=Nortropic/nortropic-system only
 PROMOTION_FORCE_ALLOWED=NO
 PROMOTION_MODE=FAST_FORWARD_ONLY
 AUTHORITATIVE_MAIN=origin/main
-RULESET_20553421=EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN
+RULESET_20553421_EXISTS=YES
+RULESET_20553421_ENFORCEMENT=active
+RULESET_20553421_REF_INCLUDE_COUNT=0
+RULESET_20553421_EFFECTIVE_ON_MAIN=NO
+RULESET_20553421_EFFECTIVE_ON_ANY_REF=NO
+RULESET_20553421_CURRENT_TRUST_ROLE=NONE
 
 ATTESTATION_WITHOUT_TASK_GATE_PROMOTABLE=NO
 
@@ -136,10 +141,12 @@ Mergevillkoret kedjas: `./verify/bin/h-0NN-exit && gh pr merge --rebase --delete
 
 Stanna och fråga ägaren när något av detta inträffar:
 
-- **Ruleset `id=20553421`** visar sig kräva något som kolliderar med promotionmodellen. Status:
-  `EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN` — det följde med transfern men `rules/branches/main`
-  returnerar fortfarande `[]`, så det är inte ett bevisat aktivt skydd för `main`.
-  **Läs det i sin helhet före S7.**
+- **GitHub-skydden ser annorlunda ut än vad som står här.** Ruleset `id=20553421` är läst och
+  träffar ingen ref (`conditions.ref_name.include` är tomt), så det har ingen trust-roll i dag —
+  men det BÄR regler (`deletion`, `non_fast_forward`, `pull_request` med **en** approval) och
+  `bypass_actors` är tomt. Får det någonsin en `include`-post blir det strängare än dagens skydd
+  och stoppar auto-promotion även med appen på plats. **Granska skydden och rulesetet på nytt
+  före S7.**
 - **GitHub App *Nortropic Promoter* finns inte ännu.** Den skapas av ägaren, inte av en byggsession.
   Owner: `Nortropic` organization. Scope: `Nortropic/nortropic-system` only. Permissions:
   Metadata Read, Contents Read & Write — inget mer utan konkret mekaniskt behov.
@@ -173,14 +180,19 @@ force pushes                = DISABLED
 deletions                   = DISABLED
 conversation resolution     = NO
 ACTIVE RULES ON main        = []
-REPOSITORY RULESET          id=20553421 följde med transfern
-                            EXISTS_BUT_NOT_MEASURED_ACTIVE_ON_MAIN
-                            rules/branches/main = []   ← läs i sin helhet före S7
+REPOSITORY RULESET          id=20553421 — LÄST I SIN HELHET
+  exists                    = YES        enforcement = active
+  ref_include_count         = 0          → träffar ingen ref
+  effective_on_main         = NO         effective_on_any_ref = NO
+  current_trust_role        = NONE
+  (bär reglerna deletion, non_fast_forward, pull_request[1 approval];
+   bypass_actors = [] — relevant först om det får en include-post)
 ```
 
-Classic branch protection följde med transfern och är mätt efteråt: force push och deletion är
-fortsatt förbjudna, PR-kravet finns kvar. Rulesetet är INTE ett bevisat aktivt skydd för `main`
-och ska inte behandlas som ett.
+**Classic branch protection är den uppmätta och effektiva main-protectionen.** Den följde med
+transfern och är mätt efteråt: force push och deletion förbjudna, PR-kravet kvar. Rulesetet
+träffar ingenting och **får inte räknas som ett skydd** — men det får heller inte tas bort eller
+ändras av en byggsession.
 
 Auto-promotion faller mot dagens `main` tills *Nortropic Promoter* ligger i
 `bypass_pull_request_allowances.apps`. **Bypassen gäller endast PR-kravet** — ingen generell
