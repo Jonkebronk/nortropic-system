@@ -4,38 +4,76 @@ Kort och exekverbart. Den fullständiga planen är auktoritativ; detta är ingå
 
 ```text
 PLAN_BASE_SHA      = 1eaa0724be990e14ae095b3be3910496d47d062e
-PLAN_COMMIT_SHA    = d2394d66b4b556178f34f6df693a95b1e921066e
 PLAN_PATH          = docs/loop/autonomous-loop-plan-v1.md
 PLAN_BRANCH        = plan/autonomous-loop-v1
+PLAN_REV1_COMMIT   = d2394d66b4b556178f34f6df693a95b1e921066e
+PLAN_COMMIT_SHA    = <slutlig ägarrevision — grenspetsen på plan/autonomous-loop-v1>
 START_SLICE        = S1 · h-017 per-task-domen
 ```
 
-`PLAN_COMMIT_SHA` är commiten som införde planen. Denna rad kunde inte skrivas i den commiten —
-en fil kan inte bära sitt eget commit-SHA — så den fylldes i av en följdcommit på samma gren.
-Läs planen ur `PLAN_COMMIT_SHA`; den är oförändrad sedan dess.
+Läs planen ur grenspetsen på `plan/autonomous-loop-v1`. Revision 2 är den ägarlåsta versionen;
+revision 1 (`d2394d6`) föreslog `--force-with-lease` och är **överspelad**.
+
+---
+
+## LÅSTA VÄRDEN
+
+```text
+START=S1/h-017
+G20_BLOCKING=YES
+
+PROMOTION_IDENTITY=Nortropic Promoter GitHub App
+PROMOTION_FORCE_ALLOWED=NO
+PROMOTION_MODE=FAST_FORWARD_ONLY
+AUTHORITATIVE_MAIN=origin/main
+
+ATTESTATION_WITHOUT_TASK_GATE_PROMOTABLE=NO
+
+MERGE_RESOLUTION_REUSES_OLD_PASS=NO
+RESOLVED_CANDIDATE_FULL_REVERIFY=YES
+
+TRUST_CRITICAL_TASK_JUDGED_BY_PRETASK_CONTROL_PLANE=YES
+
+SANDBOX_BYPASS_ALLOWED=NO
+```
+
+---
 
 ## DO_NOT_REDESIGN
 
-Följande är beslutat och ska inte omprövas i implementationen:
+Följande är ägarbeslutat och ska inte omprövas i implementationen:
 
+- **G20 är blockerande i S1.** En task vars diff rör den trust-critical ytan får sin taskgrind
+  körd med **repots** (pre-task) komponenter. Kandidatträdet är grindens *indata*, inte dess
+  *körmiljö*. Mätt varför: `kmd_run` kör grindfilen ur repot men med `cwd=målkatalogen`, och
+  husets grindar adresserar komponenter relativt (`krav_komponent "controller/verify/cli"`,
+  `_lib.sh` rad 7–14). Får **inte** skjutas till trust-transitionen (S9).
 - **Grinden slås upp på SÖKVÄG, aldrig på id.** Nyckeln kommer ur spec-radens `exit_test`, och
-  `specs/**` är denied_write — därför kan den som skriver registret aldrig peka om sin egen task.
-- **Uppslaget bor hos `controller/verify/cli`, inte hos loopen.** Kedjan läser aldrig specens
-  tasklista; precedent finns i `controller/policy/cli`, som redan slår upp task-id ur samma fil.
-- **Configens globala verifierare ERSÄTTS inte.** Båda domarna måste vara gröna.
-- **Riggfel stannar före leasen** (registret prövas i sin helhet), **domen kostar försök.**
-- **En ogrindad task attesteras som förut men UTAN `grind_id`.** Frånvaron av dom bokförs;
-  körningen stoppas inte. (Ägarbeslut 2026-08-09.)
+  `specs/**` är denied_write — den som skriver registret kan aldrig peka om sin egen task.
+- **Uppslaget bor hos `controller/verify/cli`, inte hos loopen.** Precedent: `controller/policy/cli`
+  slår redan upp task-id ur samma fil.
 - **`controller/verify/register.json` ligger UTANFÖR skrivytan.** `controller/verify/cli` anges
   som exakt sökväg.
-- **Attestation utan trusted task-gate verdict är aldrig auto-promotion-eligible.**
-- **En trust-critical task döms med REPOTS komponenter, aldrig kandidatens.** Mätt: `kmd_run` kör
-  grindfilen ur repot men med `cwd=mal`, och husets grindar adresserar komponenter relativt
-  (`krav_komponent "controller/verify/cli"`). Utan denna regel dömer en ny domare sin egen födelse
-  redan vid grindkörningen. Se planens **G20** — regeln byggs i S1, inte i S8.
-- **Ingen force push.** CAS via `--force-with-lease` med EXPLICIT förväntad gammal SHA.
-- **Eventströmmen är en egen butik.** Skiva 1:s `{task, status}` rörs inte.
+- **Configens globala verifierare ERSÄTTS inte.** Båda domarna måste vara gröna.
+- **Riggfel stannar före leasen** (registret prövas i sin helhet), **domen kostar försök.**
+- **En ogrindad task attesteras som förut men UTAN `grind_id`.** Frånvaron bokförs; körningen
+  stoppas inte.
+- **Ingen force-semantik någonstans.** Inte `--force`, inte `--force-with-lease`, inget ledande
+  `+` i refspec, ingen history overwrite — varken i normal väg eller i konfliktväg.
+- **Promotion är non-force fast-forward mot `origin/main`** enligt planens elva steg, under
+  giltig bevisad lease-ownership.
+- **Promotion-credentialen ligger ALDRIG i en miljövariabel.** `controller/launch/cli` filtrerar
+  worker-env med en *denylist* på tre prefix (`GH_`, `GITHUB_`, `SLACK_`) — den skyddar inte en
+  credential med annat namn. Nyckeln bor i fil utanför repot, rättigheter 600; configen bär
+  sökvägen.
+- **Merge-resolution ger en single-parent kandidat D ovanpå aktuell main C**, aldrig en
+  merge-commit, och D verifieras från noll.
+- **Eventströmmen är en egen butik och aldrig scheduler- eller doneness-authority.** Skiva 1:s
+  `{task, status}` rörs inte.
+- **Notis och läsyta är observerande.** De får aldrig ändra controllerns utfall.
 - **Markdown är människans yta.** JSON/Task IR är genererad artefakt.
+
+---
 
 ## VERIFY_BEFORE_CHANGE
 
@@ -47,17 +85,25 @@ for t in verify/bin/h-0*-exit; do echo "$t"; bash "$t" | tail -1; done
 node scripts/check-invariants.mjs
 ```
 
-Mätt vid PLAN_BASE_SHA: fjorton grindar, invarianter 8 PASS. `h-002-exit` kan ge exit 2
-(ODÖMBART) i en sandbox som saknar skrivväg mot `scripts/` — det är miljön, inte ett fel.
+Mätt vid `PLAN_BASE_SHA`: fjorton h-grindar (plus `p-001`/`p-002`), invarianter 8 PASS.
+`h-002-exit` kan ge exit 2 (ODÖMBART) i en sandbox utan skrivväg mot `scripts/` — det är miljön,
+inte ett fel.
 
 Läs dessutom: `docs/loop/regler.md` (bindande) · `docs/loop/drift.md` (hur loopen körs) ·
 `docs/05-beslutslogg.md` raderna LOOP-ÄGARHAND-36 t.o.m. -42 och LOOP-PREMIÄR-1.
+
+**Börja med en plan-vs-code-review.** Du får korrigera mindre plan/kod-konflikter **med bevis**.
+Du får **inte** godtyckligt ändra ägarens låsta målsemantik ovan.
+
+---
 
 ## COMMIT_PER_SLICE
 
 En slice = en gren `nortropic/loop-<id>` = en PR. Commit per delsteg. Beslutsloggsrad i **samma
 commit** som ändringen (regel 7 + 17 + 22). Commitform `[LOOP] h-0NN delsteg N: ...` med
 `Co-Authored-By`-trailer. Stanna vid öppnad PR.
+
+---
 
 ## TESTS_REQUIRED
 
@@ -76,19 +122,50 @@ Per slice krävs:
 
 Mergevillkoret kedjas: `./verify/bin/h-0NN-exit && gh pr merge --rebase --delete-branch`.
 
+---
+
 ## STOP_CONDITIONS
 
 Stanna och fråga ägaren när något av detta inträffar:
 
-- **Branch protection på `origin/main`** visar sig kräva PR eller status checks (OVERIFIERAT i
-  planen). Auto-promotion faller då, och det ska upptäckas före S6 byggs, inte i drift.
-- **Credential-identiteten för promotion** är inte avgjord.
+- **Ruleset `id=20553421`** visar sig kräva något som kolliderar med promotionmodellen. Det är
+  aktivt på `main` men `rules/branches/main` svarade tomt — **läs det i sin helhet före S7**.
+- **GitHub App *Nortropic Promoter* finns inte ännu.** Den skapas av ägaren, inte av en byggsession.
+  Scope: `Jonkebronk/nortropic-system` only. Permissions: Metadata Read, Contents Read & Write —
+  inget mer utan konkret mekaniskt behov.
 - En slice kräver ändring i en fil **utanför sin `allowed_write`** — det är en spec-radsfråga,
   inte en implementationsfråga. (Hände redan en gång: bokföringsklausulen i h-017 gick inte att
   uppfylla i sin egen yta, ÄGARHAND-42.)
 - Ett prov visar sig **inte kunna mäta** det kriteriet kräver — då är kriteriet fel, inte provet.
 - Två misslyckade fixförsök på samma fel (byggplan §10, stoppregel).
 - En task vill röra **§A-mängden** eller kundflödet.
+- Någonting frestar dig att slå på `required_linear_history`. **Ändra inte GitHub-inställningar.**
+  Det är ett senare explicit policy-steg efter att promotionmodellen, PR-flödet och
+  merge-resolvern prövats.
+
+---
+
+## MÄTT GITHUB-LÄGE (ägaren, 2026-08-09)
+
+```text
+require pull request        = YES
+required approving reviews  = 0
+enforce admins              = YES
+required signatures         = NO
+required linear history     = NO      (framtida mål YES — ändra inte nu)
+force pushes                = DISABLED
+deletions                   = DISABLED
+conversation resolution     = NO
+ACTIVE RULES ON main        = []
+REPOSITORY RULESET          id=20553421 name=main target=branch enforcement=active
+                            rules/branches/main = []   ← OVERIFIERAT, läs före S7
+```
+
+Auto-promotion faller mot dagens `main` tills *Nortropic Promoter* ligger i
+`bypass_pull_request_allowances.apps`. **Bypassen gäller endast PR-kravet** — ingen generell
+bypass över branch-skydd. Mänsklig utveckling fortsätter som `branch → PR → main`.
+
+---
 
 ## CODEX_START_HERE
 
@@ -107,10 +184,9 @@ Mätt och klart att bygga på:
 - `kmd_write` i `controller/attest/cli` bygger en fast dict med fyra fält. `grind_id` och
   `grind_sha256` läggs till som **valfria argument** så h-011:s och h-016:s anrop står orörda.
   `verify/bin/h-003-exit` grepar mot värden, inte fältuppsättning — extra fält fäller den inte.
-
-- **G20 måste in i provet:** en trust-critical kandidat vars komponent är sabbad så att den alltid
-  säger JA ska ändå inte attesteras. Bevis att inversionen är verklig: `_lib.sh` rad 7–14 gör
-  `[ ! -x "$1" ]` på en relativ väg, och `kmd_run` sätter `cwd=mal`.
+- **G20 måste in i provet:** en trust-critical kandidat vars komponent är saboterad så att den
+  alltid säger JA ska ändå inte attesteras. Bevis att inversionen är verklig: `_lib.sh` rad 7–14
+  gör `[ ! -x "$1" ]` på en relativ väg, och `kmd_run` sätter `cwd=mal`.
 
 **Öppen riggfråga att lösa när provet skrivs:** `REGISTER` i `controller/verify/cli` är en fast
 sökväg och går inte att peka om, så ett fixturregister kräver mutation av repots register med
