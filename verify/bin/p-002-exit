@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# p-002-exit — premiärtask 2: utförarens två mätta men obundna kanter bundna
+# i fallsamlingen.
+#
+# Samma form och samma förbehåll som p-001-exit: kedjan kör den inte, den körs
+# av människan, och den binder att fallen finns, är gröna och namnger de två
+# fenomenen — inte att de binder rätt sak. Att komponenten är orörd binds av
+# policyn via backloggens denied_write.
+#
+# Baslinjen 49 fall mättes 2026-08-09 på fc0e86f.
+. "$(dirname "$0")/_lib.sh"
+FALL="tests/controller/utforare/fall.py"
+BASLINJE=49
+
+if [ ! -f "$FALL" ]; then
+  echo "FAIL  K0 fallsamlingen — $FALL saknas"
+  echo; echo "0 PASS, 1 FAIL"; exit 1
+fi
+ok "K0 fallsamlingen finns"
+
+UT="$(python3.12 "$FALL" 2>&1)"; kod=$?
+ANTAL="$(echo "$UT" | sed -n 's/^\([0-9][0-9]*\) rätt.*/\1/p' | tail -1)"
+
+if [ "$kod" -ne 0 ]; then
+  no "K1 fallsamlingen är grön" "exit $kod — sista raden: $(echo "$UT" | tail -1)"
+else ok "K1 fallsamlingen är grön"; fi
+
+if [ -z "$ANTAL" ]; then
+  no "K2 antalet fall kunde läsas" "hittade ingen 'N rätt'-rad i utdata"
+elif [ "$ANTAL" -lt "$((BASLINJE + 2))" ]; then
+  no "K2 minst två nya fall" "$ANTAL fall, väntade minst $((BASLINJE + 2)) (baslinjen var $BASLINJE)"
+else ok "K2 fallsamlingen växte från $BASLINJE till $ANTAL"; fi
+
+if ! grep -Eqi 'quotepath|citer|oktal|icke-ascii|icke ascii' "$FALL"; then
+  no "K3 den citerade formen namnges" "inget fall nämner att files bär gits citerade form"
+elif ! grep -Eqi 'gitlink|160000|nästlat|nastlat' "$FALL"; then
+  no "K4 gitlinken namnges" "inget fall nämner det nästlade repots gitlink"
+else
+  ok "K3 den citerade formen för icke-ASCII-sökvägar namnges"
+  ok "K4 gitlinken för ett nästlat repo namnges"
+fi
+
+summera

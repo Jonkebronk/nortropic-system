@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# p-001-exit — premiärtask 1: brytarens tre registrerade men obundna fynd
+# bundna i fallsamlingen.
+#
+# VAD DEN HÄR GRINDEN ÄR, OCH INTE ÄR. Kedjan kör den inte: taskens exit_test
+# är medvetet utelämnad ur kuvertet så workern inte kan tuna mot sin egen
+# grind, och kedjan kör i stället configens verifierare. Den här körs av
+# MÄNNISKAN, i byggflödets steg 3 — och den är avsiktligt liten. Att fallen
+# verkligen binder rätt sak avgörs av ögat; grinden binder att de FINNS, är
+# gröna, och namnger de tre fenomenen var för sig.
+#
+# ATT KOMPONENTEN ÄR ORÖRD binds inte här utan av policyn: backloggens
+# denied_write bär controller/**, så en kandidat som rör brytaren avvisas
+# innan grinden ens är aktuell.
+#
+# Baslinjen 96 fall mättes 2026-08-09 på fc0e86f.
+. "$(dirname "$0")/_lib.sh"
+FALL="tests/controller/brytare/fall.py"
+BASLINJE=96
+
+if [ ! -f "$FALL" ]; then
+  echo "FAIL  K0 fallsamlingen — $FALL saknas"
+  echo; echo "0 PASS, 1 FAIL"; exit 1
+fi
+ok "K0 fallsamlingen finns"
+
+UT="$(python3.12 "$FALL" 2>&1)"; kod=$?
+ANTAL="$(echo "$UT" | sed -n 's/^\([0-9][0-9]*\) rätt.*/\1/p' | tail -1)"
+
+if [ "$kod" -ne 0 ]; then
+  no "K1 fallsamlingen är grön" "exit $kod — sista raden: $(echo "$UT" | tail -1)"
+else ok "K1 fallsamlingen är grön"; fi
+
+if [ -z "$ANTAL" ]; then
+  no "K2 antalet fall kunde läsas" "hittade ingen 'N rätt'-rad i utdata"
+elif [ "$ANTAL" -lt "$((BASLINJE + 3))" ]; then
+  no "K2 minst tre nya fall" "$ANTAL fall, väntade minst $((BASLINJE + 3)) (baslinjen var $BASLINJE)"
+else ok "K2 fallsamlingen växte från $BASLINJE till $ANTAL"; fi
+
+# De tre fenomenen, var för sig. Tokengrupper i stället för exakta ord:
+# vokabulären dikteras inte, bara att alla tre är namngivna och åtskilda.
+if ! grep -Eqi '200|klipp' "$FALL"; then
+  no "K3 klippet vid 200 tecken namnges" "inget fall nämner klippet"
+elif ! grep -Eqi 'url|värdnamn|vardnamn|host' "$FALL"; then
+  no "K4 värdnamnet i en URL namnges" "inget fall nämner URL:ens värdnamn"
+elif ! grep -Eqi 'gallr|växer|vaxer|obegräns|obegrans|monoton' "$FALL"; then
+  no "K5 att nycklarna aldrig gallras namnges" "inget fall nämner att tillståndsfilen växer"
+else
+  ok "K3 klippet vid 200 tecken namnges"
+  ok "K4 värdnamnet i en URL namnges"
+  ok "K5 att fingerprint-nycklarna aldrig gallras namnges"
+fi
+
+summera
