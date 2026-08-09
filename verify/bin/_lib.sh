@@ -33,6 +33,14 @@ krav_mekanism() {
 
 # Temp-katalog. verify/ ligger i denyWrite — ett test som skriver bredvid sig
 # själv fallerar på skrivförbud och rapporterar rött av fel skäl.
+# TMPDIR kan bära ett AVSLUTANDE SNEDSTRECK — macOS ger /var/folders/.../T/ —
+# och utan strykningen blir sökvägen ".../T//nortropic-exit.XXXXXX". Dubbelslashen
+# är laglig men inte kanonisk: Python normaliserar bort den när en komponent
+# skriver ut sin sökväg, bash gör det inte när ett prov bygger sin jämförelse.
+# Ett prov som jämför en egenbyggd absolut sökväg mot en komponents utdata föll
+# därför i ägarterminalen och passerade i sandboxen — samma commit, olika TMPDIR
+# (mätt 2026-08-09, h-016:s K19). Strykningen sker HÄR så klassen aldrig uppstår.
 temp_kat() {
-  mktemp -d "${TMPDIR:-/tmp}/nortropic-exit.XXXXXX"
+  local bas="${TMPDIR:-/tmp}"
+  mktemp -d "${bas%/}/nortropic-exit.XXXXXX"
 }
