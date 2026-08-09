@@ -1,0 +1,1002 @@
+#!/usr/bin/env bash
+# h-017-exit — skiva 15 (trusted per-task-dom före produktionsimplementation)
+#
+# Provet binder EFFEKT, inte ett framtida internt verb:
+#   spec.task.exit_test --exakt path--> trusted registerpost --> trusted grind
+#   global verifier PASS OCH taskgrind PASS --> attestation med grind_id + SHA
+#   säker oregistrerad path --> attestation utan båda grindfälten
+#   taskgrind FAIL --> retrybar dom; taskgrind 2/refusal --> riggfel, aldrig dom
+#
+# G20 binds med ett par: en kandidat ersätter controller/verify/cli; en annan
+# lägger alltid-gröna skuggor av register, taskgrind och _lib.sh. Den TRUSTED taskgrinden
+# anropar controller/verify/cli relativt. Om kandidatens cwd fortfarande är
+# domarens exekveringsmiljö blir domen grön; med pre-task control plane blir den
+# röda trusted innergrinden bestämmande. Kandidatcommiten måste samtidigt finnas
+# i git med sabotaget men saknas i attestbutiken.
+#
+# MUTANTPREDIKTION (skriven före körning):
+#   M01 ingen taskgrind                    -> K4/K5
+#   M02 grind mot reporot/fel workspace    -> K4
+#   M03 kandidatens control plane används  -> K18
+#   M04 friendly id vinner                 -> K4/K7
+#   M05 noll träff blir påhittad dom        -> K6
+#   M06 dubbla paths väljs                 -> K7
+#   M07 global verifier ersätts             -> K5
+#   M08 taskgrind ignoreras                 -> K4/K5
+#   M09 röd grind kostar inte budget        -> K4
+#   M10 dömd attest saknar identitet        -> K6
+#   M11 ogrindad attest är halv/tvetydig    -> K6
+#   M12 registerrigg bränner session        -> K9–K13
+#   M13 exit 2 blir PASS                    -> K3/K17
+#   M14 exit 2 blir retrybar FAIL           -> K17
+#   M15 exit_test körs av shell             -> K8
+#   M16 bashrunner är inert                 -> K1
+#   M17 fel register-SHA accepteras         -> K9
+#   M18 taskgrindsteget är oskiljbart       -> K5
+#   M19 repo/ref/worktree lämnas ändrat      -> varje vakt + K20
+#   M20 registerrestore misslyckas tyst      -> K19/K20
+#
+# Alla loopkörningar har en processgruppsfrist. Räknare ligger utanför varje
+# workspace. Det verkliga registret muteras bara efter bytebackup och efter att
+# en idempotent EXIT/HUP/INT/TERM-trap installerats; backupen tas bort först
+# efter bytejämförelse och förhashkontroll.
+. "$(dirname "$0")/_lib.sh"
+
+LOOP="controller/loop/cli"
+VERIFY="controller/verify/cli"
+ATT="controller/attest/cli"
+ST="controller/state/cli"
+LE="controller/lease/cli"
+BR="controller/brytare/cli"
+WSP="controller/workspace/cli"
+REGISTER="controller/verify/register.json"
+
+krav_komponent "$LOOP"
+for dep in "$VERIFY" "$ATT" "$ST" "$LE" "$BR" "$WSP" \
+  controller/taskval/cli controller/envelope/cli controller/worker/cli \
+  controller/policy/cli controller/utforare/cli controller/launch/cli; do
+  if [ ! -x "$dep" ]; then
+    echo "FAIL  K0 harness — $dep saknas eller är inte körbar"
+    echo; echo "$pass PASS, $((fail + 1)) FAIL"; exit 1
+  fi
+done
+
+PY3="$(command -v python3)"
+if [ -z "$PY3" ]; then
+  echo "FAIL  K0 harness — python3 saknas"
+  echo; echo "$pass PASS, $((fail + 1)) FAIL"; exit 1
+fi
+
+ROT="$(git rev-parse --show-toplevel)"
+WORK="$(temp_kat)" || {
+  echo "FAIL  K0 harness — temp-katalog kunde inte skapas"
+  echo; echo "$pass PASS, $((fail + 1)) FAIL"; exit 1
+}
+WORK="$(cd "$WORK" && pwd -P)"
+UT="$WORK/ut"; mkdir -p "$UT"
+export H017_UT="$UT"
+LEASE_DIR_LOG="$WORK/lease-dirs"
+: > "$LEASE_DIR_LOG"
+
+FIXROOT=""
+G20_PATH=""
+REGISTER_BACKUP="$WORK/register.original"
+REGISTER_SHA_BEFORE=""
+REGISTER_EXPECTED_SHA=""
+REGISTER_ARMED=0
+CLEANING=0
+OWNED_PIDS=""
+ROT_HEAD="$(git rev-parse HEAD)"
+ROT_STATUS="$(git status --porcelain -uall)"
+ROT_REFS="$(git for-each-ref --format='%(refname) %(objectname)' | LC_ALL=C sort)"
+ROT_WORKTREES="$(git worktree list --porcelain)"
+
+fil_sha() {
+  "$PY3" - "$1" <<'PY'
+import hashlib, pathlib, sys
+print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+}
+
+cleanup_owned_worktrees() {
+  git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' |
+  while IFS= read -r ws; do
+    case "$ws" in
+      "$WORK"/*)
+        rot="$(dirname "$ws")"; attempt="$(basename "$ws")"
+        "$WSP" "$rot" destroy "$attempt" >/dev/null 2>&1 || true
+        ;;
+    esac
+  done
+}
+
+restore_register() {
+  [ -f "$REGISTER_BACKUP" ] || return 1
+  cp "$REGISTER_BACKUP" "$REGISTER" 2>/dev/null || return 1
+  cmp -s "$REGISTER_BACKUP" "$REGISTER" || return 1
+  [ "$(fil_sha "$REGISTER" 2>/dev/null)" = "$REGISTER_SHA_BEFORE" ] || return 1
+}
+
+cleanup() {
+  rc=$?
+  [ "$CLEANING" -eq 0 ] || exit "$rc"
+  CLEANING=1
+  trap - EXIT HUP INT TERM
+  for pid in $OWNED_PIDS; do
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+  cleanup_owned_worktrees
+  register_restore_ok=1
+  worktree_restore_ok=1
+  if [ "$REGISTER_ARMED" -eq 1 ]; then
+    restore_register || register_restore_ok=0
+  fi
+  case "$G20_PATH" in
+    "$ROT"/verify/bin/.h017-g20-*) rm -f "$G20_PATH" ;;
+  esac
+  case "$FIXROOT" in
+    "$ROT"/tests/controller/loop/.h017-fixture.*) rm -rf "$FIXROOT" ;;
+  esac
+  if [ "$(git worktree list --porcelain)" != "$ROT_WORKTREES" ]; then
+    echo "FAIL  K20 worktreerestore — worktree-listan kunde inte återställas; $WORK bevaras" >&2
+    worktree_restore_ok=0
+  fi
+  if [ "$register_restore_ok" -eq 1 ] && [ "$worktree_restore_ok" -eq 1 ]; then
+    rm -rf "$WORK"
+  else
+    if [ "$register_restore_ok" -ne 1 ]; then
+      echo "FAIL  K19 registerrestore — återställning misslyckades; backup BEVARAD i $REGISTER_BACKUP" >&2
+    fi
+    rc=1
+  fi
+  exit "$rc"
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+cp "$REGISTER" "$REGISTER_BACKUP" || {
+  echo "FAIL  K0 harness — registret kunde inte bytekopieras"
+  echo; echo "$pass PASS, $((fail + 1)) FAIL"; exit 1
+}
+REGISTER_SHA_BEFORE="$(fil_sha "$REGISTER")"
+
+FIXROOT="$(mktemp -d "$ROT/tests/controller/loop/.h017-fixture.XXXXXX")" || {
+  echo "FAIL  K0 harness — repo-intern fixturkatalog kunde inte skapas"
+  echo; echo "$pass PASS, $((fail + 1)) FAIL"; exit 1
+}
+FIXROOT="$(cd "$FIXROOT" && pwd -P)"
+FIX_REL="${FIXROOT#"$ROT"/}"
+TOKEN="$(basename "$FIXROOT" | tr -cd 'A-Za-z0-9')"
+CORRECT_ID="pathdom-${TOKEN}"
+FRIENDLY_ID="c-friendly-green"
+INNER_ID="trusted-inner-${TOKEN}"
+EXIT2_ID="unjudgeable-${TOKEN}"
+DRIFT_ID="drift-${TOKEN}"
+G20_ID="g20-${TOKEN}"
+UNKNOWN_ID="unknown-runner-${TOKEN}"
+NONSTART_ID="nonstart-${TOKEN}"
+G20_REL="$FIX_REL/g20.sh"
+G20_PATH="$ROT/$G20_REL"
+export H017_FIX_REL="$FIX_REL" H017_G20_REL="$G20_REL" H017_TOKEN="$TOKEN" H017_INNER_ID="$INNER_ID"
+
+cat > "$FIXROOT/candidate.sh" <<'SH'
+#!/usr/bin/env bash
+if [ -e tests/h017product/required.txt ]; then
+  printf 'green %s\n' "$PWD" >> "$H017_UT/candidate-gate.log"
+  exit 0
+fi
+printf 'red %s\n' "$PWD" >> "$H017_UT/candidate-gate.log"
+exit 1
+SH
+cat > "$FIXROOT/friendly.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'friendly %s\n' "$PWD" >> "$H017_UT/friendly-gate.log"
+exit 0
+SH
+cat > "$FIXROOT/inner-target.sh" <<'SH'
+#!/usr/bin/env bash
+if [ -e tests/h017product/g20-approved.txt ]; then
+  printf 'green %s\n' "$PWD" >> "$H017_UT/inner-target.log"
+  exit 0
+fi
+printf 'red %s\n' "$PWD" >> "$H017_UT/inner-target.log"
+exit 1
+SH
+cat > "$FIXROOT/exit2.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'unjudgeable %s\n' "$PWD" >> "$H017_UT/exit2-gate.log"
+exit 2
+SH
+cat > "$FIXROOT/drift.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'DRIFTED_GATE_EXECUTED %s\n' "$PWD" >> "$H017_UT/drift-gate.log"
+exit 0
+SH
+cat > "$FIXROOT/unknown.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+cat > "$FIXROOT/nonstart.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+ln -s candidate.sh "$FIXROOT/unsafe-link"
+chmod +x "$FIXROOT"/*.sh
+cp "$FIXROOT/drift.sh" "$WORK/drift.original"
+
+cat > "$G20_PATH" <<SH
+#!/usr/bin/env bash
+. "$ROT/verify/bin/_lib.sh"
+krav_komponent "controller/verify/cli"
+printf 'trusted-outer %s\\n' "\$PWD" >> "\$H017_UT/g20-outer.log"
+controller/verify/cli run "$INNER_ID" "\$PWD"
+SH
+chmod +x "$G20_PATH"
+
+cat > "$WORK/session.py" <<'PY'
+import hashlib, json, os, pathlib, sys, time
+
+task = json.load(sys.stdin)["task_id"]
+ut = pathlib.Path(os.environ["H017_UT"])
+token = os.environ["H017_TOKEN"]
+counter = ut / ("starter-" + task)
+with counter.open("a") as f:
+    f.write("start\n")
+
+def write(path, text, executable=False):
+    p = pathlib.Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    if executable:
+        p.chmod(0o755)
+
+if task == "a-policy-red":
+    write("tests/h017-outside.txt", "utanför taskens yta\n")
+elif task == "b-global-red":
+    write("agents/h017-global-red.md",
+          "---\nname: h017-global-red\ntools: Bash\n---\n\n"
+          "Äkta INV-004-fixtur utan EXTERN DATA-blocket. " + token + "\n")
+elif task == "c-friendly-green":
+    write("tests/h017product/wrong.txt", "fel effekt " + token + "\n")
+elif task == "d-target-good":
+    write("tests/h017product/required.txt", "rätt effekt\n")
+elif task == "e-ungated":
+    write("tests/h017product/ungated.txt", "säker men oregistrerad grind\n")
+elif task == "a-drift-anchor":
+    write("tests/h017product/drift-anchor.txt", "första tasken\n")
+    time.sleep(2)
+elif task == "b-drift-target":
+    write("tests/h017product/drift-target.txt", "får aldrig starta\n")
+elif task == "g20-a-controller":
+    token = os.environ["H017_TOKEN"]
+    write("controller/verify/cli",
+          "#!/bin/sh\n# H017_CANDIDATE_ALWAYS_GREEN_CONTROLLER %s\nexit 0\n" % token, True)
+elif task == "g20-b-shadow":
+    fix = os.environ["H017_FIX_REL"]
+    g20 = os.environ["H017_G20_REL"]
+    token = os.environ["H017_TOKEN"]
+    inner = fix + "/inner-target.sh"
+    write(inner,
+          "#!/bin/sh\n# H017_CANDIDATE_ALWAYS_GREEN_INNER %s\nexit 0\n" % token, True)
+    inner_sha = hashlib.sha256(pathlib.Path(inner).read_bytes()).hexdigest()
+    write("controller/verify/register.json",
+          json.dumps({"register_version": "1.0.0", "verifiers": {
+              os.environ.get("H017_INNER_ID", "inner"): {
+                  "path": inner, "sha256": inner_sha, "runner": "bash",
+                  "startbar": True, "beskrivning": "H017_CANDIDATE_FRIENDLY_REGISTER " + token
+              }}}) + "\n")
+    write("verify/bin/_lib.sh",
+          "# H017_CANDIDATE_ALWAYS_GREEN_LIB %s\n" % token +
+          "pass=0; fail=0\nok(){ :; }\nno(){ :; }\n"
+          "krav_komponent(){ :; }\nsummera(){ exit 0; }\n")
+    write(g20, "#!/bin/sh\n# H017_CANDIDATE_ALWAYS_GREEN_GATE %s\nexit 0\n" % token, True)
+elif task == "g20-c-legit":
+    # Positivt G20-syskon: trust-critical diff får inte avvisas kategoriskt.
+    # Kandidatens control-plane-version är medvetet obrukbar som domare, medan
+    # kandidatDATAN uppfyller samma trusted innergrind som sabotaget faller på.
+    write("controller/verify/cli",
+          "#!/bin/sh\n# H017_LEGIT_CONTROL_PLANE_CHANGE\nexit 7\n", True)
+    write("tests/h017product/g20-approved.txt", "legitim kandidatdata\n")
+else:
+    write("tests/h017product/" + task + ".txt", "fixtur\n")
+
+print("redigerade " + task)
+PY
+
+write_register() { # write_register <base|duplicate|sha|missing|outside|symlink|structure|unknown|nonstart>
+  "$PY3" - "$ROT" "$REGISTER" "$REGISTER_BACKUP" "$FIX_REL" "$G20_REL" "$1" \
+    "$CORRECT_ID" "$FRIENDLY_ID" "$INNER_ID" "$EXIT2_ID" "$DRIFT_ID" \
+    "$G20_ID" "$UNKNOWN_ID" "$NONSTART_ID" <<'PY'
+import hashlib, json, pathlib, sys
+root, out, backup, fix, g20, mode, correct, friendly, inner, exit2, drift, g20id, unknown, nonstart = sys.argv[1:]
+root = pathlib.Path(root)
+
+def digest(path):
+    p = pathlib.Path(path)
+    if not p.is_absolute():
+        p = root / p
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+def post(path, runner="bash", start=True, sha=None):
+    p = {"path": path, "sha256": sha if sha is not None else digest(path),
+         "runner": runner, "startbar": start, "beskrivning": "h-017-fixtur"}
+    if not start:
+        p["skal_ej_startbar"] = "h-017-fixtur saknar subprocess-ingång"
+    return p
+
+if mode == "structure":
+    pathlib.Path(out).write_text('{"register_version":"h017","verifiers":[]}\n', encoding="utf-8")
+    raise SystemExit
+
+v = {
+    "check-invariants": post("scripts/check-invariants.mjs", "node", True),
+    correct: post(fix + "/candidate.sh"),
+    friendly: post(fix + "/friendly.sh"),
+    inner: post(fix + "/inner-target.sh"),
+    exit2: post(fix + "/exit2.sh"),
+    drift: post(fix + "/drift.sh"),
+    g20id: post(g20),
+    "fixture-nonstart-unselected": post("workflows/nortropic-verify-suite.js", None, False),
+}
+if mode == "duplicate":
+    v["duplicate-" + correct] = post(fix + "/candidate.sh")
+elif mode == "sha":
+    # OVALD och icke-startbar: hela registret måste ändå hashvalideras.
+    v["rig-sha"] = post(fix + "/unknown.sh", None, False, sha="0" * 64)
+elif mode == "missing":
+    v["rig-missing"] = post(fix + "/does-not-exist.sh", sha="1" * 64)
+elif mode == "outside":
+    v["rig-outside"] = post("/bin/sh")
+elif mode == "symlink":
+    v["rig-symlink"] = post(fix + "/unsafe-link")
+elif mode == "unknown":
+    v[unknown] = post(fix + "/unknown.sh", "h017-runner-saknas", True)
+elif mode == "nonstart":
+    v[nonstart] = post(fix + "/nonstart.sh", "bash", False)
+
+data = json.loads(pathlib.Path(backup).read_text(encoding="utf-8"))
+data["verifiers"] = v
+pathlib.Path(out).write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+PY
+  REGISTER_EXPECTED_SHA="$(fil_sha "$REGISTER")"
+}
+
+write_spec() { # write_spec <fil> 'id|exit_path|allowed,allowed|dependency' ...
+  fil="$1"; shift
+  "$PY3" - "$fil" "$@" <<'PY'
+import json, pathlib, sys
+tasks = []
+for raw in sys.argv[2:]:
+    tid, gate, allowed, dep = raw.split("|", 3)
+    tasks.append({"id": tid, "slice": 0, "title": tid, "summary": "h-017-fixtur",
+                  "allowed_write": [x for x in allowed.split(",") if x],
+                  "exit_test": gate, "exit_criterion": "fixtur",
+                  "docs_impact": [], "depends_on": [dep] if dep else []})
+data = {"spec_version": "h017-fixtur",
+        "defaults": {"max_changed_files": 12, "max_added_lines": 1000},
+        "tasks": tasks}
+pathlib.Path(sys.argv[1]).write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                                    encoding="utf-8")
+PY
+}
+
+rigga() { # rigga <namn>
+  CFG_NAME="$1"
+  CFG_AT="$WORK/$1-att"; CFG_ST="$WORK/$1-st"; CFG_LE="$WORK/$1-le"
+  CFG_WS="$WORK/$1-ws"; CFG_BR="$WORK/$1-br"; CFG_RUN="k17$1"
+  CFG_BUDGET=1; CFG_TROSKEL=9; CFG_TO=30; CFG_VER="check-invariants"
+  printf '%s\n' "$CFG_LE" >> "$LEASE_DIR_LOG"
+  mkdir -p "$CFG_WS"
+  "$ST" init "$CFG_ST" >/dev/null 2>&1
+}
+
+write_config() {
+  cat > "$1" <<JSON
+{ "spec": "$CFG_SPEC", "attest_dir": "$CFG_AT", "state_dir": "$CFG_ST",
+  "lease_dir": "$CFG_LE", "lease_resurs": "h017", "workspace_rot": "$CFG_WS",
+  "base_sha": "$ROT_HEAD", "worker_cmd": ["$PY3", "$WORK/session.py"],
+  "timeout_s": $CFG_TO, "verifier_id": "$CFG_VER", "run_id": "$CFG_RUN",
+  "brytare_rot": "$CFG_BR", "budget": $CFG_BUDGET, "troskel": $CFG_TROSKEL }
+JSON
+}
+
+run_loop() { # run_loop <config> <stdout> <stderr> [timeout]
+  "$PY3" - "$LOOP" "$1" "$2" "$3" "${4:-90}" <<'PY'
+import os, signal, subprocess, sys, time
+cli, config, out, err, timeout = sys.argv[1:]
+
+def group_alive(pid):
+    try:
+        os.killpg(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+def signal_group(pid, sig):
+    try:
+        os.killpg(pid, sig)
+    except ProcessLookupError:
+        pass
+
+def wait_group_gone(pid, seconds):
+    deadline = time.monotonic() + seconds
+    while group_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+with open(out, "wb") as stdout, open(err, "wb") as stderr:
+    p = subprocess.Popen([cli, "run", config], stdout=stdout, stderr=stderr,
+                         start_new_session=True)
+    time.sleep(0.05)
+    try:
+        rc = p.wait(timeout=float(timeout))
+    except subprocess.TimeoutExpired:
+        signal_group(p.pid, signal.SIGTERM)
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            signal_group(p.pid, signal.SIGKILL)
+            p.wait()
+        # Ledaren kan ha dött av TERM medan ett gruppbarn ignorerade signalen.
+        # Timeoutsvägen måste därför alltid pröva hela gruppen en gång till.
+        if group_alive(p.pid):
+            signal_group(p.pid, signal.SIGKILL)
+            wait_group_gone(p.pid, 1)
+        raise SystemExit(124)
+    # Leadern får inte lämna barn i sin processgrupp. En sådan rest dödas för
+    # säkerhet men klassas 123, så städningen aldrig kan göra mutanten grön.
+    if group_alive(p.pid):
+        stderr.write(b"harness: process residue after loop leader exited\n")
+        signal_group(p.pid, signal.SIGTERM)
+        time.sleep(0.2)
+        if group_alive(p.pid):
+            signal_group(p.pid, signal.SIGKILL)
+            wait_group_gone(p.pid, 1)
+        rc = 123
+raise SystemExit(rc if rc >= 0 else 128 - rc)
+PY
+  KOD=$?
+  CHAIN_KODER="$CHAIN_KODER $KOD"
+}
+
+attesterad() { "$ATT" "$1" read "$2" --require-valid >/dev/null 2>&1; }
+att_sha() {
+  "$ATT" "$1" read "$2" --require-valid 2>/dev/null |
+    "$PY3" -c 'import json,sys; print(json.load(sys.stdin).get("candidate_sha", ""))' 2>/dev/null
+}
+att_field() {
+  "$ATT" "$1" read "$2" --require-valid 2>/dev/null |
+    "$PY3" -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$3" 2>/dev/null
+}
+att_has_field() {
+  "$ATT" "$1" read "$2" --require-valid 2>/dev/null |
+    "$PY3" -c 'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if sys.argv[1] in d else 1)' "$3" 2>/dev/null
+}
+starter() { [ -f "$UT/starter-$1" ] && wc -l < "$UT/starter-$1" | tr -d ' ' || echo 0; }
+count_lines() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
+event_rows() { [ -f "$1/events.jsonl" ] && wc -l < "$1/events.jsonl" | tr -d ' ' || echo 0; }
+event_for() {
+  "$PY3" - "$1/events.jsonl" "$2" <<'PY' 2>/dev/null || echo PYFEL
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1]); n = 0
+if p.exists():
+    for line in p.read_text(encoding="utf-8").splitlines():
+        try: d = json.loads(line)
+        except ValueError: continue
+        n += d.get("task") == sys.argv[2]
+print(n)
+PY
+}
+bryt_field() {
+  "$BR" status "$1" 2>/dev/null | "$PY3" -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: print(""); raise SystemExit
+print(d.get(sys.argv[1], ""))' "$2" 2>/dev/null
+}
+lease_owner() { "$LE" "$1" owner h017 2>/dev/null; }
+lease_residue() {
+  while IFS= read -r lease_dir; do
+    owner="$(lease_owner "$lease_dir")"
+    [ -z "$owner" ] || printf '%s=%s\n' "$lease_dir" "$owner"
+  done < "$LEASE_DIR_LOG"
+}
+status_is() {
+  "$ST" rebuild "$1" 2>/dev/null | "$PY3" -c 'import json,sys
+try: rows=json.load(sys.stdin)
+except Exception: raise SystemExit(1)
+d={row.get("task"):row.get("status") for row in rows}
+raise SystemExit(0 if d.get(sys.argv[1]) == sys.argv[2] else 1)' "$2" "$3"
+}
+
+find_candidate() { # find_candidate <path> <fixed marker>
+  path="$1"; marker="$2"
+  git fsck --unreachable --no-reflogs --no-progress 2>/dev/null |
+    awk '$2 == "commit" {print $3}' |
+    while IFS= read -r sha; do
+      if git show "$sha:$path" 2>/dev/null | grep -qF "$marker"; then
+        echo "$sha"; break
+      fi
+    done
+}
+
+run_verify_commit() { # run_verify_commit <sha> <attempt> <stdout> <stderr>
+  probe_root="$WORK/probe-$2"
+  mkdir -p "$probe_root"
+  if ! "$WSP" "$probe_root" create "$2" "$1" > "$WORK/$2.path" 2> "$WORK/$2-create.err"; then
+    PROBE_CODE=125
+    return 0
+  fi
+  probe_ws="$(cat "$WORK/$2.path")"
+  "$VERIFY" run check-invariants "$probe_ws" > "$3" 2> "$4"; PROBE_CODE=$?
+  "$WSP" "$probe_root" destroy "$2" >/dev/null 2>&1 || PROBE_CODE=126
+}
+
+filtered_status() {
+  git status --porcelain -uall | while IFS= read -r line; do
+    path="${line#???}"
+    case "$path" in
+      "$REGISTER"|"$FIX_REL"/*|"$G20_REL") ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done
+}
+
+vakt_runtime() {
+  label="$1"
+  if [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ]; then
+    no "hygien efter $label" "HEAD ändrades"; return 1
+  fi
+  if [ "$(git for-each-ref --format='%(refname) %(objectname)' | LC_ALL=C sort)" != "$ROT_REFS" ]; then
+    no "hygien efter $label" "refs/brancher ändrades"; return 1
+  fi
+  if [ "$(git worktree list --porcelain)" != "$ROT_WORKTREES" ]; then
+    no "hygien efter $label" "hela worktree-listan avviker"; return 1
+  fi
+  if [ "$(filtered_status)" != "$ROT_STATUS" ]; then
+    no "hygien efter $label" "annan rotstatus än register + egna fixturer tillkom"; return 1
+  fi
+  if [ -z "$REGISTER_EXPECTED_SHA" ] || [ "$(fil_sha "$REGISTER")" != "$REGISTER_EXPECTED_SHA" ]; then
+    no "hygien efter $label" "controller muterade den installerade registerfixturens bytes"; return 1
+  fi
+  leaked_lease="$(lease_residue)"
+  if [ -n "$leaked_lease" ]; then
+    no "hygien efter $label" "fixture-lease har kvar ägare: $leaked_lease"; return 1
+  fi
+  return 0
+}
+
+stegord() {
+  grep "varv [0-9][0-9]* $2: avbrutet i " "$1" 2>/dev/null | head -1 |
+    sed -n 's/^.*avbrutet i \([^ ]*\).*$/\1/p'
+}
+
+CHAIN_KODER=""
+DIRECT_KODER=""
+REGISTER_ARMED=1
+
+# ================= K1–K3: runnerns direkta fyrdelade domän ==================
+write_register base
+mkdir -p "$WORK/direct-green/tests/h017product" "$WORK/direct-red"
+printf 'rätt\n' > "$WORK/direct-green/tests/h017product/required.txt"
+"$VERIFY" run "$CORRECT_ID" "$WORK/direct-green" >"$WORK/dg.out" 2>"$WORK/dg.err"; dg=$?
+"$VERIFY" run "$CORRECT_ID" "$WORK/direct-red" >"$WORK/dr.out" 2>"$WORK/dr.err"; dr=$?
+"$VERIFY" run "$FRIENDLY_ID" "$WORK/direct-red" >"$WORK/df.out" 2>"$WORK/df.err"; friendly_direct=$?
+DIRECT_KODER="$DIRECT_KODER $dg $dr $friendly_direct"
+if [ "$dg" -ne 0 ] || [ "$dr" -ne 1 ] || [ "$friendly_direct" -ne 0 ]; then
+  no "K1 registrerad bashgrind bär egen 0/1" \
+    "grön/röd/friendly gav $dg/$dr/$friendly_direct, väntat 0/1/0; stderr: $(head -1 "$WORK/dg.err" "$WORK/dr.err" "$WORK/df.err" 2>/dev/null | tr '\n' ' ')"
+elif grep -qi 'okänd runner\|unknown.runner' "$WORK/dg.err" "$WORK/dr.err"; then
+  no "K1 bashrunner är verksam" "runnern rapporterade okänd/inert"
+elif [ "$(grep -c '^green ' "$UT/candidate-gate.log" 2>/dev/null || true)" != "1" ] \
+  || [ "$(grep -c '^red ' "$UT/candidate-gate.log" 2>/dev/null || true)" != "1" ]; then
+  no "K1 bashrunner startade grindfilen" "grindens externa green/red-markörer är inte 1/1"
+else ok "K1 bashrunner kör registrerad grind mot måldir och bevarar grindens 0/1"; fi
+
+"$VERIFY" run "$EXIT2_ID" "$WORK/direct-red" >"$WORK/d2.out" 2>"$WORK/d2.err"; d2=$?
+"$VERIFY" run "finns-inte-$TOKEN" "$WORK/direct-red" >"$WORK/dref.out" 2>"$WORK/dref.err"; dref=$?
+DIRECT_KODER="$DIRECT_KODER $d2 $dref"
+if [ "$d2" -ne 2 ] || [ "$(count_lines "$UT/exit2-gate.log")" != "1" ]; then
+  no "K2 ODÖMBART bevaras från körd grind" "exit2-grinden gav $d2, väntat exakt 2"
+else ok "K2 körd bashgrinds ODÖMBART bevaras som 2"; fi
+if [ "$dref" -eq 0 ] || [ "$dref" -eq 1 ] || [ "$dref" -eq 2 ]; then
+  no "K3 verifierarens vägran har egen kod" "okänt id gav $dref, måste ligga utanför 0/1/2"
+else ok "K3 verifierarens vägran är skild från PASS, FAIL och ODÖMBART"; fi
+
+base_ids="check-invariants $CORRECT_ID $FRIENDLY_ID $INNER_ID $EXIT2_ID $DRIFT_ID $G20_ID fixture-nonstart-unselected"
+base_ok=1
+for id in $base_ids; do
+  "$VERIFY" check "$id" > "$WORK/check-$id.out" 2> "$WORK/check-$id.err" || base_ok=0
+done
+if [ "$base_ok" -ne 1 ]; then
+  no "K3 registerposter svarar mot verkligheten" "minst en faktisk fixturepost klarade inte verify check"
+else ok "K3 varje normal registerpost har säker befintlig fil och faktisk SHA"; fi
+
+# ========== K4–K6: blandad backlog, två domar, path och bokföring ===========
+: > "$UT/candidate-gate.log"; : > "$UT/friendly-gate.log"
+MIX_SPEC="$WORK/mix.spec.json"
+write_spec "$MIX_SPEC" \
+  "a-policy-red|$FIX_REL/friendly.sh|tests/h017product/**|" \
+  "b-global-red|$FIX_REL/friendly.sh|agents/**|" \
+  "c-friendly-green|$FIX_REL/candidate.sh|tests/h017product/**|" \
+  "d-target-good|$FIX_REL/candidate.sh|tests/h017product/**|" \
+  "e-ungated|verify/bin/h017-safe-unregistered-$TOKEN|tests/h017product/**|d-target-good"
+rigga mix; CFG_SPEC="$MIX_SPEC"; CFG_BUDGET=2; CFG_TROSKEL=9
+write_config "$WORK/mix.config.json"
+run_loop "$WORK/mix.config.json" "$WORK/mix.out" "$WORK/mix.err"; mix_rc=$KOD
+
+gate_red="$(grep -c '^red ' "$UT/candidate-gate.log" 2>/dev/null || true)"
+gate_green="$(grep -c '^green ' "$UT/candidate-gate.log" 2>/dev/null || true)"
+if [ "$mix_rc" -ne 0 ]; then
+  no "K4 taskgrinden dömer kandidaten och röd dom kostar försök" "loop exit $mix_rc, väntat drain 0"
+elif [ "$(starter c-friendly-green)" != "2" ] || [ "$(bryt_field "$WORK/mix-br/c-friendly-green" forbrukat)" != "2" ]; then
+  no "K4 röd taskgrind kostar exakt budget" \
+    "starter/forbrukat=$(starter c-friendly-green)/$(bryt_field "$WORK/mix-br/c-friendly-green" forbrukat), väntat 2/2"
+elif attesterad "$WORK/mix-att" c-friendly-green; then
+  no "K4 global grön + taskgrind röd" "c-friendly-green attesterades"
+elif [ "$(event_for "$WORK/mix-st" c-friendly-green)" != "1" ] \
+  || ! status_is "$WORK/mix-st" c-friendly-green claimed; then
+  no "K4 retry sker inom samma claim" \
+    "event/status=$(event_for "$WORK/mix-st" c-friendly-green)/$(status_is "$WORK/mix-st" c-friendly-green claimed && echo claimed || echo annat), väntat 1/claimed"
+elif ! attesterad "$WORK/mix-att" d-target-good; then
+  no "K4 båda domarna gröna" "d-target-good saknar attestation"
+elif [ "$gate_red" != "2" ] || [ "$gate_green" != "1" ]; then
+  no "K4 samma grind mot rätt kandidatworkspace" "grinden såg red/green=$gate_red/$gate_green, väntat 2/1"
+elif [ -s "$UT/friendly-gate.log" ]; then
+  no "K4 path vinner över friendly id" "always-green friendly-posten kördes: $(head -1 "$UT/friendly-gate.log")"
+else ok "K4 taskgrind mot kandidater: fel effekt RED två gånger, rätt effekt GREEN; random path-id vinner och annan task lyckas"; fi
+
+GLOBAL_SHA="$(find_candidate agents/h017-global-red.md "Äkta INV-004-fixtur utan EXTERN DATA-blocket. $TOKEN")"
+BAD_SHA="$(find_candidate tests/h017product/wrong.txt "fel effekt $TOKEN")"
+if [ -z "$GLOBAL_SHA" ] || [ -z "$BAD_SHA" ]; then
+  no "K5 två äkta domar är mätbara" "kunde inte hitta global-red/task-red kandidatcommit i git"
+else
+  run_verify_commit "$GLOBAL_SHA" globalprobe "$WORK/global-direct.out" "$WORK/global-direct.err"; global_direct=$PROBE_CODE
+  run_verify_commit "$BAD_SHA" badprobe "$WORK/bad-direct.out" "$WORK/bad-direct.err"; bad_direct=$PROBE_CODE
+  DIRECT_KODER="$DIRECT_KODER $global_direct $bad_direct"
+  POLICY_STEP="$(stegord "$WORK/mix.out" a-policy-red)"
+  GLOBAL_STEP="$(stegord "$WORK/mix.out" b-global-red)"
+  TASK_STEP="$(stegord "$WORK/mix.out" c-friendly-green)"
+  TASK_LINE="$(grep "varv [0-9][0-9]* c-friendly-green: avbrutet i " "$WORK/mix.out" | head -1)"
+  if [ "$global_direct" -ne 1 ] || ! grep -qF 'INV-004' "$WORK/global-direct.out"; then
+    no "K5 global RED är äkta" "direkt check-invariants mot kandidat gav $global_direct utan INV-004"
+  elif [ "$bad_direct" -ne 0 ]; then
+    no "K5 taskgrind RED har globalt grönt ankare" "task-red-kandidaten gav global exit $bad_direct"
+  elif attesterad "$WORK/mix-att" b-global-red; then
+    no "K5 global röd + taskgrind grön" "b-global-red attesterades"
+  elif [ -z "$POLICY_STEP" ] || [ -z "$GLOBAL_STEP" ] || [ -z "$TASK_STEP" ]; then
+    no "K5 avbrottsstegen är mätbara" "policy/global/task=[$POLICY_STEP]/[$GLOBAL_STEP]/[$TASK_STEP]"
+  elif [ "$TASK_STEP" = "$POLICY_STEP" ] || [ "$TASK_STEP" = "$GLOBAL_STEP" ] \
+    || [ "$TASK_STEP" = "c-friendly-green" ] || [ "$TASK_STEP" = "$FIX_REL/candidate.sh" ]; then
+    no "K5 eget taskgrindsteg" "task=[$TASK_STEP], policy=[$POLICY_STEP], global=[$GLOBAL_STEP]"
+  elif ! printf '%s' "$TASK_LINE" | grep -qF "$CORRECT_ID"; then
+    no "K5 taskgrindens avbrottsrad bär grind-id" "raden saknar $CORRECT_ID: [$TASK_LINE]"
+  else ok "K5 global och taskdom provocerade äkta; taskgrindens steg [$TASK_STEP] är eget och raden bär $CORRECT_ID"; fi
+fi
+
+JUDGED_ID="$(att_field "$WORK/mix-att" d-target-good grind_id)"
+JUDGED_HASH="$(att_field "$WORK/mix-att" d-target-good grind_sha256)"
+CHECK_HASH="$("$PY3" - "$WORK/check-$CORRECT_ID.out" <<'PY'
+import re, pathlib, sys
+s = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+m = re.findall(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", s, re.I)
+print(m[0].lower() if len(set(x.lower() for x in m)) == 1 else "")
+PY
+)"
+FILE_HASH="$(fil_sha "$FIXROOT/candidate.sh")"
+UNGATED_ID="$(att_field "$WORK/mix-att" e-ungated grind_id)"
+UNGATED_HASH="$(att_field "$WORK/mix-att" e-ungated grind_sha256)"
+CHAIN_SHA="$(att_sha "$WORK/mix-att" e-ungated)"
+if ! att_has_field "$WORK/mix-att" d-target-good grind_id \
+  || ! att_has_field "$WORK/mix-att" d-target-good grind_sha256 \
+  || [ "$JUDGED_ID" != "$CORRECT_ID" ] || [ -z "$JUDGED_HASH" ] \
+  || [ "$JUDGED_HASH" != "$CHECK_HASH" ] || [ "$JUDGED_HASH" != "$FILE_HASH" ]; then
+  no "K6 dömd attestation bär verifierbar identitet" \
+    "id/hash/check/file=[$JUDGED_ID]/[$JUDGED_HASH]/[$CHECK_HASH]/[$FILE_HASH]"
+elif ! attesterad "$WORK/mix-att" e-ungated \
+  || att_has_field "$WORK/mix-att" e-ungated grind_id \
+  || att_has_field "$WORK/mix-att" e-ungated grind_sha256 \
+  || [ -n "$UNGATED_ID" ] || [ -n "$UNGATED_HASH" ]; then
+  no "K6 säker oregistrerad task är entydigt ogrindad" \
+    "attesterad=$(attesterad "$WORK/mix-att" e-ungated && echo ja || echo nej), fält=[$UNGATED_ID]/[$UNGATED_HASH]"
+elif attesterad "$WORK/mix-att" a-policy-red || attesterad "$WORK/mix-att" b-global-red \
+  || attesterad "$WORK/mix-att" c-friendly-green; then
+  no "K6 blandad backlog har tre entydiga klasser" "minst en röd task har attestation"
+elif [ -z "$CHAIN_SHA" ] || [ -z "$(git ls-tree "$CHAIN_SHA" -- tests/h017product/required.txt)" ]; then
+  no "K6 kedjande base överlever taskgrinden" "e-ungateds träd saknar d-target-goods required.txt"
+else ok "K6 blandad backlog: dömd med id+verifierad SHA, ogrindad utan båda fälten, röda utan attest; kedjande base bevarad"; fi
+vakt_runtime mix || { echo; summera; }
+
+# ================= K7–K8: dubblettpath och fri text =========================
+write_register duplicate
+DUP_SPEC="$WORK/dup.spec.json"
+write_spec "$DUP_SPEC" "dup-task|$FIX_REL/candidate.sh|tests/h017product/**|"
+rigga dup; CFG_SPEC="$DUP_SPEC"; write_config "$WORK/dup.config.json"
+run_loop "$WORK/dup.config.json" "$WORK/dup.out" "$WORK/dup.err"; dup_rc=$KOD
+if [ "$dup_rc" -ne 1 ] || [ "$(starter dup-task)" != "0" ] \
+  || attesterad "$WORK/dup-att" dup-task || [ -e "$WORK/dup-br/dup-task" ]; then
+  no "K7 två registerposter för exakt path ger riggvägran" \
+    "exit/start/attest/brytare=$dup_rc/$(starter dup-task)/$(attesterad "$WORK/dup-att" dup-task && echo ja || echo nej)/$([ -e "$WORK/dup-br/dup-task" ] && echo ja || echo nej)"
+else ok "K7 dubbla exakta paths vägras före session och brytare"; fi
+vakt_runtime duplicate || { echo; summera; }
+
+write_register base
+FREE_PROOF="$WORK/free-text-executed"
+FREE_EXIT="touch \"$FREE_PROOF\""
+FREE_SPEC="$WORK/free.spec.json"
+write_spec "$FREE_SPEC" "free-task|$FREE_EXIT|tests/h017product/**|"
+rigga free; CFG_SPEC="$FREE_SPEC"; write_config "$WORK/free.config.json"
+run_loop "$WORK/free.config.json" "$WORK/free.out" "$WORK/free.err"; free_rc=$KOD
+if [ "$free_rc" -ne 1 ] || [ "$(starter free-task)" != "0" ] || [ -e "$FREE_PROOF" ] \
+  || attesterad "$WORK/free-att" free-task || [ -e "$WORK/free-br/free-task" ]; then
+  no "K8 fri text är varken path eller shell" \
+    "exit/start/proof/attest=$free_rc/$(starter free-task)/$([ -e "$FREE_PROOF" ] && echo ja || echo nej)/$(attesterad "$WORK/free-att" free-task && echo ja || echo nej)"
+else ok "K8 fri text vägras före session; shellbevisfilen skapades aldrig"; fi
+vakt_runtime free-text || { echo; summera; }
+
+# ============== K9–K13: hela registret före lease/session ==================
+preflight_case() { # preflight_case <name> <register-mode> <rubrik>
+  n="$1"; mode="$2"; title="$3"
+  write_register "$mode"
+  refusal_ok=1; refusal_code="-"
+  if [ "$mode" = "sha" ]; then
+    "$VERIFY" check rig-sha > "$WORK/$n-check.out" 2> "$WORK/$n-check.err"; refusal_code=$?
+    DIRECT_KODER="$DIRECT_KODER $refusal_code"
+    if [ "$refusal_code" -eq 0 ] || [ "$refusal_code" -eq 1 ] || [ "$refusal_code" -eq 2 ]; then
+      refusal_ok=0
+    fi
+  fi
+  spec="$WORK/$n.spec.json"
+  write_spec "$spec" "$n-task|verify/bin/h017-safe-unregistered-$TOKEN|tests/h017product/**|"
+  rigga "$n"; CFG_SPEC="$spec"; write_config "$WORK/$n.config.json"
+  run_loop "$WORK/$n.config.json" "$WORK/$n.out" "$WORK/$n.err"; rc=$KOD
+  if [ "$rc" -ne 1 ] || [ "$(starter "$n-task")" != "0" ] \
+    || [ "$(event_rows "$WORK/$n-st")" != "0" ] || [ -e "$WORK/$n-le" ] \
+    || [ -e "$WORK/$n-br" ] || attesterad "$WORK/$n-att" "$n-task" \
+    || [ "$refusal_ok" -ne 1 ] || grep -qi 'traceback' "$WORK/$n.out" "$WORK/$n.err"; then
+    no "$title" \
+      "exit/start/event/lease-dir/brytare/attest/refusal=$rc/$(starter "$n-task")/$(event_rows "$WORK/$n-st")/$([ -e "$WORK/$n-le" ] && echo ja || echo nej)/$([ -e "$WORK/$n-br" ] && echo ja || echo nej)/$(attesterad "$WORK/$n-att" "$n-task" && echo ja || echo nej)/$refusal_code"
+  else ok "$title"; fi
+  vakt_runtime "$n" || { echo; summera; }
+}
+
+preflight_case pfsha sha "K9 driven register-SHA stoppas före lease, event, brytare och session"
+preflight_case pfmissing missing "K10 saknad registrerad fil stoppas före lease, event, brytare och session"
+preflight_case pfoutside outside "K11 path utanför repot stoppas före lease, event, brytare och session"
+preflight_case pfsymlink symlink "K12 osäker symlinkpath stoppas före lease, event, brytare och session"
+preflight_case pfstructure structure "K13 ogiltig registerstruktur klassas utan traceback eller kvot"
+
+# =========== K14: vald okänd/icke-startbar post före taskens session =========
+selected_refusal() { # selected_refusal <name> <mode> <id> <path> <rubrik>
+  n="$1"; mode="$2"; id="$3"; path="$4"; title="$5"
+  write_register "$mode"
+  spec="$WORK/$n.spec.json"
+  write_spec "$spec" "$n-task|$path|tests/h017product/**|"
+  rigga "$n"; CFG_SPEC="$spec"; CFG_BUDGET=3; write_config "$WORK/$n.config.json"
+  run_loop "$WORK/$n.config.json" "$WORK/$n.out" "$WORK/$n.err"; rc=$KOD
+  "$VERIFY" run "$id" "$WORK/direct-red" >"$WORK/$n-direct.out" 2>"$WORK/$n-direct.err"; direct=$?
+  DIRECT_KODER="$DIRECT_KODER $direct"
+  if [ "$rc" -ne 1 ] || [ "$(starter "$n-task")" != "0" ] \
+    || attesterad "$WORK/$n-att" "$n-task" || [ -e "$WORK/$n-br/$n-task" ] \
+    || [ -n "$(lease_owner "$WORK/$n-le")" ] \
+    || [ "$direct" -eq 0 ] || [ "$direct" -eq 1 ] || [ "$direct" -eq 2 ]; then
+    no "$title" \
+      "loop/direct/start/attest/brytare=$rc/$direct/$(starter "$n-task")/$(attesterad "$WORK/$n-att" "$n-task" && echo ja || echo nej)/$([ -e "$WORK/$n-br/$n-task" ] && echo ja || echo nej)"
+  else ok "$title"; fi
+  vakt_runtime "$n" || { echo; summera; }
+}
+
+selected_refusal pfunknown unknown "$UNKNOWN_ID" "$FIX_REL/unknown.sh" \
+  "K14 vald okänd runner vägras utan session/retry och med egen refusal-kod"
+selected_refusal pfnonstart nonstart "$NONSTART_ID" "$FIX_REL/nonstart.sh" \
+  "K14 vald icke-startbar post vägras utan session/retry och med egen refusal-kod"
+
+# =========== K15–K16: omkontroll överst i senare varv =======================
+write_register base
+DRIFT_SPEC="$WORK/drift.spec.json"
+write_spec "$DRIFT_SPEC" \
+  "a-drift-anchor|$FIX_REL/friendly.sh|tests/h017product/**|" \
+  "b-drift-target|$FIX_REL/drift.sh|tests/h017product/**|"
+rigga drift; CFG_SPEC="$DRIFT_SPEC"; write_config "$WORK/drift.config.json"
+(
+  i=0
+  while [ ! -s "$UT/starter-a-drift-anchor" ] && [ "$i" -lt 200 ]; do
+    sleep 0.02; i=$((i + 1))
+  done
+  printf '\n# drift efter lease och första taskstart\n' >> "$FIXROOT/drift.sh"
+  printf 'klar\n' > "$UT/drift-mutated"
+) &
+watcher=$!; OWNED_PIDS="$OWNED_PIDS $watcher"
+run_loop "$WORK/drift.config.json" "$WORK/drift.out" "$WORK/drift.err"; drift_rc=$KOD
+wait "$watcher" >/dev/null 2>&1 || true
+OWNED_PIDS="${OWNED_PIDS% $watcher}"
+if [ "$drift_rc" -ne 1 ] || ! attesterad "$WORK/drift-att" a-drift-anchor \
+  || [ "$(starter b-drift-target)" != "0" ] || attesterad "$WORK/drift-att" b-drift-target \
+  || [ "$(event_for "$WORK/drift-st" b-drift-target)" != "1" ] \
+  || [ -e "$WORK/drift-br/b-drift-target" ] || [ -s "$UT/drift-gate.log" ] \
+  || [ -n "$(lease_owner "$WORK/drift-le")" ]; then
+  no "K15 taskpost omkontrolleras överst i varvet efter lease" \
+    "exit/anchor/start2/attest2/event2/brytare2/gatemark=$drift_rc/$(attesterad "$WORK/drift-att" a-drift-anchor && echo ja || echo nej)/$(starter b-drift-target)/$(attesterad "$WORK/drift-att" b-drift-target && echo ja || echo nej)/$(event_for "$WORK/drift-st" b-drift-target)/$([ -e "$WORK/drift-br/b-drift-target" ] && echo ja || echo nej)/$([ -s "$UT/drift-gate.log" ] && echo ja || echo nej)"
+elif [ ! -s "$UT/drift-mutated" ]; then
+  no "K15 driftprovokationen skedde" "watchern hann aldrig mutera grinden"
+else ok "K15 post-lease drift: första tasken attesterad, nästa stoppad före workspace/session; driven grind kördes aldrig"; fi
+cp "$WORK/drift.original" "$FIXROOT/drift.sh"; chmod +x "$FIXROOT/drift.sh"
+vakt_runtime post-lease-drift || { echo; summera; }
+
+# Positivt ankare för exakt samma spec och orörd grind. Utan detta kunde en
+# implementation som kategoriskt vägrar task två klara alla frånvaromätningar.
+write_register base
+: > "$UT/drift-gate.log"
+drift_target_before="$(starter b-drift-target)"
+rigga driftok; CFG_SPEC="$DRIFT_SPEC"; write_config "$WORK/driftok.config.json"
+run_loop "$WORK/driftok.config.json" "$WORK/driftok.out" "$WORK/driftok.err"; driftok_rc=$KOD
+drift_target_delta="$(( $(starter b-drift-target) - drift_target_before ))"
+if [ "$driftok_rc" -ne 0 ] || ! attesterad "$WORK/driftok-att" a-drift-anchor \
+  || ! attesterad "$WORK/driftok-att" b-drift-target \
+  || [ "$drift_target_delta" != "1" ] \
+  || [ "$(count_lines "$UT/drift-gate.log")" != "1" ]; then
+  no "K16 post-lease-omkontrollens positiva ankare" \
+    "exit/attest1/attest2/start2-delta/gatemark=$driftok_rc/$(attesterad "$WORK/driftok-att" a-drift-anchor && echo ja || echo nej)/$(attesterad "$WORK/driftok-att" b-drift-target && echo ja || echo nej)/$drift_target_delta/$(count_lines "$UT/drift-gate.log")"
+else ok "K16 samma spec med orörd registerpost attesterar båda tasksen; andra grinden körs mot kandidaten"; fi
+vakt_runtime post-lease-positive || { echo; summera; }
+
+# ================= K17: exit 2 stoppar hela körningen utan retry =============
+write_register base
+EXIT2_SPEC="$WORK/exit2.spec.json"
+: > "$UT/exit2-gate.log"
+write_spec "$EXIT2_SPEC" \
+  "exit2-task|$FIX_REL/exit2.sh|tests/h017product/**|" \
+  "zz-after-exit2|$FIX_REL/friendly.sh|tests/h017product/**|"
+rigga exit2; CFG_SPEC="$EXIT2_SPEC"; CFG_BUDGET=3; write_config "$WORK/exit2.config.json"
+run_loop "$WORK/exit2.config.json" "$WORK/exit2.out" "$WORK/exit2.err"; exit2_rc=$KOD
+exit2_marks="$(count_lines "$UT/exit2-gate.log")"
+if [ "$exit2_rc" -ne 1 ] || [ "$(starter exit2-task)" != "1" ] \
+  || [ "$exit2_marks" != "1" ] || attesterad "$WORK/exit2-att" exit2-task \
+  || [ "$(bryt_field "$WORK/exit2-br/exit2-task" forbrukat)" != "1" ] \
+  || [ "$(starter zz-after-exit2)" != "0" ] \
+  || [ "$(event_for "$WORK/exit2-st" zz-after-exit2)" != "0" ] \
+  || attesterad "$WORK/exit2-att" zz-after-exit2 \
+  || [ -n "$(lease_owner "$WORK/exit2-le")" ]; then
+  no "K17 ODÖMBART är aldrig PASS eller retrybar FAIL" \
+    "exit/start/gate/attest/forbrukat/next-start/next-event/lease=$exit2_rc/$(starter exit2-task)/$exit2_marks/$(attesterad "$WORK/exit2-att" exit2-task && echo ja || echo nej)/$(bryt_field "$WORK/exit2-br/exit2-task" forbrukat)/$(starter zz-after-exit2)/$(event_for "$WORK/exit2-st" zz-after-exit2)/[$(lease_owner "$WORK/exit2-le")]"
+else ok "K17 taskgrind 2 stoppar körningen med loop-exit 1 efter exakt ett försök; ingen retry, attest eller claim av nästa task, lease släppt"; fi
+vakt_runtime exit2 || { echo; summera; }
+
+# ================= K18: G20, kandidat är data — aldrig domarmiljö ============
+write_register base
+G20_ALLOWED="controller/verify/**,verify/bin/**,$FIX_REL/**,tests/h017product/**"
+write_spec "$WORK/g20-controller.spec.json" \
+  "g20-a-controller|$G20_REL|$G20_ALLOWED|"
+rigga g20c; CFG_SPEC="$WORK/g20-controller.spec.json"; CFG_BUDGET=1; write_config "$WORK/g20c.config.json"
+run_loop "$WORK/g20c.config.json" "$WORK/g20c.out" "$WORK/g20c.err"; g20c_rc=$KOD
+vakt_runtime g20-controller || { echo; summera; }
+
+write_spec "$WORK/g20-shadow.spec.json" \
+  "g20-b-shadow|$G20_REL|$G20_ALLOWED|"
+rigga g20s; CFG_SPEC="$WORK/g20-shadow.spec.json"; CFG_BUDGET=1; write_config "$WORK/g20s.config.json"
+run_loop "$WORK/g20s.config.json" "$WORK/g20s.out" "$WORK/g20s.err"; g20s_rc=$KOD
+vakt_runtime g20-shadow || { echo; summera; }
+
+write_spec "$WORK/g20-legit.spec.json" \
+  "g20-c-legit|$G20_REL|$G20_ALLOWED|"
+rigga g20l; CFG_SPEC="$WORK/g20-legit.spec.json"; CFG_BUDGET=1; write_config "$WORK/g20l.config.json"
+run_loop "$WORK/g20l.config.json" "$WORK/g20l.out" "$WORK/g20l.err"; g20l_rc=$KOD
+vakt_runtime g20-legit || { echo; summera; }
+
+G20_CTRL_SHA="$(find_candidate controller/verify/cli "H017_CANDIDATE_ALWAYS_GREEN_CONTROLLER $TOKEN")"
+G20_SHADOW_SHA="$(find_candidate verify/bin/_lib.sh "H017_CANDIDATE_ALWAYS_GREEN_LIB $TOKEN")"
+G20_LEGIT_SHA="$(att_sha "$WORK/g20l-att" g20-c-legit)"
+g20_ctrl_ok=1
+if [ -z "$G20_CTRL_SHA" ]; then
+  g20_ctrl_ok=0
+else
+  git show "$G20_CTRL_SHA:controller/verify/cli" 2>/dev/null | grep -qF "H017_CANDIDATE_ALWAYS_GREEN_CONTROLLER $TOKEN" || g20_ctrl_ok=0
+fi
+g20_shadow_ok=1
+if [ -z "$G20_SHADOW_SHA" ]; then
+  g20_shadow_ok=0
+else
+  git show "$G20_SHADOW_SHA:verify/bin/_lib.sh" 2>/dev/null | grep -qF "H017_CANDIDATE_ALWAYS_GREEN_LIB $TOKEN" || g20_shadow_ok=0
+  git show "$G20_SHADOW_SHA:$G20_REL" 2>/dev/null | grep -qF "H017_CANDIDATE_ALWAYS_GREEN_GATE $TOKEN" || g20_shadow_ok=0
+  git show "$G20_SHADOW_SHA:$FIX_REL/inner-target.sh" 2>/dev/null | grep -qF "H017_CANDIDATE_ALWAYS_GREEN_INNER $TOKEN" || g20_shadow_ok=0
+  git show "$G20_SHADOW_SHA:controller/verify/register.json" 2>/dev/null | grep -qF "H017_CANDIDATE_FRIENDLY_REGISTER $TOKEN" || g20_shadow_ok=0
+fi
+g20_legit_ok=1
+if [ -z "$G20_LEGIT_SHA" ]; then
+  g20_legit_ok=0
+else
+  git show "$G20_LEGIT_SHA:controller/verify/cli" 2>/dev/null | grep -qF 'H017_LEGIT_CONTROL_PLANE_CHANGE' || g20_legit_ok=0
+  git show "$G20_LEGIT_SHA:tests/h017product/g20-approved.txt" 2>/dev/null | grep -qF 'legitim kandidatdata' || g20_legit_ok=0
+fi
+inner_red="$(grep -c '^red ' "$UT/inner-target.log" 2>/dev/null || true)"
+inner_green="$(grep -c '^green ' "$UT/inner-target.log" 2>/dev/null || true)"
+if [ "$g20c_rc" -ne 0 ] || [ "$g20s_rc" -ne 0 ] || [ "$g20l_rc" -ne 0 ] \
+  || [ "$(starter g20-a-controller)" != "1" ] \
+  || [ "$(starter g20-b-shadow)" != "1" ] || [ "$(starter g20-c-legit)" != "1" ] \
+  || [ "$g20_ctrl_ok" -ne 1 ] || [ "$g20_shadow_ok" -ne 1 ]; then
+  no "K18 G20-fixturerna och sabotagecommits är mätbara" \
+    "exits/starts/controller-sha/shadow-sha/trees=$g20c_rc,$g20s_rc,$g20l_rc/$(starter g20-a-controller),$(starter g20-b-shadow),$(starter g20-c-legit)/[$G20_CTRL_SHA]/[$G20_SHADOW_SHA]/$g20_ctrl_ok,$g20_shadow_ok"
+elif attesterad "$WORK/g20c-att" g20-a-controller \
+  || attesterad "$WORK/g20s-att" g20-b-shadow; then
+  no "K18 pre-task trusted control plane dömer" "controller- eller skuggkopiekandidaten attesterades"
+elif grep -rqF "$G20_CTRL_SHA" "$WORK"/*-att/attestations.json 2>/dev/null \
+  || grep -rqF "$G20_SHADOW_SHA" "$WORK"/*-att/attestations.json 2>/dev/null; then
+  no "K18 sabotage-SHA finns i ingen attestationsbutik" "controller- eller shadow-SHA återfinns i en attestations.json"
+elif [ "$g20_legit_ok" -ne 1 ]; then
+  no "K18 legitim trust-critical kandidat kan frias" "positivt syskon saknar attestation eller förväntat kandidatdata/control-plane-diff"
+elif [ "$(count_lines "$UT/g20-outer.log")" != "3" ] \
+  || [ "$inner_red" != "2" ] || [ "$inner_green" != "1" ]; then
+  no "K18 trusted dom skiljer kandidatdata" \
+    "trusted outer/red/green=$(count_lines "$UT/g20-outer.log")/$inner_red/$inner_green, väntat 3/2/1"
+else ok "K18 G20: controller-sabotage och gröna gate/_lib/register-skuggor attesteras inte; samma trusted grind friar legitim trust-critical kandidatdata"; fi
+
+# ============ K19: byteåterställning + samma traps signalväg =================
+if ! restore_register; then
+  no "K19 registret återställs byte-identiskt" "inline restore/cmp/förhash misslyckades; backup bevaras av EXIT-trap"
+else
+  SIGNAL_READY="$WORK/signal.ready"; SIGNAL_OK="$WORK/signal.restored"
+  (
+    sig_backup="$WORK/register.signal.original"
+    sig_sha="$(fil_sha "$REGISTER")"
+    cp "$REGISTER" "$sig_backup" || exit 91
+    sig_restore() {
+      trap - EXIT HUP INT TERM
+      if cp "$sig_backup" "$REGISTER" && cmp -s "$sig_backup" "$REGISTER" \
+        && [ "$(fil_sha "$REGISTER")" = "$sig_sha" ]; then
+        printf 'restored\n' > "$SIGNAL_OK"
+      else
+        exit 92
+      fi
+    }
+    trap sig_restore EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    # Traps ovan är installerade innan den första mutationen.
+    printf '{"h017_signal_probe":true}\n' > "$REGISTER"
+    printf 'ready\n' > "$SIGNAL_READY"
+    while :; do sleep 1; done
+  ) &
+  signal_pid=$!; OWNED_PIDS="$OWNED_PIDS $signal_pid"
+  i=0
+  while [ ! -s "$SIGNAL_READY" ] && [ "$i" -lt 200 ]; do sleep 0.02; i=$((i + 1)); done
+  if [ -s "$SIGNAL_READY" ]; then kill -TERM "$signal_pid" >/dev/null 2>&1; fi
+  wait "$signal_pid" >/dev/null 2>&1; signal_rc=$?
+  OWNED_PIDS="${OWNED_PIDS% $signal_pid}"
+  if [ "$signal_rc" -ne 143 ] || [ ! -s "$SIGNAL_OK" ] \
+    || ! cmp -s "$REGISTER_BACKUP" "$REGISTER" \
+    || [ "$(fil_sha "$REGISTER")" != "$REGISTER_SHA_BEFORE" ]; then
+    no "K19 registerrestore överlever signal" \
+      "signal-exit/mark/cmp/hash=$signal_rc/$([ -s "$SIGNAL_OK" ] && echo ja || echo nej)/$(cmp -s "$REGISTER_BACKUP" "$REGISTER" && echo ja || echo nej)/$(fil_sha "$REGISTER")"
+  else ok "K19 registerbackup återställs byte-identiskt på normal väg och TERM-väg; förhashen stämmer"; fi
+fi
+
+# ================= K20: slutlig repo/worktree/ref/process-hygien =============
+case "$G20_PATH" in "$ROT"/verify/bin/.h017-g20-*) rm -f "$G20_PATH";; esac
+case "$FIXROOT" in "$ROT"/tests/controller/loop/.h017-fixture.*) rm -rf "$FIXROOT";; esac
+G20_PATH=""; FIXROOT=""
+
+if ! restore_register; then
+  no "K20 slutlig registerrestore" "register är inte byte-identiskt; backup bevaras i $REGISTER_BACKUP"
+elif [ "$(git rev-parse HEAD)" != "$ROT_HEAD" ]; then
+  no "K20 repo/worktree-hygien" "HEAD ändrades"
+elif [ "$(git status --porcelain -uall)" != "$ROT_STATUS" ]; then
+  no "K20 repo/worktree-hygien" "working tree/staging eller fixturrest avviker från prestate"
+elif [ "$(git for-each-ref --format='%(refname) %(objectname)' | LC_ALL=C sort)" != "$ROT_REFS" ]; then
+  no "K20 repo/worktree-hygien" "branch/ref-listan avviker från prestate"
+elif [ "$(git worktree list --porcelain)" != "$ROT_WORKTREES" ]; then
+  no "K20 repo/worktree-hygien" "hela worktree-listan avviker från prestate"
+elif [ -n "$(lease_residue)" ]; then
+  no "K20 leasehygien" "minst en fixture-lease har kvar en ägare: $(lease_residue)"
+elif [ -n "$OWNED_PIDS" ]; then
+  no "K20 processhygien" "ägda pid-listan är inte tom: $OWNED_PIDS"
+elif echo " $CHAIN_KODER " | grep -q ' 123 '; then
+  no "K20 processhygien" "minst en loop lämnade processgruppsbarn (koder:$CHAIN_KODER)"
+elif echo " $CHAIN_KODER " | grep -q ' 2 '; then
+  no "K20 exit 2 användes som kedjedom" "loopkoder:$CHAIN_KODER"
+else ok "K20 register, HEAD, staging, rotstatus, alla refs och hela worktree-listan byte-/textlika; inga ägda processer, ingen loopdom 2"; fi
+
+summera
