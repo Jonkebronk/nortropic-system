@@ -8,12 +8,15 @@
 
 Varvet är v4.1 §13, och varje led är en systerkomponent:
 
-    taskval  select/claim      →  workspace på aktuell base
+    verify   registerpreflight →  lease → privat pre-task authority-snapshot
+    taskval  select/claim      →  taskgrindens path/identitet återkontrolleras
+                              →  workspace på aktuell base
     envelope kuvert            →  brytare  försöket, med budget och fingerprints
                                   (som i sin tur kör utforare, som kör launch)
     worker   strikt parse      →  policy  diffpolicy mot samma spec
-    verify   registrerad grind mot kandidatträdet
-    attest   attestation vid grönt
+    verify   global registrerad grind mot exakt kandidat-SHA
+                              →  trusted taskgrind mot samma SHA
+    attest   attestation först när båda domarna är gröna
 
 Kedjan bygger ingenting själv. Den beordrar, läser utfall och binder varven —
 all logik som redan bor i en syster hämtas därifrån, aldrig i en kopia här.
@@ -65,6 +68,8 @@ inbyggd backlog och antar aldrig ett namnschema.
 """
 
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -96,6 +101,13 @@ LEASE_TTL = "180"
 # och en cron måste kunna skilja stoppet från en färdig drain utan att parsa
 # prosa. 2 används aldrig — verify/bin/_lib.sh binder den till ODÖMBART.
 RENT_STOPP = 3
+
+# Verify-gränsens fyra domäner. 0/1/2 ägs av grinden; 3 är verifierarens
+# urvalsvägran och 4 dess integritetsfel. Taskgrindens 2/3/4 stoppar hela
+# körningen. För den äldre GLOBALA configverifieraren måste okänt id (3)
+# däremot behålla h-011:s icke-retrybara varvslut/exit 0.
+VER_PASS, VER_FAIL, VER_ODOMBART, VER_VAGRAN, VER_INTEGRITET = 0, 1, 2, 3, 4
+SHA256_FORM = re.compile(r"^[0-9a-f]{64}$")
 
 # Brytarens exitkoder, skiva 11:s kontrakt. Läses här, dupliceras inte:
 # klassningen görs av brytaren, kedjan väljer bara väg på utfallet.
@@ -136,11 +148,14 @@ def fel(text: str) -> int:
     return 1
 
 
-def kor(argv: list, text: bool = True) -> subprocess.CompletedProcess:
+def kor(argv: list, text: bool = True,
+        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Systerkomponenterna anropas som argv utan skal (v4.1 §2 invariant 3)."""
     argv = [str(a) for a in argv]
     try:
-        return subprocess.run(argv, capture_output=True, text=text, shell=False)
+        return subprocess.run(
+            argv, capture_output=True, text=text, shell=False, env=env
+        )
     except OSError as e:
         raise Avbryt(f"{argv[0]} kunde inte startas — {e}") from e
 
@@ -218,7 +233,8 @@ def utsaga(nr: int, task: str, steg: str, text: str, svansrader: int = 0) -> Non
     return None
 
 
-def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int) -> tuple[str, str | None]:
+def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int,
+           taskdom: tuple[str, str] | None) -> tuple[str, str | None]:
     """Ett försök inuti claimet. Kandidatens SHA vid attestation, annars None.
 
     Eget workspace, eget kuvert, ett anrop till brytaren. Basen är densamma
@@ -244,9 +260,24 @@ def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int) -> tupl
         kuvertfil = tmpkat / f"{attempt}.kuvert.json"
         kuvertfil.write_text(r.stdout, encoding="utf-8")
 
+        # Samma valda post prövas en andra gång precis före brytaren kan
+        # starta sessionen. Den första kontrollen låg före workspace/kuvert;
+        # den här stänger fönstret som de två förberedelsestegen annars öppnar.
+        aktuell_taskdom = hamta_taskdom(k, task)
+        if aktuell_taskdom != taskdom:
+            raise Avbryt(
+                f"taskgrind: identiteten ändrades före session — "
+                f"{taskdom!r} → {aktuell_taskdom!r}"
+            )
+
+        worker_env = os.environ.copy()
+        # Hela controller-runroten är trusted runtime: pre-task-snapshot,
+        # kuvert, rapporter och verifierarens senare kandidatvyer. Workern får
+        # läsa kuvertet men aldrig förskapa eller byta controllerfilerna.
+        worker_env["NORTROPIC_TRUST_ROOT"] = str(tmpkat)
         r = kor([BRYTARE, "kor", Path(k["brytare_rot"]) / task, task,
                  k["budget"], k["troskel"], ws, kuvertfil, k["timeout_s"],
-                 "--", *k["worker_cmd"]], text=False)
+                 "--", *k["worker_cmd"]], text=False, env=worker_env)
         # Rapporten hålls i BYTES hela vägen. Skiva 6 dömer själv om den är
         # läsbar UTF-8; en avkodning här hade gjort en oparsbar rapport
         # parsbar. Avkodningen nedan är bara till utsagorna.
@@ -291,12 +322,51 @@ def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int) -> tupl
         # "rent träd" sanna i samma andetag, så en kontroll här kunde per
         # konstruktion aldrig fälla — precis det oombedda skyddslager regel 9
         # talar om (LOOP-ÄGARHAND-36, avgörande 5).
-        r = kor([VERIFY, "run", k["verifier_id"], ws])
-        if r.returncode != 0:
+        dom_env = os.environ.copy()
+        dom_env["TMPDIR"] = str(tmpkat)
+        r = kor([
+            VERIFY, "run-commit", k["_register_sha256"], k["verifier_id"], sha,
+            k["_snapshot_sha256"], k["_snapshot_dir"],
+        ], env=dom_env)
+        if r.returncode == VER_FAIL:
             utsaga(nr, task, "verifierare", r.stdout or r.stderr)
             return FALLET, None
+        if r.returncode == VER_ODOMBART:
+            raise Avbryt(f"verifierare: ODÖMBART — {enrad(r.stdout or r.stderr)}")
+        if r.returncode == VER_VAGRAN:
+            # h-011 binder okänt globalt id till avslutat varv/exit 0, men det
+            # får inte längre bli ett retrybart FAIL som bränner hela budgeten.
+            utsaga(nr, task, "verifierare", r.stdout or r.stderr)
+            return VARV_SLUT, None
+        if r.returncode != VER_PASS:
+            raise Avbryt(
+                f"verifierare: integritetsfel/vägran (exit {r.returncode}) — "
+                f"{enrad(r.stdout or r.stderr)}"
+            )
 
-        r = kor([ATTEST, k["attest_dir"], "write", task, sha])
+        if taskdom is not None:
+            grind_id, grind_sha256 = taskdom
+            r = kor([
+                VERIFY, "task-run", k["_register_sha256"], grind_id,
+                grind_sha256, sha, k["_snapshot_sha256"], k["_snapshot_dir"],
+            ], env=dom_env)
+            if r.returncode == VER_FAIL:
+                utsaga(nr, task, "taskgrind", f"{grind_id}: {r.stdout or r.stderr}")
+                return FALLET, None
+            if r.returncode == VER_ODOMBART:
+                raise Avbryt(
+                    f"taskgrind {grind_id}: ODÖMBART — {enrad(r.stdout or r.stderr)}"
+                )
+            if r.returncode != VER_PASS:
+                raise Avbryt(
+                    f"taskgrind {grind_id}: verifierarvägran (exit {r.returncode}) — "
+                    f"{enrad(r.stdout or r.stderr)}"
+                )
+
+        attest_argv = [ATTEST, k["attest_dir"], "write", task, sha]
+        if taskdom is not None:
+            attest_argv.extend(taskdom)
+        r = kor(attest_argv)
         if r.returncode != 0:
             utsaga(nr, task, "attest", r.stderr or r.stdout)
             return FALLET, None
@@ -313,6 +383,39 @@ def forsok(k: dict, task: str, base: str, tmpkat: Path, nr: int, f: int) -> tupl
                 raise Avbryt(f"workspace: {attempt} kunde inte rivas — {sista(r.stderr)}")
 
 
+def hamta_taskdom(k: dict, task: str) -> tuple[str, str] | None:
+    """Verifierarsystern äger task-id → exit_test → exakt registerpath.
+
+    Anropet ligger efter claim-eventet men före workspace och session. Därmed
+    omkontrolleras den valda posten överst i varje taskvarv utan att loopen
+    själv läser eller tolkar specens tasklista.
+    """
+    r = kor([VERIFY, "task", k["_register_sha256"], k["spec"], task])
+    if r.returncode != 0:
+        raise Avbryt(f"taskgrind: {sista(r.stderr or r.stdout)}")
+    try:
+        svar = json.loads(r.stdout)
+    except (TypeError, ValueError) as e:
+        raise Avbryt(f"taskgrind: verifieraren gav oläsbart uppslag — {e}") from e
+    if svar == {
+        "status": "ogrindad",
+        "register_sha256": k["_register_sha256"],
+    }:
+        return None
+    if (
+        not isinstance(svar, dict)
+        or svar.get("status") != "grindad"
+        or not isinstance(svar.get("grind_id"), str)
+        or not svar["grind_id"]
+        or not isinstance(svar.get("grind_sha256"), str)
+        or SHA256_FORM.fullmatch(svar["grind_sha256"]) is None
+        or svar.get("register_sha256") != k["_register_sha256"]
+        or set(svar) != {"status", "register_sha256", "grind_id", "grind_sha256"}
+    ):
+        raise Avbryt(f"taskgrind: verifieraren gav ogiltigt uppslag — {r.stdout.strip()[:300]}")
+    return svar["grind_id"], svar["grind_sha256"]
+
+
 def varv(k: dict, task: str, base: str, tmpkat: Path, nr: int) -> tuple[str, str | None]:
     """Ett varv = ETT claim och ett eller flera försök.
 
@@ -323,10 +426,19 @@ def varv(k: dict, task: str, base: str, tmpkat: Path, nr: int) -> tuple[str, str
     försök* höll inte som terminationsargument: mätt 2026-08-09 startade en
     obokförd 8 sessionen 75 gånger på 30 s utan att taket rörde sig.
     """
+    bunden_taskdom: tuple[str, str] | None | object = object()
     f = 0
     while True:
+        taskdom = hamta_taskdom(k, task)
+        if f == 0:
+            bunden_taskdom = taskdom
+        elif taskdom != bunden_taskdom:
+            raise Avbryt(
+                f"taskgrind: identiteten ändrades mellan försök — "
+                f"{bunden_taskdom!r} → {taskdom!r}"
+            )
         f += 1
-        utfall, sha = forsok(k, task, base, tmpkat, nr, f)
+        utfall, sha = forsok(k, task, base, tmpkat, nr, f, taskdom)
         if utfall is not FALLET:
             return utfall, sha
 
@@ -365,6 +477,25 @@ def drain(k: dict, tmpkat: Path) -> int:
 def gor_run(configfil: Path) -> int:
     k = las_config(configfil)
 
+    # Hela verifierarregistret prövas medan vägran fortfarande är gratis:
+    # före lease, claim-event, workspace, brytarkatalog och modellsession.
+    r = kor([VERIFY, "preflight"])
+    if r.returncode != 0:
+        raise Avbryt(f"verifierarregister: {sista(r.stderr or r.stdout)}")
+    try:
+        preflight = json.loads(r.stdout)
+    except (TypeError, ValueError) as e:
+        raise Avbryt(f"verifierarregister: oläsbart preflightsvar — {e}") from e
+    if (
+        not isinstance(preflight, dict)
+        or preflight.get("status") != "ok"
+        or not isinstance(preflight.get("register_sha256"), str)
+        or SHA256_FORM.fullmatch(preflight["register_sha256"]) is None
+        or set(preflight) != {"status", "register_sha256"}
+    ):
+        raise Avbryt(f"verifierarregister: ogiltigt preflightsvar — {r.stdout.strip()[:300]}")
+    k["_register_sha256"] = preflight["register_sha256"]
+
     # Leasen tas FÖRE allt annat och före varje skrivning. En körning som
     # inte äger resursen får inte lämna ett spår efter sig.
     r = kor([LEASE, k["lease_dir"], "acquire", k["lease_resurs"], "--ttl", LEASE_TTL])
@@ -373,6 +504,27 @@ def gor_run(configfil: Path) -> int:
 
     tmpkat = Path(tempfile.mkdtemp(prefix="nortropic-loop-"))
     try:
+        # Snapshoten skapas efter vunnen lease men före första claim/event,
+        # workspace eller session. Den lever hela runnet och är den enda
+        # control-plane-authority som taskgrindarna senare får projicera.
+        snapshot = tmpkat / "pre-task-authority"
+        r = kor([VERIFY, "prepare", k["_register_sha256"], snapshot])
+        if r.returncode != 0:
+            raise Avbryt(f"pre-task authority: {sista(r.stderr or r.stdout)}")
+        try:
+            svar = json.loads(r.stdout)
+        except (TypeError, ValueError) as e:
+            raise Avbryt(f"pre-task authority: oläsbart snapshotsvar — {e}") from e
+        if (
+            not isinstance(svar, dict)
+            or svar.get("status") != "ok"
+            or not isinstance(svar.get("snapshot_sha256"), str)
+            or SHA256_FORM.fullmatch(svar["snapshot_sha256"]) is None
+            or set(svar) != {"status", "snapshot_sha256"}
+        ):
+            raise Avbryt(f"pre-task authority: ogiltigt snapshotsvar — {r.stdout.strip()[:300]}")
+        k["_snapshot_dir"] = str(snapshot)
+        k["_snapshot_sha256"] = svar["snapshot_sha256"]
         return drain(k, tmpkat)
     finally:
         try:

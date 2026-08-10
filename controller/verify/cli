@@ -4,65 +4,115 @@
     list
     preflight
     check <verifier-id>
-    task <spec-fil> <task-id>
+    task [<register-sha256>] <spec-fil> <task-id>
+    prepare <register-sha256> <snapshot-katalog>
     run <verifier-id> [målkatalog]
-    task-run <verifier-id> <förväntad-sha256> <kandidatkatalog>
+    run-commit <register-sha256> <verifier-id> <kandidat-sha>
+               <snapshot-sha256> <snapshot-katalog>
+    task-run <register-sha256> <verifier-id> <grind-sha256> <kandidat-sha>
+             <snapshot-sha256> <snapshot-katalog>
 
 En körd grind äger taskdomänen 0 PASS, 1 FAIL och 2 ODÖMBART. Verifierarens
-egna riggfel och vägran använder 3, så de aldrig kan misstolkas som en dom.
-Fri text blir aldrig ett kommando: runnern kommer ur en fast tabell och varje
-process startas som argv utan shell.
+egen urvalsvägran använder 3 och integritetsfel använder 4, så inget av dem
+kan misstolkas som en taskdom. Fri text blir aldrig ett kommando: runnern
+kommer ur en fast tabell och varje process startas som argv utan shell=True.
 """
 
 import hashlib
 import json
+import os
 import re
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 
 if sys.version_info < (3, 12):
     sys.exit(f"controller/verify/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
 
-ROT = Path(__file__).resolve().parents[2]
-REGISTER = Path(__file__).resolve().parent / "register.json"
+KODROT = Path(__file__).resolve().parents[2]
+# En trusted taskgrind kan starta samma, projicerade verifierare relativt från
+# kandidatvyn. Då pekar den här interna capabilityn på run-startens privata
+# authority-snapshot, aldrig på kandidatens register eller gatefiler.
+_AUTHORITY = os.environ.get("NORTROPIC_VERIFY_AUTHORITY_ROOT")
+ROT = Path(_AUTHORITY).resolve() if _AUTHORITY else KODROT
+REGISTER_REL = PurePosixPath("controller/verify/register.json")
+REGISTER = ROT.joinpath(*REGISTER_REL.parts)
 RUNNERS = {"node": "node", "bash": "bash"}
 
-PASS, FAIL, ODOMBART, VAGRAN = 0, 1, 2, 3
+PASS, FAIL, ODOMBART, VAGRAN, INTEGRITET = 0, 1, 2, 3, 4
 SHA256_FORM = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_FORM = re.compile(r"^[0-9a-f]{40}$")
 # Repo-paths är data, aldrig shell. Bindestrecket ensamt är tillåtet som en
 # säker, oregistrerad legacy-path i loopens interna falltester.
 PATH_FORM = re.compile(r"^[A-Za-z0-9._/-]+$")
 
+# Planens pre-task-yta, plus varje registrerad gatepath. Gatefilens hela
+# parentkatalog snapshotas också, så $0-relativa hjälpfiler kommer ur samma
+# ögonblick; bara kontrollplanet projiceras över kandidatens produktdata.
+PRETASK_PATHS = (
+    "controller",
+    "verify",
+    "specs",
+    "scripts/check-invariants.mjs",
+    "config/managed-settings.json",
+    "docs/07-konstitution.md",
+    "docs/03-regelverk.md",
+    "docs/loop/regler.md",
+)
+
+_barn: subprocess.Popen | None = None
+
 
 class Riggfel(ValueError):
-    """Verifierarens egen fail-closed-domän, skild från taskens 0/1/2."""
+    """Verifierarens urvals-/startvägran, skild från taskens 0/1/2."""
 
 
-def vagra(text: str) -> int:
+class Integritetsfel(Riggfel):
+    """Drift eller trasig authority som aldrig får bli ett vanligt urvalsutfall."""
+
+
+class Avbruten(BaseException):
+    """Signal som ska städa taskdomsvyn och behålla 128+signal som exitkod."""
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def vagra(text: str, kod: int = VAGRAN) -> int:
     print(text, file=sys.stderr)
-    return VAGRAN
+    return kod
 
 
 def utan_dubbla_nycklar(par: list[tuple[str, object]]) -> dict:
     d = {}
     for nyckel, varde in par:
         if nyckel in d:
-            raise Riggfel(f"registerstruktur: JSON-nyckeln {nyckel!r} förekommer mer än en gång")
+            raise Riggfel(f"JSON-nyckeln {nyckel!r} förekommer mer än en gång")
         d[nyckel] = varde
     return d
 
 
-def las_json(fil: Path, namn: str) -> object:
+def parse_json(raw: bytes, namn: str) -> object:
     try:
-        with fil.open(encoding="utf-8") as f:
-            return json.load(f, object_pairs_hook=utan_dubbla_nycklar)
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=utan_dubbla_nycklar)
     except Riggfel:
         raise
-    except (OSError, ValueError, UnicodeError) as e:
+    except (ValueError, UnicodeError) as e:
+        raise Riggfel(f"{namn} är inte giltig UTF-8-JSON: {e}") from e
+
+
+def las_json(fil: Path, namn: str) -> object:
+    try:
+        raw = fil.read_bytes()
+    except OSError as e:
         raise Riggfel(f"{namn} kunde inte läsas ({fil}): {e}") from e
+    return parse_json(raw, namn)
 
 
 def saker_relpath(text: object) -> PurePosixPath | None:
@@ -75,89 +125,140 @@ def saker_relpath(text: object) -> PurePosixPath | None:
     return p
 
 
-def saker_registerfil(text: object) -> Path | None:
-    """Vanlig fil under repot, utan symlänk i någon sökvägskomponent."""
+def saker_registerfil(text: object, root: Path = ROT) -> Path | None:
+    """Vanlig fil under root, utan symlänk i någon sökvägskomponent."""
     rel = saker_relpath(text)
     if rel is None:
         return None
-    p = ROT
-    for del_ in rel.parts:
+    p = root
+    for nr, del_ in enumerate(rel.parts):
         p = p / del_
-        if p.is_symlink():
+        try:
+            lage = p.lstat().st_mode
+        except OSError:
+            return None
+        if stat.S_ISLNK(lage):
+            return None
+        if nr < len(rel.parts) - 1 and not stat.S_ISDIR(lage):
             return None
     try:
-        verklig = p.resolve(strict=True)
+        return p if stat.S_ISREG(p.lstat().st_mode) else None
     except OSError:
         return None
-    if not verklig.is_relative_to(ROT) or not p.is_file():
-        return None
-    return p
 
 
-def sha256(p: Path) -> str:
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+def las_regelbundna_bytes(p: Path) -> bytes:
+    """Läs en redan lstat-prövad fil utan att följa en sistasekundssymlänk."""
+    flaggor = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(p, flaggor)
+    except OSError as e:
+        raise Integritetsfel(f"fil kunde inte öppnas säkert: {p}: {e}") from e
+    try:
+        lage = os.fstat(fd).st_mode
+        if not stat.S_ISREG(lage):
+            raise Integritetsfel(f"filen är inte längre reguljär: {p}")
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read()
+    finally:
+        os.close(fd)
 
 
-def las_register() -> dict[str, dict]:
-    data = las_json(REGISTER, "registret")
+def sha256_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def las_register_fran(registerfil: Path) -> tuple[dict[str, dict], str]:
+    try:
+        lage = registerfil.lstat().st_mode
+    except OSError as e:
+        raise Integritetsfel(f"registret kunde inte läsas ({registerfil}): {e}") from e
+    if stat.S_ISLNK(lage) or not stat.S_ISREG(lage):
+        raise Integritetsfel(f"registret är inte en vanlig, icke-symlänkad fil: {registerfil}")
+    raw = las_regelbundna_bytes(registerfil)
+    try:
+        data = parse_json(raw, "registret")
+    except Riggfel as e:
+        raise Integritetsfel(f"registerstruktur: {e}") from e
     if not isinstance(data, dict) or not isinstance(data.get("verifiers"), dict):
-        raise Riggfel("registerstruktur: toppnivån måste bära dict-fältet verifiers")
+        raise Integritetsfel("registerstruktur: toppnivån måste bära dict-fältet verifiers")
 
     register = data["verifiers"]
-    paths: dict[str, str] = {}
     for vid, post in register.items():
         if not isinstance(vid, str) or not vid:
-            raise Riggfel("registerstruktur: varje verifier-id måste vara en icke-tom sträng")
+            raise Integritetsfel("registerstruktur: varje verifier-id måste vara en icke-tom sträng")
         if not isinstance(post, dict):
-            raise Riggfel(f"registerstruktur: posten för {vid} är ingen dict")
+            raise Integritetsfel(f"registerstruktur: posten för {vid} är ingen dict")
         path = post.get("path")
-        if saker_relpath(path) is None:
-            raise Riggfel(f"osäker registerpath för {vid}: {path!r}")
+        if not isinstance(path, str) or not path:
+            raise Integritetsfel(f"registerstruktur: path för {vid} måste vara en icke-tom sträng")
+        registrerad_sha = post.get("sha256")
+        if not isinstance(registrerad_sha, str) or SHA256_FORM.fullmatch(registrerad_sha) is None:
+            raise Integritetsfel(f"registerstruktur: ogiltig sha256 för {vid}")
+        if not isinstance(post.get("startbar"), bool):
+            raise Integritetsfel(f"registerstruktur: startbar för {vid} måste vara bool")
+        runner = post.get("runner")
+        if runner is not None and (not isinstance(runner, str) or not runner):
+            raise Integritetsfel(f"registerstruktur: runner för {vid} måste vara sträng eller null")
+        if post["startbar"] and runner is None:
+            raise Integritetsfel(f"registerstruktur: startbar post {vid} saknar runner")
+    return register, sha256_bytes(raw)
+
+
+def las_register() -> tuple[dict[str, dict], str]:
+    return las_register_fran(REGISTER)
+
+
+def filidentitet(root: Path, vid: str, post: dict) -> tuple[Path, bytes, str]:
+    fil = saker_registerfil(post["path"], root)
+    if fil is None:
+        raise Integritetsfel(f"osäker eller saknad registerfil för {vid}: {post['path']}")
+    raw = las_regelbundna_bytes(fil)
+    faktisk_sha = sha256_bytes(raw)
+    if faktisk_sha != post["sha256"]:
+        raise Integritetsfel(
+            f"hash_mismatch: {post['path']}\n"
+            f"  registrerad: {post['sha256']}\n"
+            f"  på disk:     {faktisk_sha}"
+        )
+    return fil, raw, faktisk_sha
+
+
+def validera_hela_register(register: dict[str, dict], root: Path = ROT) -> None:
+    """Unik path, repo-regularitet och hash för VARJE post."""
+    paths: dict[str, str] = {}
+    for vid, post in register.items():
+        path = post["path"]
         if path in paths:
-            raise Riggfel(
+            raise Integritetsfel(
                 f"dubblerad registerpath: {path} används av både {paths[path]} och {vid}"
             )
         paths[path] = vid
-        registrerad_sha = post.get("sha256")
-        if not isinstance(registrerad_sha, str) or SHA256_FORM.fullmatch(registrerad_sha) is None:
-            raise Riggfel(f"registerstruktur: ogiltig sha256 för {vid}")
-        if not isinstance(post.get("startbar"), bool):
-            raise Riggfel(f"registerstruktur: startbar för {vid} måste vara bool")
-        runner = post.get("runner")
-        if runner is not None and (not isinstance(runner, str) or not runner):
-            raise Riggfel(f"registerstruktur: runner för {vid} måste vara sträng eller null")
-        if post["startbar"] and runner is None:
-            raise Riggfel(f"registerstruktur: startbar post {vid} saknar runner")
-
-        fil = saker_registerfil(path)
-        if fil is None:
-            raise Riggfel(f"osäker eller saknad registerfil för {vid}: {path}")
-        faktisk_sha = sha256(fil)
-        if faktisk_sha != registrerad_sha:
-            raise Riggfel(
-                f"hash_mismatch: {path}\n"
-                f"  registrerad: {registrerad_sha}\n"
-                f"  på disk:     {faktisk_sha}"
-            )
-    return register
+        filidentitet(root, vid, post)
 
 
-def startbar_post(register: dict[str, dict], vid: str) -> tuple[dict, Path, str]:
+def startbar_post(
+    register: dict[str, dict], vid: str, root: Path = ROT
+) -> tuple[dict, Path, str, bytes]:
     if vid not in register:
         raise Riggfel(f"okänt verifier-id: {vid} — verifierare körs bara ur registret")
     post = register[vid]
-    fil = saker_registerfil(post["path"])
-    if fil is None:
-        raise Riggfel(f"osäker eller saknad sökväg för {vid}: {post['path']}")
-    faktisk_sha = sha256(fil)
-    if faktisk_sha != post["sha256"]:
-        raise Riggfel(f"hash_mismatch: {post['path']} ändrad sedan registreringen — körning stoppad")
+    fil, raw, _faktisk_sha = filidentitet(root, vid, post)
     if not post["startbar"]:
         raise Riggfel(f"ej startbar: {vid} — {post.get('skal_ej_startbar', 'ingen subprocess-ingång')}")
     runner = RUNNERS.get(post.get("runner"))
     if runner is None:
         raise Riggfel(f"okänd runner för {vid}: {post.get('runner')}")
-    return post, fil, runner
+    return post, fil, runner, raw
+
+
+def krav_registerdigest(faktisk: str, vantad: str) -> None:
+    if SHA256_FORM.fullmatch(vantad) is None:
+        raise Integritetsfel(f"ogiltig förväntad register-sha256: {vantad!r}")
+    if faktisk != vantad:
+        raise Integritetsfel(
+            f"registerdrift: preflight band {vantad}, aktuella bytes är {faktisk}"
+        )
 
 
 def kmd_list(register: dict[str, dict]) -> int:
@@ -167,8 +268,9 @@ def kmd_list(register: dict[str, dict]) -> int:
     return PASS
 
 
-def kmd_preflight(register: dict[str, dict]) -> int:
-    print(f"ok: {len(register)} registerposter")
+def kmd_preflight(register: dict[str, dict], register_sha: str) -> int:
+    validera_hela_register(register)
+    print(json.dumps({"status": "ok", "register_sha256": register_sha}, sort_keys=True))
     return PASS
 
 
@@ -176,9 +278,8 @@ def kmd_check(register: dict[str, dict], vid: str) -> int:
     if vid not in register:
         raise Riggfel(f"okänt verifier-id: {vid}")
     post = register[vid]
-    # Hela registret är redan validerat av las_register; utsagan binder den
-    # faktiska hash som loopen senare bokför i attestationen.
-    faktisk_sha = sha256(saker_registerfil(post["path"]))
+    _fil, _raw, faktisk_sha = filidentitet(ROT, vid, post)
+    # En ensam 64-hex-token binder den faktiska hash som loopen bokför.
     print(f"ok: {vid} {post['path']} {faktisk_sha}")
     return PASS
 
@@ -198,155 +299,587 @@ def las_task(spec_fil: Path, task_id: str) -> dict:
     return traffar[0]
 
 
-def kmd_task(register: dict[str, dict], spec_fil: Path, task_id: str) -> int:
+def kmd_task(
+    register: dict[str, dict], register_sha: str, spec_fil: Path, task_id: str,
+    vantat_register: str | None = None,
+) -> int:
+    if vantat_register is not None:
+        krav_registerdigest(register_sha, vantat_register)
     task = las_task(spec_fil, task_id)
     path = task.get("exit_test")
     if saker_relpath(path) is None:
         raise Riggfel(f"osäker exit_test för {task_id}: {path!r}")
     traffar = [(vid, post) for vid, post in register.items() if post["path"] == path]
     if not traffar:
-        print(json.dumps({"status": "ogrindad"}, sort_keys=True))
+        svar = {"status": "ogrindad"}
+        if vantat_register is not None:
+            svar["register_sha256"] = register_sha
+        print(json.dumps(svar, sort_keys=True))
         return PASS
     if len(traffar) != 1:
-        raise Riggfel(f"exit_test {path} gav {len(traffar)} exakta registerträffar")
+        raise Integritetsfel(f"exit_test {path} gav {len(traffar)} exakta registerträffar")
     vid, post = traffar[0]
-    # Hela posten är verklighetskontrollerad, men startbarhet är ett krav först
-    # när posten faktiskt valts för en task.
+    # Startbarhet och faktiska bytes prövas först när posten valts för tasken.
     startbar_post(register, vid)
-    print(json.dumps({
+    svar = {
         "status": "grindad",
         "grind_id": vid,
         "grind_sha256": post["sha256"],
-    }, sort_keys=True))
+    }
+    if vantat_register is not None:
+        svar["register_sha256"] = register_sha
+    print(json.dumps(svar, sort_keys=True))
     return PASS
 
 
-def kmd_run(register: dict[str, dict], vid: str, mal: Path = ROT) -> int:
-    _post, fil, runner = startbar_post(register, vid)
+def _doda_gruppen(p: subprocess.Popen, sig: int) -> None:
     try:
-        mal = mal.resolve(strict=True)
+        os.killpg(os.getpgid(p.pid), sig)
+    except (ProcessLookupError, PermissionError):
+        try:
+            (p.terminate if sig == signal.SIGTERM else p.kill)()
+        except ProcessLookupError:
+            pass
+
+
+def _grupp_lever(pid: int) -> bool:
+    try:
+        os.killpg(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def _doda_barnet() -> None:
+    p = _barn
+    if p is None:
+        return
+    if _grupp_lever(p.pid):
+        _doda_gruppen(p, signal.SIGTERM)
+    if p.poll() is None:
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _doda_gruppen(p, signal.SIGKILL)
+            p.wait()
+    if _grupp_lever(p.pid):
+        _doda_gruppen(p, signal.SIGKILL)
+
+
+def _vanta_grupp_borta(pid: int, sekunder: float) -> bool:
+    slut = time.monotonic() + sekunder
+    while _grupp_lever(pid) and time.monotonic() < slut:
+        time.sleep(0.02)
+    return not _grupp_lever(pid)
+
+
+def _avbryt(signum: int, _frame) -> None:
+    # Ett andra TERM får inte avbryta finally-städningen halvvägs.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    _doda_barnet()
+    raise Avbruten(signum)
+
+
+def sanerad_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    for nyckel in list(env):
+        if nyckel in {
+            "BASH_ENV", "ENV", "PYTHONPATH", "NODE_OPTIONS", "GIT_DIR",
+            "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+        } or nyckel == "GIT_CONFIG_COUNT" or nyckel.startswith("GIT_CONFIG_KEY_") \
+                or nyckel.startswith("GIT_CONFIG_VALUE_"):
+            env.pop(nyckel, None)
+    delar = [d for d in env.get("PATH", "").split(os.pathsep) if d and os.path.isabs(d)]
+    env["PATH"] = os.pathsep.join(delar) or "/usr/bin:/bin:/usr/sbin:/sbin"
+    if extra:
+        env.update(extra)
+    return env
+
+
+def kor_grind(runner: str, fil: Path, raw: bytes, mal: Path, env: dict[str, str] | None = None) -> int:
+    """Kör godkända bytes; bash läser exakt den redan hashade byteföljden."""
+    global _barn
+    if runner == "bash":
+        # Den statiska -c-strängen gör $0 till snapshotpathen (så _lib.sh
+        # laddas bredvid grinden), men gatebytesen kommer från stdin och kan
+        # inte bytas mellan hash och bash open(). Fri text blir aldrig argv.
+        argv = [runner, "-c", ". /dev/stdin", str(fil)]
+        stdin = subprocess.PIPE
+    else:
+        argv = [runner, str(fil)]
+        stdin = None
+    try:
+        p = subprocess.Popen(
+            argv,
+            cwd=mal,
+            stdin=stdin,
+            shell=False,
+            start_new_session=True,
+            env=env,
+        )
+    except OSError as e:
+        raise Riggfel(f"runnern kunde inte startas: {e}") from e
+    _barn = p
+    try:
+        if runner == "bash":
+            p.communicate(input=raw)
+        else:
+            p.wait()
+        kod = p.returncode
+        # En grindledare får inte lämna en processgrupp som fortsätter skriva
+        # efter domen. Rensa resten, men vägra själva domen.
+        if _grupp_lever(p.pid):
+            _doda_gruppen(p, signal.SIGTERM)
+            if not _vanta_grupp_borta(p.pid, 1):
+                _doda_gruppen(p, signal.SIGKILL)
+                _vanta_grupp_borta(p.pid, 1)
+            raise Integritetsfel("grinden lämnade processer efter sitt verdict")
+    finally:
+        _barn = None
+    if kod not in (PASS, FAIL, ODOMBART):
+        raise Riggfel(f"grinden gav okänd verdictkod {kod}, väntat 0, 1 eller 2")
+    return kod
+
+
+def los_malkatalog(mal: Path) -> Path:
+    try:
+        verklig = mal.resolve(strict=True)
     except OSError as e:
         raise Riggfel(f"målkatalog kunde inte lösas: {mal}: {e}") from e
-    if not mal.is_dir():
-        raise Riggfel(f"målkatalog saknas eller är ingen katalog: {mal}")
-    try:
-        # Grindens 0/1/2 returneras byte-likt som processkod. Ingen egen
-        # verifierarvägran använder någon av de tre koderna.
-        return subprocess.run([runner, str(fil)], cwd=mal, shell=False).returncode
-    except OSError as e:
-        raise Riggfel(f"runnern för {vid} kunde inte startas: {e}") from e
+    if not verklig.is_dir():
+        raise Riggfel(f"målkatalog saknas eller är ingen katalog: {verklig}")
+    return verklig
+
+
+def kmd_run(register: dict[str, dict], vid: str, mal: Path = ROT) -> int:
+    _post, fil, runner, raw = startbar_post(register, vid)
+    return kor_grind(runner, fil, raw, los_malkatalog(mal), sanerad_env())
 
 
 def git(*argv: object) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", "-C", str(ROT), *(str(a) for a in argv)],
+        ["git", "-C", str(KODROT), *(str(a) for a in argv)],
         capture_output=True,
         text=True,
         shell=False,
+        env=sanerad_env(),
     )
 
 
-def ersatt_med_trusted_lank(vy: Path, relativ: str, trusted: Path) -> None:
-    """Ersätt en path i den disponibla vyn utan att följa kandidatsymlänkar."""
-    mal = vy / relativ
-    if mal.is_symlink() or mal.is_file():
-        mal.unlink()
-    elif mal.exists():
-        shutil.rmtree(mal)
-    mal.parent.mkdir(parents=True, exist_ok=True)
-    mal.symlink_to(trusted, target_is_directory=trusted.is_dir())
-
-
-def kandidat_sha(mal: Path) -> str:
+def git_avbrytbar(*argv: object) -> subprocess.CompletedProcess:
+    global _barn
+    p = subprocess.Popen(
+        ["git", "-C", str(KODROT), *(str(a) for a in argv)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        shell=False,
+        start_new_session=True,
+        env=sanerad_env(),
+    )
+    _barn = p
     try:
-        verklig = mal.resolve(strict=True)
-    except OSError as e:
-        raise Riggfel(f"kandidatkatalog kunde inte lösas: {mal}: {e}") from e
-    topp = subprocess.run(
-        ["git", "-C", str(verklig), "rev-parse", "--show-toplevel"],
-        capture_output=True, text=True, shell=False,
-    )
-    if topp.returncode != 0 or Path(topp.stdout.strip()).resolve() != verklig:
-        raise Riggfel(f"kandidatkatalog är inte roten till ett git-worktree: {verklig}")
-    status = subprocess.run(
-        ["git", "-C", str(verklig), "status", "--porcelain", "-uall"],
-        capture_output=True, text=True, shell=False,
-    )
-    if status.returncode != 0 or status.stdout:
-        raise Riggfel("kandidatkatalogens arbetsträd är inte rent och kan inte projiceras exakt")
-    svar = subprocess.run(
-        ["git", "-C", str(verklig), "rev-parse", "--verify", "HEAD^{commit}"],
-        capture_output=True, text=True, shell=False,
-    )
-    sha = svar.stdout.strip()
-    if svar.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
-        raise Riggfel("kandidatkatalogens HEAD är ingen full commit-SHA")
+        ut, err = p.communicate()
+    finally:
+        _barn = None
+    return subprocess.CompletedProcess(p.args, p.returncode, ut, err)
+
+
+def commit_sha(sha: str) -> str:
+    if COMMIT_FORM.fullmatch(sha) is None:
+        raise Integritetsfel(f"kandidatidentiteten är inte en full commit-SHA: {sha!r}")
+    r = git("rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+    faktisk = r.stdout.strip()
+    if r.returncode != 0 or faktisk != sha:
+        raise Integritetsfel(f"kandidat-SHA finns inte som exakt commit i repot: {sha}")
     return sha
 
 
-def kmd_task_run(register: dict[str, dict], vid: str, vantad_sha: str, kandidat: Path) -> int:
-    post, _fil, _runner = startbar_post(register, vid)
-    if post["sha256"] != vantad_sha:
-        raise Riggfel(
-            f"taskgrindens identitet drev efter taskstart: väntad {vantad_sha}, "
-            f"nu {post['sha256']}"
-        )
-    sha = kandidat_sha(kandidat)
+def worktree_registrerat(vy: Path) -> bool:
+    r = git("worktree", "list", "--porcelain")
+    return r.returncode == 0 and any(rad == f"worktree {vy}" for rad in r.stdout.splitlines())
+
+
+def stada_kandidatvy(temp_rot: Path, vy: Path) -> str:
+    for _forsok in range(3):
+        git("worktree", "remove", "--force", str(vy))
+        shutil.rmtree(temp_rot, ignore_errors=True)
+        git("worktree", "prune")
+        if not temp_rot.exists() and not worktree_registrerat(vy):
+            return ""
+    return "taskdomsvyn eller dess worktree-registrering blev kvar"
+
+
+def kor_i_kandidatvy(sha: str, handling) -> int:
+    sha = commit_sha(sha)
     temp_rot = Path(tempfile.mkdtemp(prefix="nortropic-taskdom-"))
     vy = temp_rot / "candidate"
-    tillagd = False
-    domkod = VAGRAN
-    cleanupfel = ""
+    resultat = VAGRAN
+    undantag: BaseException | None = None
     try:
-        r = git("worktree", "add", "--detach", str(vy), sha)
+        r = git_avbrytbar("worktree", "add", "--detach", str(vy), sha)
         if r.returncode != 0:
-            raise Riggfel(f"taskdomsvyn kunde inte skapas: {r.stderr.strip()}")
-        tillagd = True
-
-        # Kandidatens träd är målet. Verifierarens kanoniska entrypoint och
-        # verify/bin är däremot länkar till pre-task-repot. Därmed kan relativa
-        # control-plane-anrop inte byta verifierare, register, grind eller
-        # _lib.sh, samtidigt som kandidatens övriga filer förblir domens data.
-        ersatt_med_trusted_lank(vy, "controller/verify", ROT / "controller/verify")
-        ersatt_med_trusted_lank(vy, "verify/bin", ROT / "verify/bin")
-        domkod = kmd_run(register, vid, vy)
-    finally:
-        if tillagd:
-            r = git("worktree", "remove", "--force", str(vy))
-            if r.returncode != 0:
-                cleanupfel = r.stderr.strip() or "git worktree remove misslyckades"
-            git("worktree", "prune")
-        shutil.rmtree(temp_rot, ignore_errors=True)
+            raise Integritetsfel(f"taskdomsvyn kunde inte skapas: {r.stderr.strip()}")
+        resultat = handling(vy)
+    except BaseException as e:
+        undantag = e
+    cleanupfel = stada_kandidatvy(temp_rot, vy)
     if cleanupfel:
-        raise Riggfel(f"taskdomsvyn kunde inte städas: {cleanupfel}")
-    return domkod
+        raise Integritetsfel(f"taskdomsvyn kunde inte städas: {cleanupfel}")
+    if undantag is not None:
+        raise undantag
+    return resultat
+
+
+def kopiera_fil(src: Path, dst: Path) -> None:
+    raw = las_regelbundna_bytes(src)
+    lage = stat.S_IMODE(src.lstat().st_mode)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with dst.open("xb") as f:
+            f.write(raw)
+        dst.chmod(lage)
+    except OSError as e:
+        raise Integritetsfel(f"snapshotfil kunde inte skrivas: {dst}: {e}") from e
+
+
+def kopiera_trad(src: Path, dst: Path, *, uteslut_git: bool = False) -> None:
+    try:
+        lage = src.lstat().st_mode
+    except OSError as e:
+        raise Integritetsfel(f"snapshotkälla saknas: {src}: {e}") from e
+    if stat.S_ISLNK(lage):
+        # Authority-snapshoten följer aldrig en länk. En oregistrerad länk i
+        # repots produktdata (h-017 har en sådan negativ fixtur) utelämnas;
+        # en registrerad eller projicerad länk vägras separat av respektive
+        # pathkontroll och kan därför aldrig bli körbar authority.
+        return
+    if stat.S_ISREG(lage):
+        kopiera_fil(src, dst)
+        return
+    if not stat.S_ISDIR(lage):
+        raise Integritetsfel(f"snapshotkälla är specialfil: {src}")
+    dst.mkdir(mode=stat.S_IMODE(lage), parents=True, exist_ok=False)
+    for barn in sorted(src.iterdir(), key=lambda p: p.name):
+        if uteslut_git and src == KODROT and barn.name == ".git":
+            continue
+        kopiera_trad(barn, dst / barn.name, uteslut_git=uteslut_git)
+    dst.chmod(stat.S_IMODE(lage))
+
+
+def trad_manifest(root: Path) -> str:
+    poster: list[list[str]] = []
+
+    def ga(p: Path, rel: PurePosixPath) -> None:
+        try:
+            lage = p.lstat().st_mode
+        except OSError as e:
+            raise Integritetsfel(f"snapshotmanifest kunde inte läsa {p}: {e}") from e
+        mode = f"{stat.S_IMODE(lage):04o}"
+        if stat.S_ISLNK(lage):
+            raise Integritetsfel(f"snapshotmanifest vägrar symlänk: {rel}")
+        if stat.S_ISDIR(lage):
+            poster.append(["d", rel.as_posix(), mode])
+            for barn in sorted(p.iterdir(), key=lambda q: q.name):
+                ga(barn, rel / barn.name)
+            return
+        if stat.S_ISREG(lage):
+            poster.append(["f", rel.as_posix(), mode, sha256_bytes(las_regelbundna_bytes(p))])
+            return
+        raise Integritetsfel(f"snapshotmanifest vägrar specialfil: {rel}")
+
+    ga(root, PurePosixPath("."))
+    raw = json.dumps(poster, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return sha256_bytes(raw)
+
+
+def projektionspaths(register: dict[str, dict]) -> list[PurePosixPath]:
+    paths = [PurePosixPath(p) for p in PRETASK_PATHS]
+    paths.extend(PurePosixPath(post["path"]) for post in register.values())
+    unika: list[PurePosixPath] = []
+    for rel in sorted(set(paths), key=lambda p: (len(p.parts), p.as_posix())):
+        if any(rel == rot or rot in rel.parents for rot in unika):
+            continue
+        unika.append(rel)
+    return unika
+
+
+def snapshot_roots(register: dict[str, dict]) -> list[PurePosixPath]:
+    """Minsta authority-subträd som bär kontrollplanet och gateberoenden."""
+    paths = [
+        PurePosixPath("controller"),
+        PurePosixPath("verify"),
+        PurePosixPath("specs"),
+        PurePosixPath("scripts"),
+        PurePosixPath("config/managed-settings.json"),
+        PurePosixPath("docs/07-konstitution.md"),
+        PurePosixPath("docs/03-regelverk.md"),
+        PurePosixPath("docs/loop/regler.md"),
+    ]
+    for post in register.values():
+        gate = PurePosixPath(post["path"])
+        paths.append(gate.parent if gate.parent != PurePosixPath(".") else gate)
+
+    rotter: list[PurePosixPath] = []
+    katalogrotter: list[PurePosixPath] = []
+    for rel in sorted(set(paths), key=lambda p: (len(p.parts), p.as_posix())):
+        if any(rel == rot or rot in rel.parents for rot in katalogrotter):
+            continue
+        rotter.append(rel)
+        src = KODROT.joinpath(*rel.parts)
+        try:
+            if stat.S_ISDIR(src.lstat().st_mode) and not stat.S_ISLNK(src.lstat().st_mode):
+                katalogrotter.append(rel)
+        except OSError as e:
+            raise Integritetsfel(f"authority-root saknas: {rel}: {e}") from e
+    return rotter
+
+
+def snapshot_katalog(text: str, *, maste_finnas: bool) -> Path:
+    p = Path(text)
+    if not p.is_absolute() or p.name in ("", ".", ".."):
+        raise Integritetsfel(f"snapshotpath måste vara en explicit absolut katalog: {text!r}")
+    try:
+        parent = p.parent.resolve(strict=True)
+    except OSError as e:
+        raise Integritetsfel(f"snapshotparent kunde inte lösas: {p.parent}: {e}") from e
+    p = parent / p.name
+    if maste_finnas:
+        try:
+            lage = p.lstat().st_mode
+        except OSError as e:
+            raise Integritetsfel(f"snapshot saknas: {p}: {e}") from e
+        if stat.S_ISLNK(lage) or not stat.S_ISDIR(lage):
+            raise Integritetsfel(f"snapshot är inte en vanlig katalog: {p}")
+    elif p.exists() or p.is_symlink():
+        raise Integritetsfel(f"snapshotmålet finns redan: {p}")
+    return p
+
+
+def kmd_prepare(
+    register: dict[str, dict], register_sha: str, vantat_register: str, snapshot_text: str
+) -> int:
+    krav_registerdigest(register_sha, vantat_register)
+    validera_hela_register(register)
+    snapshot = snapshot_katalog(snapshot_text, maste_finnas=False)
+    skapad = False
+    try:
+        # Authorityn fångas före första claim/session. Gateentrypoints och
+        # deras $0-relativa parentträd kommer ur samma privata ögonblick.
+        snapshot.mkdir(mode=0o700)
+        skapad = True
+        for rel in snapshot_roots(register):
+            kopiera_trad(KODROT.joinpath(*rel.parts), snapshot.joinpath(*rel.parts))
+        snap_register, snap_sha = las_register_fran(snapshot.joinpath(*REGISTER_REL.parts))
+        krav_registerdigest(snap_sha, vantat_register)
+        validera_hela_register(snap_register, snapshot)
+        snapshot_sha = trad_manifest(snapshot)
+    except BaseException:
+        if skapad or snapshot.exists():
+            shutil.rmtree(snapshot, ignore_errors=True)
+        raise
+    print(json.dumps({"status": "ok", "snapshot_sha256": snapshot_sha}, sort_keys=True))
+    return PASS
+
+
+def las_snapshot(
+    snapshot_text: str, vantad_snapshot_sha: str, vantat_register: str
+) -> tuple[Path, dict[str, dict], list[PurePosixPath]]:
+    if SHA256_FORM.fullmatch(vantad_snapshot_sha) is None:
+        raise Integritetsfel(f"ogiltig snapshot-sha256: {vantad_snapshot_sha!r}")
+    snapshot = snapshot_katalog(snapshot_text, maste_finnas=True)
+    faktisk_snapshot_sha = trad_manifest(snapshot)
+    if faktisk_snapshot_sha != vantad_snapshot_sha:
+        raise Integritetsfel(
+            f"authority-snapshot drev: väntad {vantad_snapshot_sha}, nu {faktisk_snapshot_sha}"
+        )
+    register, register_sha = las_register_fran(snapshot.joinpath(*REGISTER_REL.parts))
+    krav_registerdigest(register_sha, vantat_register)
+    validera_hela_register(register, snapshot)
+    return snapshot, register, projektionspaths(register)
+
+
+def saker_ta_bort(vy: Path, rel: PurePosixPath) -> Path:
+    """Ta bort destination utan att följa en kandidatägd symlänkancestor."""
+    p = vy
+    for del_ in rel.parts[:-1]:
+        p = p / del_
+        try:
+            lage = p.lstat().st_mode
+        except FileNotFoundError:
+            p.mkdir()
+            continue
+        except OSError as e:
+            raise Integritetsfel(f"projektionsparent kunde inte läsas: {p}: {e}") from e
+        if stat.S_ISLNK(lage) or not stat.S_ISDIR(lage):
+            raise Integritetsfel(f"kandidatens projektionsparent är inte säker katalog: {p}")
+    mal = vy.joinpath(*rel.parts)
+    try:
+        lage = mal.lstat().st_mode
+    except FileNotFoundError:
+        return mal
+    except OSError as e:
+        raise Integritetsfel(f"projektionsmål kunde inte läsas: {mal}: {e}") from e
+    if stat.S_ISDIR(lage) and not stat.S_ISLNK(lage):
+        shutil.rmtree(mal)
+    else:
+        mal.unlink()
+    return mal
+
+
+def projicera(snapshot: Path, vy: Path, paths: list[PurePosixPath]) -> None:
+    for rel in paths:
+        src = snapshot.joinpath(*rel.parts)
+        mal = saker_ta_bort(vy, rel)
+        try:
+            src.lstat()
+        except FileNotFoundError:
+            # Frånvaro i pre-task-authority maskar också en kandidat som
+            # försöker skapa samma control-plane-path.
+            continue
+        kopiera_trad(src, mal)
+
+
+def projektionsmanifest(root: Path, paths: list[PurePosixPath]) -> str:
+    poster: list[list[str]] = []
+    for rel in paths:
+        p = root.joinpath(*rel.parts)
+        try:
+            lage = p.lstat().st_mode
+        except FileNotFoundError:
+            poster.append(["m", rel.as_posix()])
+            continue
+        if stat.S_ISLNK(lage):
+            raise Integritetsfel(f"projektionen innehåller symlänk: {rel}")
+        if stat.S_ISDIR(lage):
+            poster.append(["r", rel.as_posix(), trad_manifest(p)])
+        elif stat.S_ISREG(lage):
+            poster.append([
+                "f", rel.as_posix(), f"{stat.S_IMODE(lage):04o}",
+                sha256_bytes(las_regelbundna_bytes(p)),
+            ])
+        else:
+            raise Integritetsfel(f"projektionen innehåller specialfil: {rel}")
+    return sha256_bytes(json.dumps(poster, separators=(",", ":")).encode("utf-8"))
+
+
+def live_lib_snapshotlik(snapshot: Path) -> None:
+    """Den frysta G20-gaten har en absolut live-_lib-referens; bind dess bytes."""
+    rel = PurePosixPath("verify/bin/_lib.sh")
+    live = saker_registerfil(rel.as_posix(), KODROT)
+    snap = saker_registerfil(rel.as_posix(), snapshot)
+    if live is None or snap is None:
+        raise Integritetsfel("verify/bin/_lib.sh saknas eller är osäker i live/snapshot")
+    if las_regelbundna_bytes(live) != las_regelbundna_bytes(snap):
+        raise Integritetsfel("verify/bin/_lib.sh drev sedan pre-task-snapshoten")
+
+
+def kmd_run_commit(
+    live_register: dict[str, dict], live_register_sha: str, vantat_register: str,
+    vid: str, kandidat_sha: str, vantad_snapshot_sha: str, snapshot_text: str,
+) -> int:
+    krav_registerdigest(live_register_sha, vantat_register)
+    # Bind även use-punkten till livefilens aktuella bytes. Snapshoten väljer
+    # vad som körs, men drift får inte döljas genom att bara använda kopian.
+    startbar_post(live_register, vid)
+    snapshot, register, _paths = las_snapshot(
+        snapshot_text, vantad_snapshot_sha, vantat_register
+    )
+    _post, fil, runner, raw = startbar_post(register, vid, snapshot)
+
+    def kor(vy: Path) -> int:
+        return kor_grind(runner, fil, raw, vy, sanerad_env())
+
+    kod = kor_i_kandidatvy(kandidat_sha, kor)
+    if trad_manifest(snapshot) != vantad_snapshot_sha:
+        raise Integritetsfel("authority-snapshoten ändrades under global verifiering")
+    return kod
+
+
+def kmd_task_run(
+    live_register: dict[str, dict], live_register_sha: str, vantat_register: str,
+    vid: str, vantad_grind_sha: str, kandidat_sha: str,
+    vantad_snapshot_sha: str, snapshot_text: str,
+) -> int:
+    krav_registerdigest(live_register_sha, vantat_register)
+    live_post, _live_fil, _live_runner, _live_raw = startbar_post(live_register, vid)
+    if live_post["sha256"] != vantad_grind_sha:
+        raise Integritetsfel(
+            f"taskgrindens live-identitet drev: väntad {vantad_grind_sha}, "
+            f"nu {live_post['sha256']}"
+        )
+    snapshot, register, paths = las_snapshot(
+        snapshot_text, vantad_snapshot_sha, vantat_register
+    )
+    post, fil, runner, raw = startbar_post(register, vid, snapshot)
+    if post["sha256"] != vantad_grind_sha:
+        raise Integritetsfel(
+            f"taskgrindens identitet drev: väntad {vantad_grind_sha}, nu {post['sha256']}"
+        )
+    authority_projection = projektionsmanifest(snapshot, paths)
+    live_lib_snapshotlik(snapshot)
+
+    def kor(vy: Path) -> int:
+        projicera(snapshot, vy, paths)
+        if projektionsmanifest(vy, paths) != authority_projection:
+            raise Integritetsfel("kandidatens control-plane-projektion matchar inte authorityn")
+        env = sanerad_env({"NORTROPIC_VERIFY_AUTHORITY_ROOT": str(snapshot)})
+        domkod = kor_grind(runner, fil, raw, vy, env)
+        if projektionsmanifest(vy, paths) != authority_projection:
+            raise Integritetsfel("taskgrinden ändrade sin pre-task control plane")
+        return domkod
+
+    kod = kor_i_kandidatvy(kandidat_sha, kor)
+    live_lib_snapshotlik(snapshot)
+    if trad_manifest(snapshot) != vantad_snapshot_sha:
+        raise Integritetsfel("authority-snapshoten ändrades under taskdomen")
+    return kod
 
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        return vagra("användning: cli list | preflight | check | task | run | task-run")
+        return vagra("användning: cli list | preflight | check | task | prepare | run | run-commit | task-run")
+    signal.signal(signal.SIGINT, _avbryt)
+    signal.signal(signal.SIGTERM, _avbryt)
     try:
-        register = las_register()
+        register, register_sha = las_register()
         kommando = argv[1]
         if kommando == "list" and len(argv) == 2:
             return kmd_list(register)
         if kommando == "preflight" and len(argv) == 2:
-            return kmd_preflight(register)
+            return kmd_preflight(register, register_sha)
         if kommando == "check" and len(argv) == 3:
             return kmd_check(register, argv[2])
         if kommando == "task" and len(argv) == 4:
-            return kmd_task(register, Path(argv[2]), argv[3])
+            return kmd_task(register, register_sha, Path(argv[2]), argv[3])
+        if kommando == "task" and len(argv) == 5:
+            return kmd_task(register, register_sha, Path(argv[3]), argv[4], argv[2])
+        if kommando == "prepare" and len(argv) == 4:
+            return kmd_prepare(register, register_sha, argv[2], argv[3])
         if kommando == "run" and len(argv) in (3, 4):
             return kmd_run(register, argv[2], Path(argv[3]) if len(argv) == 4 else ROT)
-        if kommando == "task-run" and len(argv) == 5:
-            return kmd_task_run(register, argv[2], argv[3], Path(argv[4]))
+        if kommando == "run-commit" and len(argv) == 7:
+            return kmd_run_commit(
+                register, register_sha, argv[2], argv[3], argv[4], argv[5], argv[6]
+            )
+        if kommando == "task-run" and len(argv) == 8:
+            return kmd_task_run(
+                register, register_sha, argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]
+            )
         raise Riggfel(f"okänt kommando eller fel argument: {kommando}")
+    except Avbruten as e:
+        return 128 + e.signum
+    except Integritetsfel as e:
+        return vagra(str(e), INTEGRITET)
     except Riggfel as e:
-        return vagra(str(e))
+        return vagra(str(e), VAGRAN)
     except BrokenPipeError:
         return VAGRAN
     except BaseException as e:
-        return vagra(f"internt verifierarfel: {type(e).__name__}: {e}")
+        return vagra(f"internt verifierarfel: {type(e).__name__}: {e}", INTEGRITET)
 
 
 if __name__ == "__main__":
