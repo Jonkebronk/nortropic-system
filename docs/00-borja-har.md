@@ -101,3 +101,34 @@ Det här var översikten. Vill du förstå exakt hur något fungerar, fortsätt 
 `scripts/nortropic-codex-autopilot.py` kan driva redan owner-auktoriserade loop-tasks genom test-author/builder/reviewer, remediation och mekaniskt verifierad PR/merge utan att ägaren kopierar rapporter mellan terminaler. Denna **build-autopilot är inte rotfilen `AUTOPILOT`**; rotfilen styr den äldre självförbättringstrappan och lämnas orörd.
 
 Autopiloten stoppar endast när den inte längre kan döma nästa trust-transition från befintlig owner authority, exempelvis ny arkitekturfråga, odömbart gateutfall eller oväntad Git-identitet.
+
+<!-- CODEX-BUILD-AUTOPILOT-V3-SIMPLE -->
+## Kontrollplansbygget kör nu hela roadmapen
+
+Build-autopilot v3 stannar inte längre när dagens lista av redan frysta h-tasks råkar bli grön. Den använder den ägarlåsta autonoma loop-planen och fortsätter genom S2, S4–S13 och en empirisk obevakad slutkörning. För en ännu ofryst slice kör den själv architect → test-author → gate-review → builder → independent review/remediation → mekanisk final gate → PR/merge.
+
+Vanliga arkitekturfrågor går till en read-only Codex-architect, inte tillbaka till ägaren. En människa behövs bara när högre authority uttryckligen kräver människa eller när en extern trust-resurs inte kan provisioneras utan att kontraktet försvagas.
+
+För liveöverblick i VS Code/Codex-terminalen:
+
+```bash
+tail -F "$HOME/Library/Logs/Nortropic/codex-autopilot-v2.log"
+"$HOME/.local/bin/nortropic-codex-autopilot" status
+"$HOME/.local/bin/nortropic-codex-autopilot" roadmap
+```
+
+LaunchAgentens historiska `v2`-label/loggsökväg behålls avsiktligt vid v3-cutover för att inte skapa en andra supervisor; den versionerade executable som strömmas från `origin/main` är v3.
+
+Den ägarlåsta planen har en verklig extern förutsättning före S7: den dedikerade GitHub Appen **Nortropic Promoter**. Den är inte ett “owner decision” utan en extern trust-credential som v3 inte får låtsas finns eller ersätta med ditt vanliga GitHub-konto. Om den saknas när S7 nås stoppar v3 en gång med `HUMAN_AUTHORITY_HARD_STOP`; efter att appen provisionerats fortsätter du med `nortropic-codex-autopilot resume`.
+
+
+### Följ autopiloten live
+
+I valfri integrerad terminal (VS Code/Codex eller Terminal.app):
+
+```bash
+~/.local/bin/nortropic-codex-autopilot watch
+```
+
+Detta är en read-only observatör. `Ctrl-C` stänger bara vyn; LaunchAgent-autopiloten fortsätter.
+`roadmap` kör en djupare gate-status och bör användas vid behov, inte som 2-sekunders livevy.

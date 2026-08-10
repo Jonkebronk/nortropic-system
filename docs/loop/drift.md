@@ -210,3 +210,45 @@ nortropic-codex-autopilot run
 Normal obemannad körning använder Codex `--ask-for-approval never --sandbox danger-full-access`. Behörighetsläget är inte trust authority; frozen gates, immutable candidate SHA, independent review och mechanical final gate är transitionsvillkoren.
 
 Evidence/checkpoint finns under Git common-dir `.git/nortropic-codex-autopilot/`. Den katalogen är inte backlog eller verdict store. Efter avbrott re-deriveras state från Git/worktrees/PR/gates. Ingen force/amend/reset/rebase-remediation används.
+
+<!-- CODEX-AUTOPILOT-V3-DRIFT -->
+## Codex build-autopilot v3 — hela kontrollplansroadmapen
+
+V3 använder exakt ägarlåst roadmap på `0b3212c991d4227c8df2656465ae2c0252dda39e` och fortsätter efter h-003/h-004 genom S2, S4–S13 och den empiriska slutkörningen. `OWNER_DECISION_REQUIRED` från en roll är en intern signal till `$nortropic-architect`; den stannar inte supervisor-processen i sig.
+
+Observera utan att styra:
+
+```bash
+tail -F "$HOME/Library/Logs/Nortropic/codex-autopilot-v2.log"
+"$HOME/.local/bin/nortropic-codex-autopilot" status
+"$HOME/.local/bin/nortropic-codex-autopilot" roadmap
+```
+
+`status` visar senaste journalhändelsen. `roadmap` mäter aktuell `origin/main` och visar S2/S4–S13 som `UNFROZEN`, `RED`, `GREEN` eller `UNJUDGEABLE`; empirisk closeout L syns som journalhändelserna `EMPIRICAL_UNATTENDED_RUN_PASS` / `FULL_ROADMAP_COMPLETE`. Utsagan är observationsyta och aldrig scheduler-authority.
+
+Supervisorens lokala label och logg behåller namnet `v2` vid cutover för att återanvända den redan bevisade LaunchAgent-gränsen. Versionen avgörs av `origin/main:scripts/nortropic-codex-autopilot.py` och `doctor` ska efter v3 svara `FULL_ROADMAP=YES`.
+
+Om v3 når en verklig `HUMAN_AUTHORITY_HARD_STOP` tas supervisor-enable-markören bort och macOS-notisen skickas. Efter att den externa/human-only förutsättningen är uppfylld återupptas samma mekaniska state utan ny installer med:
+
+```bash
+"$HOME/.local/bin/nortropic-codex-autopilot" resume
+```
+
+S7 har en uttrycklig extern prerequisite från den frozen planen: GitHub App **Nortropic Promoter**, installerad endast för `Nortropic/nortropic-system`, Metadata:Read + Contents:Read&Write, och endast PR-requirement-bypass. V3 får bygga fram till den gränsen men får inte fabricera eller ersätta appen med användarens bredare `gh`-credential.
+
+
+### Liveöversikt
+
+```bash
+~/.local/bin/nortropic-codex-autopilot watch
+```
+
+Kommandot läser endast journal, supervisor-markörer och worktree-lista. Det startar inga gates och
+muterar inget repo. För full roadmap/gate-status:
+
+```bash
+~/.local/bin/nortropic-codex-autopilot roadmap
+```
+
+Stage L ägs av den frysta programnivå-gaten `verify/bin/autonomous-loop-exit`; independent
+empirical-runner är en falsifierande andra blick, aldrig ersättning för gate PASS.
