@@ -90,3 +90,34 @@ FROZEN_OWNER_GATES_REMAIN_TRUST_AUTHORITY=YES
 Detta ändrar inte auktoritetsordningen ovan och gör inte Codex-prosa till trust authority. Rollagenterna committar/pushar/mergar fortfarande inte. Autopiloten får däremot, efter sina mekaniska identity/scope/gate/reviewer-kontroller, skapa immutable candidate commits, publicera, skapa PR och rebase-merga med expected-head-guard utan ny interaktiv owner-prompt per transition.
 
 En verklig ny policy-/arkitekturfråga, odömbart gateutfall, oväntad remote-identity eller no-progress stoppar fortfarande fail-closed.
+
+<!-- CODEX-OPERATING-MODEL-V3 -->
+## Codex operating model v3 — full-roadmap autonomy
+
+Owner har 2026-08-10 delegerat den återstående kontrollplansroadmapen S2, S4–S13 och den empiriska obevakade slutkörningen till den mekaniska autopiloten under den ägarlåsta planen på commit `0b3212c991d4227c8df2656465ae2c0252dda39e`.
+
+```text
+FULL_ROADMAP_AUTONOMY=YES
+HUMAN_OWNER_PRESENT_PER_SLICE=NO
+OWNER_DECISION_REQUIRED=INTERNAL_ARCHITECT_SIGNAL
+HUMAN_AUTHORITY_HARD_STOP=EXCEPTION_ONLY
+FROZEN_OWNER_GATES_REMAIN_TRUST_AUTHORITY=YES
+```
+
+`$nortropic-architect` är read-only och löser normala arkitekturfrågor under högre authority och den exakta frozen roadmapen. `OWNER_DECISION_REQUIRED` från test-author/builder/reviewer är därför en intern routingsignal till architect, aldrig i sig en mänsklig handoff.
+
+Mänsklig hard-stop får endast användas för gränser som v3-owner-delegationen uttryckligen undantar, exempelvis konstitution/§A-human-only, juridiskt human-only, verklig konflikt mellan högre authorities eller en extern credential-/provisioningceremoni som inte kan utföras utan att försvaga kontraktet. Full definition: `docs/loop/codex-autopilot-v3-full-roadmap.md`.
+
+V3 lägger även till `$nortropic-empirical-runner`: en read-only closeout-roll som kör stage L i disposable state efter att S2/S4–S13 är gröna. Den bygger inget och dess utsaga är inte PASS-authority; `FULL_ROADMAP_COMPLETE` kräver orchestratorns egna identity/gate/invariant-kontroller runt dess faktiska run-evidence.
+
+
+### Programnivå-domen
+
+Full-roadmap completion har en separat frozen program gate:
+
+```text
+verify/bin/autonomous-loop-exit
+```
+
+Den fryses av test-author + gate-reviewer innan downstream roadmap implementation. Independent
+empirical-runner får falsifiera den, men får aldrig ersätta ett rött gate-resultat med prosa-PASS.

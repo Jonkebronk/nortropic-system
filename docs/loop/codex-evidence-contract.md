@@ -144,3 +144,22 @@ Before a trust-relevant push/merge, owner reproduces decisive frozen gates in th
 Under `docs/loop/codex-autopilot-v2.md` är human owner fortfarande policyägare men behöver inte vara interaktiv terminaloperatör per candidate. `scripts/nortropic-codex-autopilot.py` reproducerar transition-relevant proof: exact Git identity, cumulative scope/budget, faktiskt frozen exit-test, independent reviewer identity, remote head/base och merged tree.
 
 Agentens strukturerade rapport är fortfarande evidence/claims och aldrig en verdict store. Autopilotens journal under Git common-dir är checkpoint/evidence only och får inte övertrumfa faktisk Git-/gate-state.
+
+<!-- CODEX-AUTOPILOT-V3-EVIDENCE -->
+## v3 — architect routing och full-roadmap closeout
+
+Autopilotens JSON-schema tillåter även `ROLE=ARCHITECT`. Architect är read-only och dess rapport är aldrig trust authority; den väljer endast nästa owner-delegerade kontraktsriktning under högre authority och den exakta frozen roadmapen.
+
+Under v3 betyder `OWNER_DECISION_REQUIRED` i en rollrapport **intern routingsignal till architect**. Ett mänskligt stopp uttrycks i stället som `BLOCKED` med `HUMAN_AUTHORITY_HARD_STOP:` och får endast användas enligt `docs/loop/codex-autopilot-v3-full-roadmap.md`.
+
+`FULL_ROADMAP_COMPLETE` är en mekanisk closeout-händelse, inte agentprosa: alla tasks i aktuell spec med exit-test ska ha faktiskt exit 0, samtliga S2/S4–S13 ska finnas som dömbara task-kontrakt med planens exakta h-task/gate-identiteter, invarianterna ska vara gröna och den separata empiriska L-closeout-körningen ska ha passerat på authoritative main.
+
+`ROLE=EMPIRICAL` används endast för stage L:s read-only end-to-end-körning. Rollen får skapa disposable runtime-state men inga repositoryändringar; ett empirical finding blir aldrig självt en fix utan routas till owning frozen task, normalt via test-author om den gröna gaten missade felet.
+
+
+### Full-roadmap closeout
+
+`FULL_ROADMAP_SOFTWARE_COMPLETE` kräver faktisk exit 0 från den frysta programnivå-gaten
+`verify/bin/autonomous-loop-exit` plus oberoende empirical falsification. `FULL_ROADMAP_COMPLETE`
+kräver dessutom PROVEN external promoter identity. Ingen av statusarna får härledas enbart ur
+agentrapport.
