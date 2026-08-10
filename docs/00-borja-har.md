@@ -61,6 +61,15 @@ fabriken — kundflödet rör det aldrig, och grundlagen ([07-konstitution.md](0
 rör bara du. Planen står i [docs/loop/byggplan-v3.md](loop/byggplan-v3.md), och hur du
 kör den står i [docs/loop/drift.md](loop/drift.md).
 
+## Tre Codex-arbetsroller
+
+När kontrollplanet förbättras kan Codex nu delas upp i tre återanvändbara arbetsroller:
+en som förbereder den frysta kontrollen, en som bygger kandidaten och en som försöker
+fälla den efteråt. De körs i separata trådar/worktrees för att minska sammanblandning.
+
+Det är **arbetsseparation**, inte en ny grundlag eller säkerhetsmekanism. Den riktiga domen
+kommer fortfarande från Nortropics frysta tester, write-gränser och ägarens slutkontroll.
+
 ## Vakten som läser förslaget innan du gör det
 
 Grundlagen har hittills skyddats av att den står skriven — inte av något som hindrar en

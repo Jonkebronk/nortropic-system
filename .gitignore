@@ -4,6 +4,9 @@
 !/.gitignore
 !/README.md
 !/CLAUDE.md
+!/AGENTS.md
+!/.agents/
+!/.agents/skills/
 !/docs/
 /docs/*.db
 !/agents/
