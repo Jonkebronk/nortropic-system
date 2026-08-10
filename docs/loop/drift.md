@@ -171,3 +171,20 @@ utifrånkommandon.
 
 **Föräldralösa kandidatcommits.** Varje fallet försök lämnar en commit i objektdatabasen
 som ingen ref når. De bryter ingenting, men `git count-objects -v` växer.
+
+
+## G20 runtimegräns för buildern
+
+Från ägarbeslut 2026-08-10 är builderns runtimegräns en del av h-017:s trustmodell. Controllern ska installera gränsen före builderstart.
+
+- kandidatworkspacet får vara skrivbart,
+- neutral scratch som controllern uttryckligen tilldelar får vara skrivbar,
+- reporotens live control plane får inte vara skrivbar för buildern,
+- controllerns pre-task trust-root får inte vara skrivbar för buildern,
+- samma skrivgräns ska gälla barn även efter ny process-session.
+
+Claude Codes managed sandbox ligger kvar som defense-in-depth men är inte Nortropics root-of-trust. controller/launch/cli är kommandoagnostisk, därför måste den controller-ägda gränsen gälla oberoende av worker-kommando.
+
+Ägarterminalens fristående Seatbelt-probe gav PARENT_INSIDE=PASS, CHILD_INSIDE=PASS, CHILD_OUTSIDE_DENIED=PASS, OUTSIDE_SENTINEL_ABSENT=YES och PROBE_EXIT=0.
+
+K18R i verify/bin/h-017-exit binder nu samma runtimeegenskap genom Nortropics launchväg. Baslinjen mot main före implementation är avsiktligt röd: trust=WROTE/1 repo=WROTE/1. K19 och K20 förblir gröna. Runtimegränsen är alltså specificerad och testad som krav, men ännu inte implementerad.

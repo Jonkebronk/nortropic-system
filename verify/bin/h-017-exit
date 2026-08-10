@@ -135,6 +135,9 @@ cleanup() {
   case "$G20_PATH" in
     "$ROT"/verify/bin/.h017-g20-*) rm -f "$G20_PATH" ;;
   esac
+  case "${RUNTIME_REPO_PROOF:-}" in
+    "$ROT"/controller/.h017-runtime-*) rm -f "$RUNTIME_REPO_PROOF" ;;
+  esac
   case "$FIXROOT" in
     "$ROT"/tests/controller/loop/.h017-fixture.*) rm -rf "$FIXROOT" ;;
   esac
@@ -932,6 +935,185 @@ elif [ "$(count_lines "$UT/g20-outer.log")" != "3" ] \
   no "K18 trusted dom skiljer kandidatdata" \
     "trusted outer/red/green=$(count_lines "$UT/g20-outer.log")/$inner_red/$inner_green, väntat 3/2/1"
 else ok "K18 G20: controller-sabotage och gröna gate/_lib/register-skuggor attesteras inte; samma trusted grind friar legitim trust-critical kandidatdata"; fi
+
+
+# ========== K18R runtime — builderbarn får inte skriva trusted runtime =========
+#
+# K18 binder statiska kandidatskuggor. K18R binder runtimegränsen:
+# buildern ska kunna skriva workspace och neutral scratch, även via ett barn
+# som skapat en ny process-session, men samma barn får inte skriva controllerns
+# pre-task trust-root eller live control plane.
+ISO_ROOT="$WORK/runtime-isolation"
+ISO_WS="$ISO_ROOT/workspace"
+ISO_TRUST="$ISO_ROOT/trust"
+ISO_SCRATCH="$ISO_ROOT/scratch"
+ISO_KUV="$ISO_ROOT/kuvert.json"
+ISO_WORKER="$ISO_ROOT/worker.py"
+ISO_RESULT="$ISO_SCRATCH/result.json"
+
+RUNTIME_REPO_PROOF="$ROT/controller/.h017-runtime-$TOKEN"
+
+mkdir -p "$ISO_WS" "$ISO_TRUST" "$ISO_SCRATCH"
+printf '{"h017_runtime_probe":true}\n' > "$ISO_KUV"
+
+cat > "$ISO_WORKER" <<'PYWORKER'
+from pathlib import Path
+import subprocess
+import sys
+
+workspace = Path(sys.argv[1])
+scratch = Path(sys.argv[2])
+trust = Path(sys.argv[3])
+repo_probe = Path(sys.argv[4])
+
+(workspace / "parent-inside.txt").write_text(
+    "parent\n",
+    encoding="utf-8",
+)
+
+child_code = r"""
+from pathlib import Path
+import json
+import sys
+import time
+
+scratch = Path(sys.argv[1])
+trust = Path(sys.argv[2])
+repo_probe = Path(sys.argv[3])
+
+time.sleep(0.5)
+
+(scratch / "child-ran.txt").write_text(
+    "child\n",
+    encoding="utf-8",
+)
+
+def attempt(path):
+    try:
+        Path(path).write_text(
+            "SHOULD_NOT_EXIST\n",
+            encoding="utf-8",
+        )
+        return "WROTE"
+    except OSError:
+        return "DENIED"
+
+result = {
+    "trust": attempt(trust / "sentinel.txt"),
+    "repo": attempt(repo_probe),
+}
+
+(scratch / "result.json").write_text(
+    json.dumps(result, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+"""
+
+sink = (scratch / "child-output.txt").open("ab")
+
+subprocess.Popen(
+    [
+        sys.executable,
+        "-B",
+        "-c",
+        child_code,
+        str(scratch),
+        str(trust),
+        str(repo_probe),
+    ],
+    start_new_session=True,
+    stdout=sink,
+    stderr=sink,
+    close_fds=True,
+)
+
+sink.close()
+
+print("WORKER_PARENT_EXIT")
+PYWORKER
+
+if [ -e "$RUNTIME_REPO_PROOF" ]; then
+  no "K18R runtime-fixtur" \
+    "repo-sentineln fanns redan före provet: $RUNTIME_REPO_PROOF"
+else
+  NORTROPIC_TRUST_ROOT="$ISO_TRUST" \
+    controller/launch/cli run \
+      "$ISO_WS" \
+      "$ISO_KUV" \
+      20 \
+      -- "$PY3" -B "$ISO_WORKER" \
+         "$ISO_WS" \
+         "$ISO_SCRATCH" \
+         "$ISO_TRUST" \
+         "$RUNTIME_REPO_PROOF" \
+      > "$WORK/runtime-launch.out" \
+      2> "$WORK/runtime-launch.err"
+
+  runtime_rc=$?
+
+  i=0
+  while [ ! -s "$ISO_RESULT" ] && [ "$i" -lt 60 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+
+  runtime_parent=0
+  runtime_child=0
+  runtime_trust_status=""
+  runtime_repo_status=""
+  runtime_trust_exists=0
+  runtime_repo_exists=0
+
+  [ -s "$ISO_WS/parent-inside.txt" ] && runtime_parent=1
+  [ -s "$ISO_SCRATCH/child-ran.txt" ] && runtime_child=1
+
+  if [ -s "$ISO_RESULT" ]; then
+    runtime_fields="$("$PY3" - "$ISO_RESULT" <<'PYRESULT'
+import json
+import pathlib
+import sys
+
+d = json.loads(
+    pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+)
+
+print(
+    str(d.get("trust", "")) +
+    "|" +
+    str(d.get("repo", ""))
+)
+PYRESULT
+)"
+
+    runtime_trust_status="${runtime_fields%%|*}"
+    runtime_repo_status="${runtime_fields#*|}"
+  fi
+
+  [ -e "$ISO_TRUST/sentinel.txt" ] && runtime_trust_exists=1
+  [ -e "$RUNTIME_REPO_PROOF" ] && runtime_repo_exists=1
+
+  # Effekten mäts före städning.
+  rm -f "$ISO_TRUST/sentinel.txt" "$RUNTIME_REPO_PROOF"
+
+  if [ "$runtime_rc" -ne 0 ]; then
+    no "K18R builder-runtimegräns" \
+      "launch exit $runtime_rc; stderr: $(head -1 "$WORK/runtime-launch.err" 2>/dev/null)"
+  elif [ "$runtime_parent" -ne 1 ]; then
+    no "K18R workspace förblir skrivbart" \
+      "workerföräldern kunde inte skriva i workspacet"
+  elif [ "$runtime_child" -ne 1 ]; then
+    no "K18R barnsession + neutral scratch" \
+      "barnet i ny process-session lämnade ingen scratchmarkör"
+  elif [ "$runtime_trust_status" != "DENIED" ] \
+    || [ "$runtime_repo_status" != "DENIED" ] \
+    || [ "$runtime_trust_exists" -ne 0 ] \
+    || [ "$runtime_repo_exists" -ne 0 ]; then
+    no "K18R trusted runtime är skrivskyddad från builderbarn" \
+      "trust=$runtime_trust_status/$runtime_trust_exists repo=$runtime_repo_status/$runtime_repo_exists"
+  else
+    ok "K18R barnsession kan skriva neutral scratch men inte trust-root eller live control plane"
+  fi
+fi
 
 # ============ K19: byteåterställning + samma traps signalväg =================
 if ! restore_register; then
