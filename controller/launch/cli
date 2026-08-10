@@ -39,6 +39,7 @@ Exitkoden bär klassen: 0 rapport · 1 anropsfel · 3 launch_failed ·
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -48,6 +49,37 @@ if sys.version_info < (3, 12):
     sys.exit(f"controller/launch/cli kräver Python 3.12+, kördes på {sys.version.split()[0]}")
 
 ANROP, LAUNCH, NONZERO, TIMEOUT, INTERNT = 1, 3, 4, 5, 8
+ROT = Path(__file__).resolve().parents[2]
+SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
+TRUST_ROOT_ENV = "NORTROPIC_TRUST_ROOT"
+
+# LOOP-ÄGARHAND-44: buildern får skriva kandidatdata och neutral scratch, men
+# aldrig live control plane eller controllerns pre-task-authority. `allow
+# default` bevarar launchs kommandoagnostiska kontrakt. Git-exceptionen är
+# uppmätt mot h-016: en detached självcommit behöver common objects och sitt
+# EGET worktree-admin, men inte config, hooks, refs eller andra worktrees.
+# Parametrar håller sökvägar ur Scheme-källan så filnamn aldrig blir syntax.
+SEATBELT_PROFIL = """(version 1)
+(allow default)
+(deny file-write*
+  (require-all
+    (subpath (param "LIVE_ROOT"))
+    (require-not (subpath (param "LIVE_GIT")))))
+(deny file-write*
+  (require-all
+    (subpath (param "LIVE_GIT"))
+    (require-not
+      (require-any
+        (subpath (param "GIT_OBJECTS"))
+        (subpath (param "WORKTREE_GITDIR"))))))
+(deny file-write* (subpath (param "GIT_OBJECTS_INFO")))
+(deny file-write* (subpath (param "WORKTREE_COMMDIR")))
+(deny file-write* (subpath (param "WORKTREE_GITFILE")))
+(deny file-write* (subpath (param "WORKTREE_CONFIG")))
+(deny file-write* (literal (param "WORKSPACE")))
+(deny file-write* (literal (param "WORKSPACE_DOTGIT")))
+(deny file-write* (subpath (param "TRUST_ROOT")))
+"""
 
 # Nådetid mellan SIGTERM och SIGKILL, och frist för att skörda gruppen.
 NADETID = 2.0
@@ -70,6 +102,120 @@ def worker_miljo(kuvertfil: Path) -> dict[str, str]:
              if not n.startswith(KANSLIGA_PREFIX)}
     miljo["NORTROPIC_KUVERT"] = str(kuvertfil)
     return miljo
+
+
+def gitdir(root: Path) -> Path | None:
+    """Löser en vanlig .git-katalog/-pekare utan att köra Git."""
+    punktgit = root / ".git"
+    if punktgit.is_symlink():
+        return None
+    if punktgit.is_dir():
+        return punktgit.resolve()
+    if not punktgit.is_file():
+        return None
+    try:
+        rader = punktgit.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    if len(rader) != 1 or not rader[0].startswith("gitdir: "):
+        return None
+    text = rader[0][len("gitdir: "):]
+    if not text:
+        return None
+    p = Path(text)
+    if not p.is_absolute():
+        p = root / p
+    try:
+        p = p.resolve(strict=True)
+    except OSError:
+        return None
+    return p if p.is_dir() else None
+
+
+def common_gitdir(worktree_gitdir: Path) -> Path:
+    commondir = worktree_gitdir / "commondir"
+    if not commondir.is_file() or commondir.is_symlink():
+        return worktree_gitdir
+    try:
+        text = commondir.read_text(encoding="utf-8").strip()
+        p = Path(text)
+        if not p.is_absolute():
+            p = worktree_gitdir / p
+        p = p.resolve(strict=True)
+    except (OSError, UnicodeError) as e:
+        raise OSError(f"live Git common-dir kunde inte lösas: {e}") from e
+    if not p.is_dir():
+        raise OSError(f"live Git common-dir är ingen katalog: {p}")
+    return p
+
+
+def seatbelt_prefix(ws: Path) -> list[str]:
+    """Bygger den bindande macOS-gränsen före workerstart.
+
+    Loopkörningen anger sin controller-ägda run-root i miljön. Direkta
+    h-009-anrop saknar den och skyddar ändå hela live-repot. Workspace och
+    trust/live får aldrig överlappa: då kan kraven skrivbart respektive
+    skrivskyddat inte båda vara sanna.
+    """
+    live_worktree_git = gitdir(ROT)
+    if live_worktree_git is None:
+        raise OSError(f"live control plane saknar säker .git-pekare: {ROT / '.git'}")
+    live_git = common_gitdir(live_worktree_git)
+
+    trust_angiven = TRUST_ROOT_ENV in os.environ
+    if trust_angiven:
+        trust_arg = os.environ[TRUST_ROOT_ENV]
+        trust = Path(trust_arg)
+        if not trust_arg or not trust.is_absolute():
+            raise OSError(f"{TRUST_ROOT_ENV} måste vara en explicit absolut katalog")
+        if not trust.is_dir():
+            raise OSError(f"{TRUST_ROOT_ENV} är ingen katalog: {trust_arg}")
+        trust = trust.resolve(strict=True)
+    else:
+        # Live-repot är redan nekat. Samma rot som trustparameter skapar ingen
+        # bredare spärr och håller profilformen statisk för direkta h-009-anrop.
+        trust = ROT
+
+    for skyddad in (ROT, trust):
+        if ws == skyddad or ws in skyddad.parents or skyddad in ws.parents:
+            raise OSError(
+                f"workspace {ws} överlappar skrivskyddad rot {skyddad}"
+            )
+
+    aktuell_git = gitdir(ws)
+    if aktuell_git is None or aktuell_git == live_git or live_git not in aktuell_git.parents:
+        # En icke-Git-workspace behöver ingen write-exception inne i live Git.
+        aktuell_git = ws / ".nortropic-ingen-live-git-exception"
+
+    parametrar = {
+        "LIVE_ROOT": ROT,
+        "LIVE_GIT": live_git,
+        "GIT_OBJECTS": live_git / "objects",
+        "GIT_OBJECTS_INFO": live_git / "objects/info",
+        "WORKTREE_GITDIR": aktuell_git,
+        "WORKTREE_COMMDIR": aktuell_git / "commondir",
+        "WORKTREE_GITFILE": aktuell_git / "gitdir",
+        "WORKTREE_CONFIG": aktuell_git / "config.worktree",
+        "WORKSPACE": ws,
+        "WORKSPACE_DOTGIT": ws / ".git",
+        "TRUST_ROOT": trust,
+    }
+
+    argv = [str(SANDBOX_EXEC)]
+    for namn, path in parametrar.items():
+        argv.extend(("-D", f"{namn}={path}"))
+    argv.extend(("-p", SEATBELT_PROFIL))
+    return argv
+
+
+def kommando_finns(namn: str, ws: Path, miljo: dict[str, str]) -> bool:
+    """Bevarar Popens launch_failed för både PATH- och pathkommandon."""
+    if os.sep not in namn:
+        return shutil.which(namn, path=miljo.get("PATH")) is not None
+    p = Path(namn)
+    if not p.is_absolute():
+        p = ws / p
+    return p.is_file() and os.access(p, os.X_OK)
 
 
 def doda_gruppen(p: subprocess.Popen) -> str:
@@ -127,14 +273,32 @@ def gor_run(ws_arg: str, kuvert_arg: str, timeout_arg: str, kommando: list[str])
     if sekunder <= 0:
         return svar(f"anropsfel: timeout måste vara större än noll, fick {timeout_arg}", ANROP)
 
+    miljo = worker_miljo(kuvertfil)
     try:
+        if not kommando_finns(kommando[0], ws, miljo):
+            raise OSError(f"kommandot finns inte eller är inte körbart: {kommando[0]}")
+        prefix = seatbelt_prefix(ws)
+        # Profilen kompileras och installeras FÖRE buildern. Ett saknat binär,
+        # en ogiltig profil eller en värd som vägrar Seatbelt blir launch_failed
+        # och ingen rå workerfallback finns.
+        prov = subprocess.run(
+            [*prefix, "/usr/bin/true"], cwd=str(ws), env=miljo,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=SKORDEFRIST, check=False,
+        )
+        if prov.returncode != 0:
+            raise OSError(
+                "controllerns Seatbelt-gräns kunde inte installeras"
+                + (f" — {kort(prov.stderr)}" if prov.stderr else "")
+            )
         p = subprocess.Popen(
-            kommando, cwd=str(ws), env=worker_miljo(kuvertfil),
+            [*prefix, *kommando], cwd=str(ws), env=miljo,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True,          # barnet blir gruppledare — se doda_gruppen
         )
-    except OSError as e:
-        return svar(f"launch_failed: kunde inte starta {kommando[0]}: {e.strerror or e}", LAUNCH)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        orsak = getattr(e, "strerror", None) or e
+        return svar(f"launch_failed: kunde inte starta {kommando[0]}: {orsak}", LAUNCH)
 
     try:
         ut, fel = p.communicate(input=ra, timeout=sekunder)
