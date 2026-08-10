@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # h-004-exit — skiva 4 (exklusiv lease)
-# Kontrakt: controller/lease/cli [<dir>] acquire <task> --ttl <sek>
-#           controller/lease/cli [<dir>] release <task>
-#           controller/lease/cli [<dir>] owner <task>
+# Kontrakt efter S3 owner-remediation:
+#   controller/lease/cli [<dir>] acquire <task> --ttl <sek> [--holder-pid <pid>]
+#       stdout = unik opaque lease_id
+#   controller/lease/cli [<dir>] renew <task> <lease_id>
+#   controller/lease/cli [<dir>] release <task> [<lease_id>]
+#   controller/lease/cli [<dir>] owner <task>
+# Bare release är legacy för obundna leases. En --holder-pid-bunden lease får
+# aldrig kunna raderas utan rätt lease_id.
 # Katalogen är valfri och ligger först; utelämnad ger controller/lease/state/.
 # Provet kör alltid mot temp_kat så inget tillstånd ärvs mellan körningar.
 . "$(dirname "$0")/_lib.sh"
@@ -142,4 +147,616 @@ if [ -z "$fel" ]; then
 else
   no "K7 klockskev" "misslyckade fall:$fel"
 fi
+
+# ========== S3: heartbeat + generationsbindning ===============================
+#
+# K0–K7 ovan står kvar. K8–K14 mäter S3 på publika effekter:
+# tokens, owner-svar, leasefilens byteförändring, konkurrerande acquire,
+# attestation och process-/repoeffekt. Provet kräver INTE interna
+# heartbeat-fältnamn och skriver aldrig en egen lease-JSON.
+
+PY3="$(command -v python3)"
+LOOP="controller/loop/cli"
+ATT="controller/attest/cli"
+ST="controller/state/cli"
+
+token_ok() {
+  "$PY3" - "$1" <<'PYTOK'
+import sys
+
+s = sys.argv[1]
+ok = (
+    8 <= len(s) <= 256
+    and "\n" not in s
+    and "\r" not in s
+    and all(not c.isspace() and ord(c) >= 33 for c in s)
+)
+raise SystemExit(0 if ok else 1)
+PYTOK
+}
+
+text_has_pid() {
+  "$PY3" - "$1" "$2" <<'PYPID'
+import re
+import sys
+
+text, pid = sys.argv[1], sys.argv[2]
+
+hit = re.search(
+    rf'(?<![0-9]){re.escape(pid)}(?![0-9])',
+    text,
+)
+
+raise SystemExit(0 if hit else 1)
+PYPID
+}
+
+file_sha() {
+  shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+}
+
+wait_mark_or_exit() {
+  mark="$1"
+  pid="$2"
+  i=0
+  while [ "$i" -lt 60 ]; do
+    [ -s "$mark" ] && return 0
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+
+# K8 — lyckade acquires ska bära generationens identitet på stdout.
+D8="$WORK/s3-generation"
+mkdir -p "$D8"
+
+t8a="$("$CLI" "$D8" acquire s3-generation --ttl 1 2>/dev/null)"
+r8a=$?
+
+if [ "$r8a" -eq 0 ] && token_ok "$t8a"; then
+  sleep 2
+
+  t8b="$("$CLI" "$D8" acquire s3-generation --ttl 60 2>/dev/null)"
+  r8b=$?
+
+  if [ "$r8b" -eq 0 ] \
+     && token_ok "$t8b" \
+     && [ "$t8a" != "$t8b" ]; then
+    ok "K8 lease-generation: varje acquire ger en unik lease_id"
+  else
+    no "K8 lease-generation" \
+      "första/andra rc=$r8a/$r8b tokenA=[$t8a] tokenB=[$t8b]"
+  fi
+
+  if [ "$r8b" -eq 0 ] && token_ok "$t8b"; then
+    "$CLI" "$D8" release s3-generation "$t8b" >/dev/null 2>&1 || true
+  else
+    "$CLI" "$D8" release s3-generation >/dev/null 2>&1 || true
+  fi
+else
+  no "K8 lease-generation" \
+    "acquire gav rc=$r8a token=[$t8a], väntat unik lease_id"
+  "$CLI" "$D8" release s3-generation >/dev/null 2>&1 || true
+fi
+
+
+# K9 — gammal token OCH legacy bare release får inte radera en holder-bunden
+# efterträdare. Efterträdaren skapas enbart genom publik CLI.
+D9="$WORK/s3-fencing"
+mkdir -p "$D9"
+
+t9a="$("$CLI" "$D9" acquire s3-fence --ttl 1 2>/dev/null)"
+r9a=$?
+
+if [ "$r9a" -eq 0 ] && token_ok "$t9a"; then
+  sleep 2
+
+  t9b="$(
+    "$CLI" "$D9" acquire s3-fence \
+      --ttl 60 \
+      --holder-pid "$$" \
+      2>/dev/null
+  )"
+  r9b=$?
+
+  if [ "$r9b" -eq 0 ] && token_ok "$t9b"; then
+    owner_before="$("$CLI" "$D9" owner s3-fence 2>/dev/null || true)"
+
+    stale_rc=0
+    "$CLI" "$D9" release s3-fence "$t9a" >/dev/null 2>&1 || stale_rc=$?
+    owner_after_stale="$("$CLI" "$D9" owner s3-fence 2>/dev/null || true)"
+
+    bare_rc=0
+    "$CLI" "$D9" release s3-fence >/dev/null 2>&1 || bare_rc=$?
+    owner_after_bare="$("$CLI" "$D9" owner s3-fence 2>/dev/null || true)"
+
+    good_rc=0
+    "$CLI" "$D9" release s3-fence "$t9b" >/dev/null 2>&1 || good_rc=$?
+    owner_after_good="$("$CLI" "$D9" owner s3-fence 2>/dev/null || true)"
+
+    if [ -n "$owner_before" ] \
+       && [ "$stale_rc" -ne 0 ] \
+       && [ "$bare_rc" -ne 0 ] \
+       && [ -n "$owner_after_stale" ] \
+       && [ -n "$owner_after_bare" ] \
+       && [ "$good_rc" -eq 0 ] \
+       && [ -z "$owner_after_good" ]; then
+      ok "K9 fencing: gammal token och bare release kan inte radera bunden efterträdare"
+    else
+      no "K9 fencing" \
+        "owners=[$owner_before]/[$owner_after_stale]/[$owner_after_bare]/[$owner_after_good] rc=$stale_rc/$bare_rc/$good_rc"
+    fi
+  else
+    no "K9 fencing" \
+      "holder-bunden efterträdare saknas rc=$r9b token=[$t9b]"
+    "$CLI" "$D9" release s3-fence >/dev/null 2>&1 || true
+  fi
+else
+  no "K9 fencing" \
+    "första generationen saknar lease_id rc=$r9a token=[$t9a]"
+  "$CLI" "$D9" release s3-fence >/dev/null 2>&1 || true
+fi
+
+
+# K10 — fel token ändrar inga bytes. Rätt renew ska flytta TTL-fönstret.
+D10="$WORK/s3-renew"
+mkdir -p "$D10"
+
+t10="$("$CLI" "$D10" acquire s3-renew --ttl 1.5 2>/dev/null)"
+r10=$?
+
+if [ "$r10" -eq 0 ] && token_ok "$t10"; then
+  f10="$D10/s3-renew.lease"
+  sha10a="$(file_sha "$f10")"
+
+  wrong_rc=0
+  "$CLI" "$D10" renew s3-renew "wrong-$t10" >/dev/null 2>&1 || wrong_rc=$?
+
+  sha10wrong="$(file_sha "$f10")"
+
+  sleep 0.9
+
+  good_rc=0
+  "$CLI" "$D10" renew s3-renew "$t10" >/dev/null 2>&1 || good_rc=$?
+
+  sleep 0.9
+
+  early="$("$CLI" "$D10" acquire s3-renew --ttl 30 2>/dev/null)"
+  early_rc=$?
+
+  sleep 0.8
+
+  late="$("$CLI" "$D10" acquire s3-renew --ttl 30 2>/dev/null)"
+  late_rc=$?
+
+  if [ "$wrong_rc" -ne 0 ] \
+     && [ -n "$sha10a" ] \
+     && [ "$sha10a" = "$sha10wrong" ] \
+     && [ "$good_rc" -eq 0 ] \
+     && [ "$early_rc" -ne 0 ] \
+     && [ "$late_rc" -eq 0 ] \
+     && token_ok "$late" \
+     && [ "$late" != "$t10" ]; then
+    ok "K10 renew: fel token ändrar inga bytes och rätt renew flyttar TTL-fönstret"
+  else
+    no "K10 renew" \
+      "wrong/good/early/late=$wrong_rc/$good_rc/$early_rc/$late_rc sha_same=$([ "$sha10a" = "$sha10wrong" ] && echo ja || echo nej)"
+  fi
+
+  if [ "$late_rc" -eq 0 ] && token_ok "$late"; then
+    "$CLI" "$D10" release s3-renew "$late" >/dev/null 2>&1 || true
+  else
+    "$CLI" "$D10" release s3-renew "$t10" >/dev/null 2>&1 || true
+  fi
+else
+  no "K10 renew" \
+    "acquire gav rc=$r10 token=[$t10]"
+  "$CLI" "$D10" release s3-renew >/dev/null 2>&1 || true
+fi
+
+
+# K11 — samma-host holder som fortfarande lever skyddar efter passerad TTL.
+# När samma holder dött och TTL redan passerat ska reclaim bli möjligt.
+D11="$WORK/s3-holder"
+mkdir -p "$D11"
+
+sleep 6 &
+holder11=$!
+
+t11="$(
+  "$CLI" "$D11" acquire s3-holder \
+    --ttl 1 \
+    --holder-pid "$holder11" \
+    2>/dev/null
+)"
+r11=$?
+
+if [ "$r11" -eq 0 ] && token_ok "$t11"; then
+  owner11="$("$CLI" "$D11" owner s3-holder 2>/dev/null || true)"
+
+  sleep 1.4
+
+  during="$("$CLI" "$D11" acquire s3-holder --ttl 30 2>/dev/null)"
+  during_rc=$?
+
+  kill "$holder11" 2>/dev/null || true
+  wait "$holder11" 2>/dev/null || true
+
+  after="$("$CLI" "$D11" acquire s3-holder --ttl 30 2>/dev/null)"
+  after_rc=$?
+
+  if text_has_pid "$owner11" "$holder11" \
+     && [ "$during_rc" -ne 0 ] \
+     && [ "$after_rc" -eq 0 ] \
+     && token_ok "$after" \
+     && [ "$after" != "$t11" ]; then
+    ok "K11 holder-liveness: owner namnger holdern; levande holder kan inte reclaimas efter TTL; död holder kan"
+  else
+    no "K11 holder-liveness" \
+      "owner=[$owner11] holder=$holder11 under/efter-död=$during_rc/$after_rc token=[$after]"
+  fi
+
+  if [ "$after_rc" -eq 0 ] && token_ok "$after"; then
+    "$CLI" "$D11" release s3-holder "$after" >/dev/null 2>&1 || true
+  else
+    "$CLI" "$D11" release s3-holder "$t11" >/dev/null 2>&1 || true
+  fi
+else
+  kill "$holder11" 2>/dev/null || true
+  wait "$holder11" 2>/dev/null || true
+
+  no "K11 holder-liveness" \
+    "holder-bunden acquire saknas rc=$r11 token=[$t11]"
+
+  "$CLI" "$D11" release s3-holder >/dev/null 2>&1 || true
+fi
+
+
+# K12–K14 är riktiga loopintegrationer.
+for dep in \
+  "$LOOP" \
+  "$ATT" \
+  "$ST" \
+  controller/taskval/cli \
+  controller/workspace/cli \
+  controller/envelope/cli \
+  controller/brytare/cli \
+  controller/utforare/cli \
+  controller/launch/cli \
+  controller/worker/cli \
+  controller/policy/cli \
+  controller/verify/cli
+do
+  if [ ! -x "$dep" ]; then
+    echo "SKIP  S3 loopintegration — $dep saknas, testet är odömbart"
+    echo
+    echo "$pass PASS, $fail FAIL, ODÖMBART"
+    exit 2
+  fi
+done
+
+BAS="$(git rev-parse HEAD)"
+
+cat > "$WORK/s3-heartbeat-backlog.json" <<'JSON'
+{
+  "spec_version": "s3-fixtur",
+  "defaults": {
+    "max_changed_files": 8,
+    "max_added_lines": 600
+  },
+  "tasks": [
+    {
+      "id": "s3-heartbeat-task",
+      "slice": 0,
+      "title": "heartbeat",
+      "summary": "S3 heartbeat fixture",
+      "allowed_write": ["tests/lease-heartbeat-fixture/**"],
+      "exit_test": "verify/bin/ingen",
+      "exit_criterion": "-",
+      "docs_impact": [],
+      "depends_on": []
+    }
+  ]
+}
+JSON
+
+cat > "$WORK/s3-loss-backlog.json" <<'JSON'
+{
+  "spec_version": "s3-fixtur",
+  "defaults": {
+    "max_changed_files": 8,
+    "max_added_lines": 600
+  },
+  "tasks": [
+    {
+      "id": "s3-loss-task",
+      "slice": 0,
+      "title": "lease loss",
+      "summary": "S3 lease-loss fixture",
+      "allowed_write": ["tests/lease-heartbeat-fixture/**"],
+      "exit_test": "verify/bin/ingen",
+      "exit_criterion": "-",
+      "docs_impact": [],
+      "depends_on": []
+    }
+  ]
+}
+JSON
+
+cat > "$WORK/s3-heartbeat-worker.py" <<'PYWORK'
+import json
+import os
+import sys
+import time
+
+json.load(sys.stdin)
+open(os.environ["S3_HB_MARK"], "w", encoding="utf-8").write("started\n")
+time.sleep(3.5)
+
+os.makedirs("tests/lease-heartbeat-fixture", exist_ok=True)
+open(
+    "tests/lease-heartbeat-fixture/heartbeat.txt",
+    "w",
+    encoding="utf-8",
+).write("heartbeat\n")
+
+print("heartbeat fixture klar")
+PYWORK
+
+cat > "$WORK/s3-loss-worker.py" <<'PYWORK'
+import json
+import os
+import sys
+import time
+
+json.load(sys.stdin)
+open(os.environ["S3_LOSS_MARK"], "w", encoding="utf-8").write("started\n")
+time.sleep(3.0)
+
+os.makedirs("tests/lease-heartbeat-fixture", exist_ok=True)
+open(
+    "tests/lease-heartbeat-fixture/loss.txt",
+    "w",
+    encoding="utf-8",
+).write("old-generation\n")
+
+print("loss fixture klar")
+PYWORK
+
+cat > "$WORK/s3-bad-worker.py" <<'PYWORK'
+import json
+import os
+import sys
+
+json.load(sys.stdin)
+open(os.environ["S3_BAD_MARK"], "w", encoding="utf-8").write("started\n")
+
+os.makedirs("tests/lease-heartbeat-fixture", exist_ok=True)
+open(
+    "tests/lease-heartbeat-fixture/bad.txt",
+    "w",
+    encoding="utf-8",
+).write("should-not-run\n")
+
+print("bad config fixture kördes")
+PYWORK
+
+write_config() {
+  cat > "$1" <<JSON
+{
+  "spec": "$2",
+  "attest_dir": "$3",
+  "state_dir": "$4",
+  "lease_dir": "$5",
+  "lease_resurs": "$6",
+  "workspace_rot": "$7",
+  "base_sha": "$BAS",
+  "worker_cmd": ["$PY3", "$8"],
+  "timeout_s": 10,
+  "verifier_id": "check-invariants",
+  "run_id": "$9",
+  "brytare_rot": "$7-br",
+  "budget": 1,
+  "troskel": 2,
+  "lease_ttl_s": ${10},
+  "lease_heartbeat_s": ${11}
+}
+JSON
+}
+
+
+# K12 — en riktig loopkörning längre än TTL måste förnya sin lease.
+D12="$WORK/s3-loop-hb-lease"
+S12="$WORK/s3-loop-hb-state"
+A12="$WORK/s3-loop-hb-att"
+W12="$WORK/s3-loop-hb-ws"
+
+mkdir -p "$W12"
+"$ST" init "$S12" >/dev/null 2>&1
+
+export S3_HB_MARK="$WORK/s3-heartbeat-started"
+
+write_config \
+  "$WORK/s3-heartbeat-config.json" \
+  "$WORK/s3-heartbeat-backlog.json" \
+  "$A12" "$S12" "$D12" "s3-heartbeat" "$W12" \
+  "$WORK/s3-heartbeat-worker.py" \
+  "s3-heartbeat-run" \
+  1.2 0.25
+
+"$LOOP" run "$WORK/s3-heartbeat-config.json" \
+  >"$WORK/s3-heartbeat.out" \
+  2>"$WORK/s3-heartbeat.err" &
+loop12=$!
+
+started12=0
+wait_mark_or_exit "$S3_HB_MARK" "$loop12" && started12=1
+
+lease12="$D12/s3-heartbeat.lease"
+sha12a=""
+sha12b=""
+owner12_during=""
+
+if [ "$started12" -eq 1 ] && [ -f "$lease12" ]; then
+  sha12a="$(file_sha "$lease12")"
+  owner12_during="$("$CLI" "$D12" owner s3-heartbeat 2>/dev/null || true)"
+  sleep 0.7
+  sha12b="$(file_sha "$lease12")"
+  sleep 0.7
+fi
+
+steal12=""
+steal12_rc=99
+
+if kill -0 "$loop12" 2>/dev/null; then
+  steal12="$("$CLI" "$D12" acquire s3-heartbeat --ttl 30 2>/dev/null)"
+  steal12_rc=$?
+fi
+
+wait "$loop12"
+loop12_rc=$?
+
+att12=1
+"$ATT" "$A12" read s3-heartbeat-task --require-valid >/dev/null 2>&1 \
+  && att12=0
+
+owner12="$("$CLI" "$D12" owner s3-heartbeat 2>/dev/null || true)"
+
+if [ "$started12" -eq 1 ] \
+   && text_has_pid "$owner12_during" "$loop12" \
+   && [ -n "$sha12a" ] \
+   && [ -n "$sha12b" ] \
+   && [ "$sha12a" != "$sha12b" ] \
+   && [ "$steal12_rc" -ne 0 ] \
+   && [ "$loop12_rc" -eq 0 ] \
+   && [ "$att12" -eq 0 ] \
+   && [ -z "$owner12" ]; then
+  ok "K12 loop-heartbeat: owner är controller-PID, leasebytes förnyas och run längre än TTL kan inte tas över"
+else
+  no "K12 loop-heartbeat" \
+    "start/owner-during/loop-pid/sha-change/steal/loop/att/owner-after=$started12/[$owner12_during]/$loop12/$([ -n "$sha12a" ] && [ "$sha12a" != "$sha12b" ] && echo ja || echo nej)/$steal12_rc/$loop12_rc/$att12/[$owner12]"
+fi
+
+if [ "$steal12_rc" -eq 0 ] && token_ok "$steal12"; then
+  "$CLI" "$D12" release s3-heartbeat "$steal12" >/dev/null 2>&1 || true
+fi
+
+unset S3_HB_MARK
+
+
+# K13 — simulera lease-loss UTAN egen JSON:
+# ta bort gamla generationens fil och låt publika acquire skapa efterträdaren.
+# Gamla runnet får aldrig attestera eller radera den nya generationen.
+D13="$WORK/s3-loop-loss-lease"
+S13="$WORK/s3-loop-loss-state"
+A13="$WORK/s3-loop-loss-att"
+W13="$WORK/s3-loop-loss-ws"
+
+mkdir -p "$W13"
+"$ST" init "$S13" >/dev/null 2>&1
+
+export S3_LOSS_MARK="$WORK/s3-loss-started"
+
+write_config \
+  "$WORK/s3-loss-config.json" \
+  "$WORK/s3-loss-backlog.json" \
+  "$A13" "$S13" "$D13" "s3-loss" "$W13" \
+  "$WORK/s3-loss-worker.py" \
+  "s3-loss-run" \
+  4 0.2
+
+"$LOOP" run "$WORK/s3-loss-config.json" \
+  >"$WORK/s3-loss.out" \
+  2>"$WORK/s3-loss.err" &
+loop13=$!
+
+started13=0
+wait_mark_or_exit "$S3_LOSS_MARK" "$loop13" && started13=1
+
+successor13=""
+successor13_rc=99
+
+if [ "$started13" -eq 1 ] && [ -f "$D13/s3-loss.lease" ]; then
+  rm -f "$D13/s3-loss.lease"
+
+  successor13="$(
+    "$CLI" "$D13" acquire s3-loss \
+      --ttl 60 \
+      --holder-pid "$$" \
+      2>/dev/null
+  )"
+  successor13_rc=$?
+fi
+
+wait "$loop13"
+loop13_rc=$?
+
+att13=1
+"$ATT" "$A13" read s3-loss-task --require-valid >/dev/null 2>&1 \
+  && att13=0
+
+owner13="$("$CLI" "$D13" owner s3-loss 2>/dev/null || true)"
+
+if [ "$started13" -eq 1 ] \
+   && [ "$successor13_rc" -eq 0 ] \
+   && token_ok "$successor13" \
+   && [ "$loop13_rc" -eq 1 ] \
+   && [ "$att13" -ne 0 ] \
+   && [ -n "$owner13" ]; then
+  ok "K13 lease-loss: gammalt run faller stängt och lämnar efterträdarens lease"
+else
+  no "K13 lease-loss" \
+    "start/successor/loop/att/owner=$started13/$successor13_rc/$loop13_rc/$att13/[$owner13]"
+fi
+
+if [ "$successor13_rc" -eq 0 ] && token_ok "$successor13"; then
+  "$CLI" "$D13" release s3-loss "$successor13" >/dev/null 2>&1 || true
+else
+  "$CLI" "$D13" release s3-loss >/dev/null 2>&1 || true
+fi
+
+unset S3_LOSS_MARK
+
+
+# K14 — heartbeat måste vara positiv och strikt mindre än TTL.
+D14="$WORK/s3-bad-lease"
+S14="$WORK/s3-bad-state"
+A14="$WORK/s3-bad-att"
+W14="$WORK/s3-bad-ws"
+
+mkdir -p "$W14"
+"$ST" init "$S14" >/dev/null 2>&1
+
+export S3_BAD_MARK="$WORK/s3-bad-started"
+
+write_config \
+  "$WORK/s3-bad-config.json" \
+  "$WORK/s3-heartbeat-backlog.json" \
+  "$A14" "$S14" "$D14" "s3-bad" "$W14" \
+  "$WORK/s3-bad-worker.py" \
+  "s3-bad-run" \
+  1 1
+
+"$LOOP" run "$WORK/s3-bad-config.json" \
+  >"$WORK/s3-bad.out" \
+  2>"$WORK/s3-bad.err"
+bad14_rc=$?
+
+events14="$(wc -l < "$S14/events.jsonl" | tr -d ' ')"
+
+if [ "$bad14_rc" -eq 1 ] \
+   && [ ! -s "$S3_BAD_MARK" ] \
+   && [ ! -e "$D14/s3-bad.lease" ] \
+   && [ "$events14" = "0" ]; then
+  ok "K14 config: heartbeat >= TTL vägras före lease, event och session"
+else
+  no "K14 config" \
+    "exit/start/lease/events=$bad14_rc/$([ -s "$S3_BAD_MARK" ] && echo ja || echo nej)/$([ -e "$D14/s3-bad.lease" ] && echo ja || echo nej)/$events14"
+fi
+
+unset S3_BAD_MARK
+
 summera

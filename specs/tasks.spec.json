@@ -82,13 +82,25 @@
     {
       "id": "h-004",
       "slice": 4,
-      "title": "Exklusiv lease",
-      "summary": "Exakt en controller äger en task åt gången. Lease har TTL; död process reclaimas efter TTL, aldrig före.",
-      "allowed_write": ["controller/lease/**", "tests/controller/lease/**", "docs/05-beslutslogg.md"],
+      "title": "Exklusiv lease + heartbeat + generationsbindning",
+      "summary": "Exakt en controller äger körningsresursen åt gången. Varje acquire skapar en unik lease-generation. Controllerloopen håller generationen levande med heartbeat och använder samma lease_id vid renew och release. En gammal generation får aldrig förnya eller radera sin efterträdare.",
+      "allowed_write": [
+        "controller/lease/**",
+        "controller/loop/cli",
+        "tests/controller/lease/**",
+        "tests/controller/loop/**",
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
       "exit_test": "verify/bin/h-004-exit",
-      "exit_criterion": "100 samtidiga starter → exakt 1 ägare. kill -9 på ägaren → reclaim efter TTL, aldrig före. Klockskev åt fel håll → vägrar hellre än dubbelägande.",
-      "docs_impact": ["docs/05-beslutslogg.md"],
-      "depends_on": ["h-001"]
+      "exit_criterion": "De befintliga leasekraven står kvar: 100 samtidiga starter → exakt 1 ägare; TTL styr; död ägare reclaimas efter TTL, aldrig före; klockskev åt fel håll → vägrar hellre än dubbelägande. Varje lyckad acquire skriver en unik opaque lease_id på stdout. Acquire kan bindas till --holder-pid <pid>; en sådan lease får inte reclaimas medan holdern fortfarande lever även om TTL passerat, och en bare release får aldrig radera en holder-bunden lease. owner på en holder-bunden lease ska namnge den bundna holder-processen, inte det kortlivade lease-CLI-barnet. renew <task> <lease_id> och release <task> <lease_id> får bara påverka exakt aktuell generation: fel eller gammalt lease_id ändrar inte den aktuella leasen, och en gammal ägares cleanup kan aldrig radera efterträdarens lease. En lyckad renew flyttar TTL-fönstret. Heartbeatframsteg ska ligga i leasefilens serialiserade state så framsteget är observerbart och reproducerbart; filsystemets mtime ensam är inte lease-authority. Huvudloopen använder default TTL/heartbeat 180/30 s men accepterar positiva testvärden lease_ttl_s och lease_heartbeat_s där heartbeat är strikt mindre än TTL. Loopen binder acquire till sin egen långlivade PID, håller heartbeat under hela runnet, stoppar heartbeat före tokenbunden release och kan inte tas över efter ursprunglig TTL medan den fortfarande äger generationen. Om generationen ersätts under ett aktivt run faller loopen stängt utan attestation och cleanup lämnar efterträdarens lease orörd. Ogiltig heartbeat/TTL-config vägras före lease, event och session.",
+      "docs_impact": [
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
+      "depends_on": [
+        "h-001"
+      ]
     },
     {
       "id": "h-005",
