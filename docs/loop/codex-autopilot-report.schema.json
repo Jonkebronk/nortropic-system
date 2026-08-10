@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "role": {
+      "type": "string",
+      "enum": ["TEST_AUTHOR", "GATE_REVIEWER", "BUILDER", "REVIEWER", "ROUTER"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["READY", "NEEDS_REMEDIATION", "BLOCKED", "OWNER_DECISION_REQUIRED", "DONE", "NO_CHANGES"]
+    },
+    "summary": {"type": "string"},
+    "changed_files": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "blocking_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {"type": "string"},
+          "summary": {"type": "string"},
+          "evidence": {"type": "string"}
+        },
+        "required": ["id", "summary", "evidence"],
+        "additionalProperties": false
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "command": {"type": "string"},
+          "exit": {"type": ["integer", "null"]},
+          "result": {
+            "type": "string",
+            "enum": ["PASS", "FAIL", "NOT_RUN", "OVERIFIERAT"]
+          },
+          "decisive_evidence": {"type": "string"}
+        },
+        "required": ["name", "command", "exit", "result", "decisive_evidence"],
+        "additionalProperties": false
+      }
+    },
+    "allowed_write_violation": {"type": ["boolean", "null"]},
+    "frozen_artifacts_modified": {"type": ["boolean", "null"]},
+    "production_files_modified": {"type": ["boolean", "null"]},
+    "frozen_gate_ready": {"type": ["boolean", "null"]},
+    "baseline_red_for_right_reason": {"type": ["boolean", "null"]},
+    "owner_decision_required": {"type": "boolean"},
+    "stop_reason": {"type": "string"},
+    "next_action": {
+      "type": ["string", "null"],
+      "enum": ["BUILD", "TEST_AUTHOR", "DONE", "BLOCKED", null]
+    },
+    "next_task_id": {"type": ["string", "null"]}
+  },
+  "required": [
+    "role",
+    "outcome",
+    "summary",
+    "changed_files",
+    "blocking_findings",
+    "tests",
+    "allowed_write_violation",
+    "frozen_artifacts_modified",
+    "production_files_modified",
+    "frozen_gate_ready",
+    "baseline_red_for_right_reason",
+    "owner_decision_required",
+    "stop_reason",
+    "next_action",
+    "next_task_id"
+  ],
+  "additionalProperties": false
+}

@@ -94,3 +94,10 @@ Det här var översikten. Vill du förstå exakt hur något fungerar, fortsätt 
 - [docs/06-scope.md](06-scope.md) — vad fabriken bygger, vad den bygger på begäran, och vad den säger nej till.
 - [docs/07-konstitution.md](07-konstitution.md) — grundlagen i sin helhet: vad som aldrig får självmodifieras.
 - [README.md](../README.md) — repots ingång med hela nodflödet i en tabell.
+
+<!-- CODEX-BUILD-AUTOPILOT-V2-SIMPLE -->
+## Kontrollplansbygget kan nu köras obemannat
+
+`scripts/nortropic-codex-autopilot.py` kan driva redan owner-auktoriserade loop-tasks genom test-author/builder/reviewer, remediation och mekaniskt verifierad PR/merge utan att ägaren kopierar rapporter mellan terminaler. Denna **build-autopilot är inte rotfilen `AUTOPILOT`**; rotfilen styr den äldre självförbättringstrappan och lämnas orörd.
+
+Autopiloten stoppar endast när den inte längre kan döma nästa trust-transition från befintlig owner authority, exempelvis ny arkitekturfråga, odömbart gateutfall eller oväntad Git-identitet.

@@ -74,3 +74,19 @@ MERGE=NO
 ```
 
 Pusha eller merga endast när användaren uttryckligen har gett den befogenheten för den aktuella fasen och projektets gates tillåter det.
+
+<!-- CODEX-OPERATING-MODEL-V2 -->
+## Codex operating model v2 — stående owner-befogenhet för mekanisk exekvering
+
+Owner har 2026-08-10 uttryckligen auktoriserat `scripts/nortropic-codex-autopilot.py` att vara den mekaniska exekveraren för redan owner-auktoriserat kontrollplansarbete.
+
+```text
+OWNER_AUTHORITY_REQUIRED=YES
+HUMAN_OWNER_PRESENT_PER_TASK=NO
+OWNER_GATE_EXECUTOR=MECHANICAL
+FROZEN_OWNER_GATES_REMAIN_TRUST_AUTHORITY=YES
+```
+
+Detta ändrar inte auktoritetsordningen ovan och gör inte Codex-prosa till trust authority. Rollagenterna committar/pushar/mergar fortfarande inte. Autopiloten får däremot, efter sina mekaniska identity/scope/gate/reviewer-kontroller, skapa immutable candidate commits, publicera, skapa PR och rebase-merga med expected-head-guard utan ny interaktiv owner-prompt per transition.
+
+En verklig ny policy-/arkitekturfråga, odömbart gateutfall, oväntad remote-identity eller no-progress stoppar fortfarande fail-closed.
