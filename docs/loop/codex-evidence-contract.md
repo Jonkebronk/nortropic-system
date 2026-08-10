@@ -137,3 +137,10 @@ MERGE=NO
 The report reduces coordination cost. It does **not** remove the owner gate.
 
 Before a trust-relevant push/merge, owner reproduces decisive frozen gates in the intended owner environment and verifies candidate identity/diff scope.
+
+<!-- CODEX-AUTOPILOT-V2-EVIDENCE -->
+## v2 — mekanisk owner-gate executor
+
+Under `docs/loop/codex-autopilot-v2.md` är human owner fortfarande policyägare men behöver inte vara interaktiv terminaloperatör per candidate. `scripts/nortropic-codex-autopilot.py` reproducerar transition-relevant proof: exact Git identity, cumulative scope/budget, faktiskt frozen exit-test, independent reviewer identity, remote head/base och merged tree.
+
+Agentens strukturerade rapport är fortfarande evidence/claims och aldrig en verdict store. Autopilotens journal under Git common-dir är checkpoint/evidence only och får inte övertrumfa faktisk Git-/gate-state.
