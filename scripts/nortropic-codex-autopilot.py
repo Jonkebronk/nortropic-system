@@ -67,7 +67,7 @@ ROADMAP_PLAN_BLOBS = {
 }
 SUBSTITUTION_BLOBS = {
     SUBSTITUTION_OWNER_PATH: "3997437cd20c6dd7397622b512ffd90dab5cf391",
-    SUBSTITUTION_AUDIT_PATH: "b2fc05bf0cfc037db18ba3c5e0cbfc32ce6c1151",
+    SUBSTITUTION_AUDIT_PATH: "bb5f99c111cd5aaf784e73e67bde354023b1b5f2",
 }
 
 
@@ -2118,7 +2118,7 @@ def bootstrap(repo: Path, wt_root: Path, do_drain: bool) -> None:
         journal(repo, "BOOTSTRAP_COMPLETE", full_roadmap="disabled")
 
 
-def selftest() -> None:
+def selftest(repo: Path | None = None) -> None:
     sub_expected = ["SUB-1", "SUB-2", "SUB-3", "SUB-4"]
     road_expected = ["S2", "S4", "S5", "S6", "S7", "S8", "S9", "S10", "S11", "S12", "S13"]
     sub_codes = [x.code for x in SUBSTITUTION_ROADMAP]
@@ -2164,14 +2164,37 @@ def selftest() -> None:
         raise Stop("roadmap authority SHA drift")
     if SUBSTITUTION_BLOBS != {
         SUBSTITUTION_OWNER_PATH: "3997437cd20c6dd7397622b512ffd90dab5cf391",
-        SUBSTITUTION_AUDIT_PATH: "b2fc05bf0cfc037db18ba3c5e0cbfc32ce6c1151",
+        SUBSTITUTION_AUDIT_PATH: "bb5f99c111cd5aaf784e73e67bde354023b1b5f2",
     }:
         raise Stop("substitution authority blob drift")
+    if repo is not None and repo.exists():
+        for rel, expected_blob in SUBSTITUTION_BLOBS.items():
+            ref = f"refs/remotes/origin/main:{rel}"
+            if git(repo, "cat-file", "-e", ref, check=False).rc != 0:
+                raise Stop(f"selftest substitution authority missing from origin/main: {rel}")
+            actual_blob = git(repo, "rev-parse", ref).out.strip()
+            if actual_blob != expected_blob:
+                raise Stop(
+                    f"selftest substitution authority mismatch path={rel} "
+                    f"expected={expected_blob} actual={actual_blob}"
+                )
     if EMPIRICAL_STAGE != "L" or EMPIRICAL_MAX_ROUNDS != 5:
         raise Stop("empirical closeout configuration drift")
     if EMPIRICAL_GATE_PATH != "verify/bin/autonomous-loop-exit":
         raise Stop("empirical program-gate identity drift")
-    src = Path(__file__).read_text(encoding="utf-8") if "__file__" in globals() else ""
+    src_path = Path(globals().get("__file__", ""))
+    if src_path.is_file():
+        src = src_path.read_text(encoding="utf-8")
+    elif repo is not None:
+        shown = git(
+            repo, "show", "refs/remotes/origin/main:scripts/nortropic-codex-autopilot.py",
+            check=False,
+        )
+        if shown.rc != 0 or not shown.out:
+            raise Stop("v4 selftest cannot resolve authoritative streamed source")
+        src = shown.out
+    else:
+        raise Stop("v4 selftest source unavailable")
     required = [
         "run_codex_resolving_architecture", "HUMAN_AUTHORITY_HARD_STOP", "ARCHITECT_RESOLUTION",
         "FULL_ROADMAP_SOFTWARE_COMPLETE", "FULL_ROADMAP_COMPLETE", "ensure_empirical_program_gate",
@@ -2402,7 +2425,7 @@ def main() -> int:
     wt_root = Path(a.worktrees).expanduser().resolve()
     if a.cmd == "selftest":
         try:
-            selftest()
+            selftest(repo)
             return 0
         except Stop as e:
             print(f"AUTOPILOT_BLOCKED: {e}", file=sys.stderr)
