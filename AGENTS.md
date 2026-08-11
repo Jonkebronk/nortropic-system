@@ -121,3 +121,27 @@ verify/bin/autonomous-loop-exit
 
 Den fryses av test-author + gate-reviewer innan downstream roadmap implementation. Independent
 empirical-runner får falsifiera den, men får aldrig ersätta ett rött gate-resultat med prosa-PASS.
+
+<!-- CODEX-OPERATING-MODEL-V4-PROVIDER-NEUTRAL -->
+## Codex operating model v4 — provider-neutral Trust Kernel
+
+Owner has 2026-08-11 amended the remaining autonomous-loop **implementation shape** through `docs/loop/harness-substitution-contract-v1.md`. Higher authority and the exact frozen roadmap remain unchanged for required effects, migration intent and negative controls.
+
+```text
+NORTROPIC_ARCHITECTURE=PROVIDER_NEUTRAL_TRUST_KERNEL
+PRODUCT=NORTROPIC_AUTONOMOUS_WEBSITE_FACTORY
+AGENT_REASONING_OWNER=PROVIDER_HARNESS
+TRUST_TRANSITION_OWNER=NORTROPIC
+MODEL_OUTPUT_IS_TRUST_AUTHORITY=NO
+FROZEN_OWNER_GATES_REMAIN_TRUST_AUTHORITY=YES
+SUBSTITUTION_BEFORE_NEW_HARNESS_COMPONENT=REQUIRED
+NO_FORCE_SEMANTICS=YES
+```
+
+Claude/Codex/future providers own reasoning, sessions, context, tool loops, internal retries and reviewer/remediation intelligence. Nortropic owns TaskContract provenance, allowed_write, G20 containment, exact candidate SHA, deterministic policy/frozen gates, attestation, fencing/recovery, promotion and guarded authoritative transitions.
+
+`$nortropic-architect` must run the five-question substitution test before extending custom harness machinery. Provider/session/reviewer output is workflow evidence only and never PASS/attestation/promotion authority.
+
+Revised sequence after S3 h-003/h-004: SUB-1/h-027 → SUB-2/h-028 → SUB-3/h-029 → SUB-4/h-030 → S2/S4–S13 → L. SUB-0 is this owner amendment, not a builder task.
+
+The quota-aborted dirty worktree `owner/h-003-attestation-validity-44d525a5dd60` is preserved forensic evidence and must not be adopted as authority. Fresh S3 work after this amendment starts from the new authoritative main.

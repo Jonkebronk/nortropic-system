@@ -168,3 +168,14 @@ V2:s regler står kvar:
 
 Se **S7 software vs external activation** ovan. Den externa identitetsceremonin är den enda
 planerade externa human-hard-stop som får återstå efter `FULL_ROADMAP_SOFTWARE_COMPLETE`.
+
+<!-- HARNESS-SUBSTITUTION-AMENDMENT-V1 -->
+## v4 amendment — provider-neutral Trust Kernel
+
+`docs/loop/harness-substitution-contract-v1.md` är owner amendment för den återstående roadmapens implementation shape. Den exakta frysta planen behåller required effects, migration intent och negative controls; v4 väljer provider-native session/context/tool/retry primitives när ingen självständig Trust Kernel-boundary annars finns.
+
+S3/h-003+h-004 förblir först och klassas KEEP. Därefter kör autopiloten SUB-1/h-027, SUB-2/h-028, SUB-3/h-029 och SUB-4/h-030 innan S2/S4–S13. S2/S4/S5 får h-030 som dependency floor. Programnivå-gaten L fryses efter denna owner amendment och måste binda provider/kernel-separation utan att source-shape:a mot Codex.
+
+Provider/session/reviewer READY är aldrig PASS authority. Frozen task gates, candidate identity, policy, attestation/fencing och promotion förblir mekaniska Nortropic-gränser.
+
+Den quota-avbrutna dirty h-003/h-004 test-author-worktreen från `44d525a…` återanvänds inte. När v4 senare resumear skapas fresh base-specific owner-work från amended main; den gamla worktreen lämnas orörd som evidence.

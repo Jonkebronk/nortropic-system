@@ -252,3 +252,14 @@ muterar inget repo. För full roadmap/gate-status:
 
 Stage L ägs av den frysta programnivå-gaten `verify/bin/autonomous-loop-exit`; independent
 empirical-runner är en falsifierande andra blick, aldrig ersättning för gate PASS.
+
+## 2026-08-11 — Harness Substitution Amendment v1
+
+- Product goal remains: autonomous Nortropic website factory.
+- Kernel target: provider-neutral Trust Kernel; agent-provider workflow is not trust authority.
+- Original frozen roadmap SHA remains effect/negative-control authority: `0b3212c991d4227c8df2656465ae2c0252dda39e`.
+- New owner implementation-shape authority: `docs/loop/harness-substitution-contract-v1.md`.
+- Migration floor after S3: SUB-1/h-027 → SUB-2/h-028 → SUB-3/h-029 → SUB-4/h-030.
+- S2/S4/S5 must not freeze without h-030 dependency after this amendment.
+- Pre-amendment quota-aborted h-003/h-004 worktree is preserved local evidence, not authority, not a resume candidate.
+- No frozen gate, constitution/rulebook boundary, G20, candidate identity, attestation/fencing, promotion identity or no-force rule is weakened by this amendment.
