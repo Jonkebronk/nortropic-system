@@ -132,3 +132,14 @@ I valfri integrerad terminal (VS Code/Codex eller Terminal.app):
 
 Detta är en read-only observatör. `Ctrl-C` stänger bara vyn; LaunchAgent-autopiloten fortsätter.
 `roadmap` kör en djupare gate-status och bör användas vid behov, inte som 2-sekunders livevy.
+
+<!-- PROVIDER-NEUTRAL-TRUST-KERNEL-V1 -->
+## Arkitekturen har smalnats av: providerhjärna, Nortropic-domare
+
+Nortropic är fortsatt en autonom hemsidefabrik. Claude/Codex är utbytbara intelligenta arbetare; Nortropic ska inte bygga en andra Claude/Codex-harness om providern redan äger session/context/tools/retries.
+
+Det som **inte** delegeras är Trust Kernel: task authority, allowed_write, G20, candidate-SHA, policy, frozen verifier/gate, attestation, stale/fencing, recovery och promotion/main-transition.
+
+Kanoniskt owner-kontrakt: `docs/loop/harness-substitution-contract-v1.md`.
+
+Efter S3 h-003/h-004 byggs SUB-1…SUB-4 före återstående S2/S4–S13. Verkstadsgolvet blir senare kontrollrummet över den verkliga event/read-projektionen men aldrig trust authority.

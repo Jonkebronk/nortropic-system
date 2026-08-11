@@ -221,7 +221,7 @@
       "exit_test": "verify/bin/h-015-exit",
       "exit_criterion": "Efter en avbruten körning: attesterad task väljs inte om och ger inga nya event; task som föll blir valbar igen och dess tidigare fingerprints finns kvar; öppen brytare är fortfarande öppen och släpper först när dess villkor släpper. Lease från en död körning återtas efter TTL och aldrig före — mätt på klockan, inte på utsagan. Två samtidiga återstarter ger exakt en ägare. Återstart på tom eller helt attesterad backlog ger exit 0 utan nya event.",
       "docs_impact": ["docs/05-beslutslogg.md"],
-      "depends_on": ["h-010", "h-013"]
+      "depends_on": ["h-010", "h-013", "h-016", "h-004", "h-030"]
     },
     { "id": "h-016", "slice": 14,
       "title": "Kedjan kopplas in — varvet går genom brytaren och utföraren",
