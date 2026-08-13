@@ -386,3 +386,10 @@ every material evidence, receipt and allowlist string while preserving dependent
 Exact decoded byte length plus bytes is required; a legitimate Unicode probe/path/marker family stays
 positive. The vulnerable native artifact is RED and the additive builder fix is GREEN in disposable
 composition; neither production lineage is copied into this contract-only candidate.
+
+Final implementation review then showed that the per-document U+0001 rows could reject only through
+a cross-document mismatch while a consistently bound decoded control still reached VERIFIED. The
+fresh additive gate now runs the complete U+0000..U+001F matrix over probe identity, path and effect
+marker, updates every related caller/document binding and recomputes the receipt digest. U+0000 probe
+identity stays in parser-only document controls because an operating-system argv cannot carry NUL;
+its path and marker rows remain coordinated. The existing legitimate Unicode positive is unchanged.
