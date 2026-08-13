@@ -31,6 +31,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"
+# Normal orchestrator execution must not mutate the immutable candidate merely
+# by loading the shared authority parser.
+sys.dont_write_bytecode = True
 sys.path.insert(0, str(AUTHORITY_LIB))
 from core import (AuthorityError, canonical_path, permits,
                   strict_json_bytes)  # noqa: E402
