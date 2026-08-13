@@ -1,6 +1,6 @@
 # Remaining bootstrap delegation v1
 
-**Owner decision:** 2026-08-13  
+**Owner decision:** 2026-08-13
 **Scope:** H-035 → H-034 → H-033 → H-032 → H-031 → supervisor resume → first real autonomous launch.
 
 This is workflow authority, not a second backlog, verdict store, or security boundary. The
