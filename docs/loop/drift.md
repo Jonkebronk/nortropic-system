@@ -431,3 +431,12 @@ predicate to judge controls and canonical owner acceptance: evidence UID must eq
 OS-resolved non-root `_nortropic_provenance` UID, receipt UID must equal root, the two inodes and UIDs
 must differ, and neither leaf may be group/other writable or a symlink. A live separated-ownership
 positive and root-writes-both, requester-owned and symlink negatives run before the component RED.
+
+H-033's normal H-034 execution boundary additionally requires an externally provisioned canonical
+`provenance/bin/h034-kernel` hard link. Every fixed parent and the leaf are opened no-follow and must
+be root-owned and non-group/other-writable; the leaf must be executable and the same device/inode as
+the repository H-034 kernel whose bytes are bound to the frozen Git-object manifest and artifact
+digest. Opened parent, repository and protected-link identities remain stable through execution, and
+the protected pathname must still name the same inode afterward. The disposable `gate-verify` path
+continues to exercise the repository kernel without claiming normal authority. No repository code
+provisions this root-owned link; its absence or mismatch is an external-owner ODÖMBART boundary.

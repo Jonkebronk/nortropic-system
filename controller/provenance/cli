@@ -11,13 +11,13 @@ import stat
 import subprocess
 import sys
 import time
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "verify/h034/kernel"
 H034_MANIFEST_SHA256 = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
 AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
+PROTECTED_KERNEL = AUTHORITY / "bin/h034-kernel"
 EVIDENCE_ROOT = AUTHORITY / "evidence"
 RECEIPT_ROOT = AUTHORITY / "probe-receipts"
 ALLOWLIST = AUTHORITY / "probes.json"
@@ -68,12 +68,50 @@ def protected_mode(s):
     return not (s.st_mode & 0o022)
 
 
+def object_identity(s):
+    return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid,
+            s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+
+
+def root_protected(s, kind, executable=False):
+    expected = stat.S_ISDIR if kind == "dir" else stat.S_ISREG
+    return (expected(s.st_mode) and s.st_uid == 0 and protected_mode(s)
+            and (not executable or bool(s.st_mode & 0o111)))
+
+
 def open_dir_at(parent, name):
     fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
     s = os.fstat(fd)
     if not stat.S_ISDIR(s.st_mode) or not protected_mode(s):
         os.close(fd); fail()
     return fd
+
+
+def open_protected_kernel(repository_fd):
+    opened = []
+    try:
+        parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened.append(parent)
+        if not root_protected(os.fstat(parent), "dir"):
+            fail(2)
+        for component in ("Library", "Application Support", "Nortropic", "provenance", "bin"):
+            parent = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            opened.append(parent)
+            if not root_protected(os.fstat(parent), "dir"):
+                fail(2)
+        kernel_fd = os.open("h034-kernel", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        opened.append(kernel_fd)
+        repository = os.fstat(repository_fd)
+        protected = os.fstat(kernel_fd)
+        if (not root_protected(protected, "file", True)
+                or (repository.st_dev, repository.st_ino) != (protected.st_dev, protected.st_ino)):
+            fail(2)
+        return opened, kernel_fd
+    except BaseException:
+        for fd in reversed(opened):
+            try: os.close(fd)
+            except OSError: pass
+        raise
 
 
 def stable_regular_at(parent, name):
@@ -127,7 +165,7 @@ def open_authority(root, request_id, fixture):
         raise
 
 
-def kernel_handoff(fds, v):
+def kernel_handoff(fds, v, fixture):
     try:
         git = "/usr/bin/git"
         manifest_raw = subprocess.run([git, "-C", str(ROOT), "show", "HEAD:verify/h034/identity-manifest.json"],
@@ -148,7 +186,7 @@ def kernel_handoff(fds, v):
             fail(2)
         kernel_fd = os.open(KERNEL, os.O_RDONLY | os.O_NOFOLLOW)
         before = os.fstat(kernel_fd)
-        if not stat.S_ISREG(before.st_mode) or not (before.st_mode & 0o111) or before.st_nlink != 1:
+        if not stat.S_ISREG(before.st_mode) or not (before.st_mode & 0o111) or before.st_nlink < 1:
             fail(2)
         kernel_bytes = os.pread(kernel_fd, before.st_size, 0)
         middle = os.fstat(kernel_fd)
@@ -159,25 +197,23 @@ def kernel_handoff(fds, v):
             fail(2)
     except (OSError, UnicodeError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         fail(2)
-    # Darwin has no fexecve(2), and devfs rejects execve("/dev/fd/N").  Pin
-    # the already-verified vnode with a same-filesystem hard link instead: it
-    # neither copies the H-034 artifact nor depends on the canonical pathname
-    # after this point.  Any swap before link(2) is caught by the inode check.
-    stage = tempfile.TemporaryDirectory(prefix="h033-kernel-", dir="/private/tmp")
-    staged = Path(stage.name) / "kernel"
+    protected_fds = []
     try:
-        os.link(KERNEL, staged, follow_symlinks=False)
-        linked = os.stat(staged, follow_symlinks=False)
-        handoff = os.fstat(kernel_fd)
-        Path(stage.name).chmod(0o500)
-        stage_stat = os.stat(stage.name, follow_symlinks=False)
+        if fixture:
+            executable = KERNEL
+            handoff_fd = kernel_fd
+        else:
+            protected_fds, handoff_fd = open_protected_kernel(kernel_fd)
+            executable = PROTECTED_KERNEL
+        handoff = os.fstat(handoff_fd)
+        protected_before = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    except SystemExit:
+        os.close(kernel_fd)
+        raise
     except (OSError, ValueError):
-        stage.cleanup(); os.close(kernel_fd); fail(2)
-    if (not stat.S_ISDIR(stage_stat.st_mode) or stage_stat.st_uid != os.geteuid()
-            or stat.S_IMODE(stage_stat.st_mode) != 0o500 or not stat.S_ISREG(linked.st_mode)
-            or (linked.st_dev, linked.st_ino) != (handoff.st_dev, handoff.st_ino)):
-        Path(stage.name).chmod(0o700); stage.cleanup(); os.close(kernel_fd); fail(2)
-    argv = [str(staged), "h033-verify",
+        os.close(kernel_fd)
+        fail(2)
+    argv = [str(executable), "h033-verify",
             "--evidence-fd", str(fds[0]), "--receipt-fd", str(fds[1]),
             "--allowlist-fd", str(fds[2]), "--task", "h-033",
             "--candidate", v["candidate"], "--task-spec-sha256", v["task-spec-sha256"],
@@ -188,20 +224,36 @@ def kernel_handoff(fds, v):
                                    pass_fds=fds, start_new_session=True,
                                    env={"PATH":"/usr/bin:/bin","LANG":"C","LC_ALL":"C"})
     except OSError:
-        Path(stage.name).chmod(0o700); stage.cleanup(); os.close(kernel_fd); fail(2)
+        for fd in reversed(protected_fds): os.close(fd)
+        os.close(kernel_fd); fail(2)
     try: out, _ = process.communicate(timeout=3)
     except subprocess.TimeoutExpired:
         try: os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError: pass
-        process.communicate(); os.close(kernel_fd); Path(stage.name).chmod(0o700); stage.cleanup(); fail(2)
+        process.communicate()
+        for fd in reversed(protected_fds): os.close(fd)
+        os.close(kernel_fd); fail(2)
     returncode = process.returncode
     after = os.fstat(kernel_fd)
-    if (handoff.st_dev, handoff.st_ino, handoff.st_mode, handoff.st_size, handoff.st_mtime_ns, handoff.st_ctime_ns) != \
-       (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
-        os.close(kernel_fd); Path(stage.name).chmod(0o700); stage.cleanup()
+    handoff_after = os.fstat(handoff_fd)
+    protected_after = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    if (object_identity(before) != object_identity(after)
+            or object_identity(handoff) != object_identity(handoff_after)
+            or protected_before != protected_after):
+        for fd in reversed(protected_fds): os.close(fd)
+        os.close(kernel_fd)
         fail(2)
+    if not fixture:
+        try:
+            current = os.stat("h034-kernel", dir_fd=protected_fds[-2], follow_symlinks=False)
+        except OSError:
+            for fd in reversed(protected_fds): os.close(fd)
+            os.close(kernel_fd); fail(2)
+        if (current.st_dev, current.st_ino) != (handoff_after.st_dev, handoff_after.st_ino):
+            for fd in reversed(protected_fds): os.close(fd)
+            os.close(kernel_fd); fail(2)
+    for fd in reversed(protected_fds): os.close(fd)
     os.close(kernel_fd)
-    Path(stage.name).chmod(0o700); stage.cleanup()
     if returncode == 0:
         sys.stdout.write(out)
         return
@@ -224,7 +276,7 @@ def gate_verify(argv):
             while not (sync / "release").is_file():
                 if time.monotonic() >= deadline: fail(2)
                 time.sleep(.01)
-        kernel_handoff(fds, v)
+        kernel_handoff(fds, v, True)
     finally:
         for fd in reversed(opened):
             try: os.close(fd)
@@ -236,9 +288,12 @@ def verify(argv):
     v = strict_options(argv, required)
     validate_bindings(v)
     if not lower_hex(v["request-id"], 64): fail()
-    opened, fds = open_authority(AUTHORITY, v["request-id"], False)
     try:
-        kernel_handoff(fds, v)
+        opened, fds = open_authority(AUTHORITY, v["request-id"], False)
+    except (OSError, KeyError):
+        fail(2)
+    try:
+        kernel_handoff(fds, v, False)
     finally:
         for fd in reversed(opened):
             try: os.close(fd)
