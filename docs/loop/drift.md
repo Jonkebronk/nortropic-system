@@ -361,3 +361,12 @@ same-descriptor, fresh metamorphic tri-state and bounded process-group requireme
 stale history. It additionally mutates each receipt schema and recomputes the dependent evidence
 digest, isolating strict receipt parsing from digest mismatch. Production remains RED on exactly the
 four missing owner artifacts.
+
+The independent review of that first fresh H-034 candidate found three gate defects rather than an
+authority conflict. The additive remediation makes the exact manifest schema satisfiable and binds
+`language=C`, the final artifact/recipe/source digests and every observed Mach-O field consistently.
+It executes the closed production recipe in two disposable trees, proves deterministic unsigned
+output, signs and compares stable native identities, and tests inherited same-open-description,
+nonregular and bounded-input behavior. Fresh black-box evidence/receipt/allowlist families now isolate
+every schema and cross-binding defect; a real arm64 C consumer that is receipt-focused, uses substring
+evidence and ignores the allowlist is caught. Production remains absent and RED only on its four paths.
