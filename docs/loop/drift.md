@@ -301,3 +301,13 @@ candidates are design evidence only. The migration preserves current Python-inte
 all sound R12 owner/task/gate/Git-object controls and H-034 absence. It additionally freezes guarded
 normal merge-commit publication: immediate base/candidate/remote/PR/file relock, `--merge` only, and
 post-merge proof of exact two-parent order plus candidate-identical tree. Production remains RED.
+
+The independent gate review of the first fresh candidate found that publication was still inferred
+from source tokens and disconnected Git-shape fixtures. The frozen gate now calls the real
+production `publish()` against disposable repositories and a hermetic GitHub command boundary.
+It observes the non-force branch push, complete repository/PR/base/head/file relock, guarded
+`gh pr merge --merge`, GitHub merged state, returned merge identity, fetched `origin/main`, ordered
+parents and candidate-identical tree as one operational chain. Hostile repository/PR metadata,
+main drift, wrong remote head or files, unmerged state, returned-SHA mismatch, malformed parent
+topology and tree mismatch all reject. A gate-local conforming witness proves the rig satisfiable;
+the dead-token/no-op publisher rejected by the same effect checks proves source text is insufficient.

@@ -47,6 +47,13 @@ reports `merged=true`, the publisher fetches main and proves: returned merge SHA
 `origin/main` equals it; it has exactly two parents; parent 1 equals the frozen base; parent 2 equals
 the reviewed candidate; and its tree equals the reviewed candidate tree. Any mismatch fails closed.
 
+The frozen acceptance gate measures this as one effect-bound operation by invoking the production
+publisher against real disposable Git repositories and a hermetic GitHub command boundary. A
+returned SHA or the presence of publication-related source tokens is not evidence. The observed
+chain must include the exact non-force candidate push; repository, base, head, PR and file relock
+after that push and immediately before merge; `gh pr merge --merge --match-head-commit`; GitHub's
+merged state; the fetched `origin/main`; two ordered parents; and the candidate-identical tree.
+
 The current observed GitHub protection is contextual evidence, not a replacement for the relock:
 `enforce_admins=true`, force pushes/deletions disabled, no required linear history, and normal merge
 commits supported. The publisher must re-read relevant external state at the transition.

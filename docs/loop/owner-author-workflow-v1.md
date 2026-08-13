@@ -193,3 +193,8 @@ are rejected. After GitHub reports merged, it fetches main and proves the return
 candidate—and has the reviewed candidate tree. Repository settings that also permit rebase/squash
 do not grant those methods. The complete bounded terms and irreducible stop boundary live in the
 single delegation document; this document remains the operational H-035 contract.
+
+Frozen acceptance invokes that actual publisher using a hermetic GitHub command boundary and real
+disposable Git repositories. It accepts only the observed end-to-end effects and ordering above;
+source strings, dead code and returned claims cannot substitute for the pushed refs, revalidated
+metadata, merge command, GitHub merged transition, fetched merge object, parent order or tree.
