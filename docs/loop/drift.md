@@ -349,3 +349,32 @@ R12 owner workflow without importing old history, preserves frozen Python interp
 bytes, and adds the effect-bound guarded publisher. Focused historical taskval, policy and H-007
 checks pass. The owner-terminal V6 subgate is `ODÖMBART` in the builder sandbox because `ps` is
 denied; no product failure is inferred from that environment limitation. No push or merge occurred.
+
+After H-035 publication at authoritative main `c883720`, H-034 is freshly materialized as the next
+owner-authority task. Current owner sources and the exact registry agree on C, arm64 macOS, an exact
+final signed Mach-O, zero third-party runtime dependencies, Apple system runtime/dyld only, a fixed
+finite verification plan, and no Python runtime authority. The only owner surface is the four
+registry-reserved H034 families; H-033 remains intentionally absent and will consume H-034 later, so
+H-034 depends only on final H-035. The frozen gate retains the valid historical closed-argv,
+codesign `-dvvv` CDHash, LC_UUID/loadability, deterministic unsigned build, stable semantic/Mach-O,
+same-descriptor, fresh metamorphic tri-state and bounded process-group requirements without adopting
+stale history. It additionally mutates each receipt schema and recomputes the dependent evidence
+digest, isolating strict receipt parsing from digest mismatch. Production remains RED on exactly the
+four missing owner artifacts.
+
+The independent review of that first fresh H-034 candidate found three gate defects rather than an
+authority conflict. The additive remediation makes the exact manifest schema satisfiable and binds
+`language=C`, the final artifact/recipe/source digests and every observed Mach-O field consistently.
+It executes the closed production recipe in two disposable trees, proves deterministic unsigned
+output, signs and compares stable native identities, and tests inherited same-open-description,
+nonregular and bounded-input behavior. Fresh black-box evidence/receipt/allowlist families now isolate
+every schema and cross-binding defect; a real arm64 C consumer that is receipt-focused, uses substring
+evidence and ignores the allowlist is caught. Production remains absent and RED only on its four paths.
+
+R3 closes the remaining semantic input-space gap with isolated black-box rows. An unchanged valid
+receipt paired with a different valid-hex evidence digest now rejects as a relation failure. Exact
+schema versions and observer authority, empty/invalid allowlists, receipt/allowlist size and trailing
+data, and missing/duplicate/malformed forms of every required descriptor/binding argument are sent
+through the production kernel. Receipt-dependent evidence is recomputed only where needed to isolate
+the intended parser, exact-value or finite-bound defect. The valid positive and real permissive arm64
+C mutant controls remain intact; production remains absent and RED only on its four owner paths.
