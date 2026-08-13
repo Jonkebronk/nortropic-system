@@ -220,3 +220,10 @@ before subject load; basename alone is never authority. Bare names resolve only 
 host PATH identity, and harness-owned symlinks are accepted only when canonicalization reaches an
 audited executable. Absolute fakes, hostile PATH shadows, changed executables and even byte-identical
 copies at a different canonical path are denied before execution.
+
+The production implementation activates this workflow through `controller/authority/cli` and the
+single parser in `controller/authority/core.py`. Publication is implemented by the production
+`publish()` callable in `scripts/nortropic-codex-autopilot.py`; its required
+`publication_authority` object is mandatory rather than inferred from session prose. It performs no
+push or merge unless every pre-publication identity check succeeds, and it returns success only
+after its own fetched-main, ordered-parent and tree proof succeeds.
