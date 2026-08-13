@@ -440,3 +440,13 @@ digest. Opened parent, repository and protected-link identities remain stable th
 the protected pathname must still name the same inode afterward. The disposable `gate-verify` path
 continues to exercise the repository kernel without claiming normal authority. No repository code
 provisions this root-owned link; its absence or mismatch is an external-owner ODÖMBART boundary.
+
+Single consumption is delegated to the fixed root-owned protected
+`provenance/bin/request-consumer` authority before the normal H-034 handoff. The exact operation is
+`consume` with only the request ID and frozen task/candidate/spec/gate/probe/result bindings; no
+command, path or authority selector is forwarded. Exit 0 is the one atomic authorization, exit 1 is
+denial or replay, and service/identity/timeout/cleanup failure is ODÖMBART. The observer-owned
+external authority validates the token against its request state and never exposes its state store to
+repository code. Consumption is deliberately not rolled back after any later kernel failure, so a
+failed first handoff cannot revive the request. Fixture-only differential verification does not
+consume external owner state.

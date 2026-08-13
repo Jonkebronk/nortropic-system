@@ -18,6 +18,7 @@ KERNEL = ROOT / "verify/h034/kernel"
 H034_MANIFEST_SHA256 = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
 AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
 PROTECTED_KERNEL = AUTHORITY / "bin/h034-kernel"
+PROTECTED_CONSUMER = AUTHORITY / "bin/request-consumer"
 EVIDENCE_ROOT = AUTHORITY / "evidence"
 RECEIPT_ROOT = AUTHORITY / "probe-receipts"
 ALLOWLIST = AUTHORITY / "probes.json"
@@ -87,7 +88,7 @@ def open_dir_at(parent, name):
     return fd
 
 
-def open_protected_kernel(repository_fd):
+def open_protected_executable(name, repository_fd=None):
     opened = []
     try:
         parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -99,19 +100,83 @@ def open_protected_kernel(repository_fd):
             opened.append(parent)
             if not root_protected(os.fstat(parent), "dir"):
                 fail(2)
-        kernel_fd = os.open("h034-kernel", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
-        opened.append(kernel_fd)
-        repository = os.fstat(repository_fd)
-        protected = os.fstat(kernel_fd)
-        if (not root_protected(protected, "file", True)
-                or (repository.st_dev, repository.st_ino) != (protected.st_dev, protected.st_ino)):
+        executable_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        opened.append(executable_fd)
+        protected = os.fstat(executable_fd)
+        if not root_protected(protected, "file", True):
             fail(2)
-        return opened, kernel_fd
+        if repository_fd is not None:
+            repository = os.fstat(repository_fd)
+            if (repository.st_dev, repository.st_ino) != (protected.st_dev, protected.st_ino):
+                fail(2)
+        return opened, executable_fd
     except BaseException:
         for fd in reversed(opened):
             try: os.close(fd)
             except OSError: pass
         raise
+
+
+def open_protected_kernel(repository_fd):
+    return open_protected_executable("h034-kernel", repository_fd)
+
+
+def close_all(fds):
+    for fd in reversed(fds):
+        try: os.close(fd)
+        except OSError: pass
+
+
+def process_group_gone(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+
+
+def consume_request(v):
+    try:
+        protected_fds, service_fd = open_protected_executable("request-consumer")
+        before = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    except SystemExit:
+        raise
+    except (OSError, ValueError):
+        fail(2)
+    argv = [str(PROTECTED_CONSUMER), "consume",
+            "--request-id", v["request-id"], "--task", "h-033",
+            "--candidate", v["candidate"], "--task-spec-sha256", v["task-spec-sha256"],
+            "--gate-sha256", v["gate-sha256"], "--probe", v["probe"],
+            "--require-result", v["require-result"]]
+    try:
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   start_new_session=True,
+                                   env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                                        "HOME": "/var/empty", "TMPDIR": "/tmp"})
+        try: out, err = process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            process.communicate()
+            clean = process.poll() is not None and process_group_gone(process.pid)
+            close_all(protected_fds)
+            if not clean: fail(2)
+            fail(2)
+        clean = process.poll() is not None and process_group_gone(process.pid)
+        after = [object_identity(os.fstat(fd)) for fd in protected_fds]
+        current = os.stat("request-consumer", dir_fd=protected_fds[-2], follow_symlinks=False)
+    except (OSError, subprocess.SubprocessError):
+        close_all(protected_fds); fail(2)
+    stable = (before == after
+              and (current.st_dev, current.st_ino) == (os.fstat(service_fd).st_dev, os.fstat(service_fd).st_ino))
+    close_all(protected_fds)
+    if not clean or not stable or out or err:
+        fail(2)
+    if process.returncode == 0:
+        return
+    fail(1 if process.returncode == 1 else 2)
 
 
 def stable_regular_at(parent, name):
@@ -293,6 +358,7 @@ def verify(argv):
     except (OSError, KeyError):
         fail(2)
     try:
+        consume_request(v)
         kernel_handoff(fds, v, False)
     finally:
         for fd in reversed(opened):
