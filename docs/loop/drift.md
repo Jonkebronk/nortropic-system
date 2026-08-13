@@ -335,3 +335,10 @@ executes the subject and restores host functions afterward; captured `run`, `Pop
 `check_call` and `os.system` aliases retain the audited boundary. Each form is tested with an
 absolute unexpected executable that is denied without execution, and separately with legitimate
 absolute Git that passes. The prior identity, response-validation and graph controls remain intact.
+
+R5 independent review found that executable classification still trusted the requested basename.
+R6 captures real Git/GitHub canonical paths and SHA-256 identities before subject execution. Bare
+names use only the captured host PATH identity; harness symlinks pass only by resolving to an exact
+audited target. Absolute same-name fakes and PATH shadows are denied before marker execution, as is
+a byte-identical Git copy at another canonical path. Both exact system Git identities available on
+the owner host and the hermetic Git/GitHub reference symlinks remain positive.

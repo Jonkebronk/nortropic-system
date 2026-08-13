@@ -215,3 +215,8 @@ at module load for `subprocess.run`, `Popen`, `check_output`, `check_call` or `o
 audited after the normal module names are restored. Only required Git/GitHub executables are
 permitted during publication; an absolute unexpected executable is denied and makes acceptance
 fail. Absolute Git and each captured API remain valid for legitimate audited Git operations.
+Executable authorization binds the canonical path and SHA-256 of the real Git/GitHub tools resolved
+before subject load; basename alone is never authority. Bare names resolve only through that frozen
+host PATH identity, and harness-owned symlinks are accepted only when canonicalization reaches an
+audited executable. Absolute fakes, hostile PATH shadows, changed executables and even byte-identical
+copies at a different canonical path are denied before execution.

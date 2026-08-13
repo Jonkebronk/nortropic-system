@@ -66,6 +66,10 @@ Acceptance installs the executable boundary before importing the publisher. Modu
 `subprocess.run`, `Popen`, `check_output`, `check_call` and `os.system` therefore cannot bypass the
 trace. Git and GitHub remain available through those audited forms, including absolute Git paths;
 an unexpected absolute executable is denied and rejects publication.
+The audited Git/GitHub identities are fixed before module load by canonical path plus SHA-256.
+Names are resolved only through the captured authoritative PATH; basename equality is insufficient.
+Harness symlinks may resolve to those identities, but absolute fakes, PATH shadows, changed files
+and byte-identical copies at a different canonical path are denied before execution.
 
 The current observed GitHub protection is contextual evidence, not a replacement for the relock:
 `enforce_admins=true`, force pushes/deletions disabled, no required linear history, and normal merge

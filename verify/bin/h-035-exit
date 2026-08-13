@@ -1666,10 +1666,22 @@ def frozen_checks() -> None:
 
 def publication_contract_controls(tmp: Path) -> None:
     script = ROOT / "scripts/nortropic-codex-autopilot.py"
+    host_path=os.environ.get("PATH","")
+    def executable_identity(name: str) -> tuple[str,str]:
+        probe=saved_subprocess["run"](["/usr/bin/which",name],capture_output=True,text=True,
+                                        env={**os.environ,"PATH":host_path})
+        if probe.returncode or not probe.stdout.strip(): raise Rig(f"missing audited executable {name}")
+        canonical=str(Path(probe.stdout.strip()).resolve(strict=True))
+        return canonical,hashlib.sha256(Path(canonical).read_bytes()).hexdigest()
     active_boundary=[None]
     saved_subprocess={name:getattr(subprocess,name) for name in
                       ("run","Popen","check_output","check_call")}
     saved_os_system=os.system
+    audited_executables={name:[executable_identity(name)] for name in ("git","gh")}
+    system_git=str(Path("/usr/bin/git").resolve(strict=True))
+    system_git_identity=(system_git,hashlib.sha256(Path(system_git).read_bytes()).hexdigest())
+    if system_git_identity not in audited_executables["git"]:
+        audited_executables["git"].append(system_git_identity)
     def captured_run(*args,**kwargs):
         if active_boundary[0] is None: raise Rig("captured run outside publication boundary")
         return active_boundary[0].run(*args,**kwargs)
@@ -1731,15 +1743,18 @@ def publication_contract_controls(tmp: Path) -> None:
             "review_artifact_path":str(review),
             "review_artifact_sha256":hashlib.sha256(review.read_bytes()).hexdigest(),
         }
-        return repo,bare,base,candidate_sha,candidate_tree,changed,authority,review
+        shims=tmp/f"publish-{label}-shims"; shims.mkdir()
+        for name,identities in audited_executables.items():
+            (shims/name).symlink_to(identities[0][0])
+        return repo,bare,base,candidate_sha,candidate_tree,changed,authority,review,shims
 
     def evaluate(label: str, defect: str = "", callable_override=None) -> tuple[bool,str]:
-        repo,bare,base,candidate_sha,candidate_tree,changed,authority,review=setup(label)
+        repo,bare,base,candidate_sha,candidate_tree,changed,authority,review,shims=setup(label)
         if defect in ("task_id","spec_digest","gate_digest","review_digest"):
             key={"task_id":"task_id","spec_digest":"task_spec_sha256",
                  "gate_digest":"gate_sha256","review_digest":"review_artifact_sha256"}[defect]
             authority[key]="wrong-task" if defect=="task_id" else "0"*64
-        trace=[]; merged_sha=""; merge_called=False; post_view_index=-1
+        trace=[]; merged_sha=""; merge_called=False; post_view_index=-1; denied_executable=False
         wrong="0"*40
         def completed(argv, rc: int, output: str):
             return original_subprocess.CompletedProcess(argv,rc,output,None)
@@ -1749,10 +1764,28 @@ def publication_contract_controls(tmp: Path) -> None:
             def __getattr__(self, name):
                 return getattr(original_subprocess,name)
             def run(self, argv, cwd=None, **kwargs):
-                nonlocal merged_sha,merge_called,post_view_index
+                nonlocal merged_sha,merge_called,post_view_index,denied_executable
                 argv=[str(x) for x in argv]
                 trace.append(tuple(argv))
                 exe=Path(argv[0]).name
+                expected=audited_executables.get(exe,[])
+                authorized_path=""
+                if expected:
+                    try:
+                        if "/" in argv[0]: authorized_path=str(Path(argv[0]).resolve(strict=True))
+                        else:
+                            requested_path=(kwargs.get("env") or {}).get("PATH",host_path)
+                            if requested_path != host_path: raise ValueError("PATH identity changed")
+                            authorized_path=expected[0][0]
+                        digest=hashlib.sha256(Path(authorized_path).read_bytes()).hexdigest()
+                        executable_ok=any(authorized_path==path and digest==identity_digest
+                                          for path,identity_digest in expected)
+                    except (OSError,ValueError): executable_ok=False
+                else:
+                    executable_ok=False
+                if not executable_ok:
+                    denied_executable=True
+                    return completed(argv,126,"publication executable identity denied\n")
                 if exe=="gh":
                     allowed={
                         ("repo","view"): {"nameWithOwner"},
@@ -1821,9 +1854,8 @@ def publication_contract_controls(tmp: Path) -> None:
                         return completed(argv,0,wrong+"\n")
                     if defect=="reported_merge_tree" and argv[1:3]==["rev-parse",f"{merged_sha}^{{tree}}"]:
                         return completed(argv,0,wrong+"\n")
-                if exe not in ("git","gh"):
-                    return completed(argv,126,"publication executable denied\n")
                 actual=list(argv)
+                actual[0]=authorized_path
                 if exe=="git" and argv[1:4] == ["fetch","origin","main"]:
                     actual=[argv[0],"fetch","origin","main:refs/remotes/origin/main"]
                 p=original_subprocess.run(actual,cwd=cwd,**kwargs)
@@ -1917,9 +1949,10 @@ def publication_contract_controls(tmp: Path) -> None:
                       and tree==candidate_tree and len(push_calls)==1 and not forbidden and merge_ok
                       and identity_seen and base_oid_requested and fetched>=2 and status_seen
                       and remote_seen and diff_seen and ordered_relock and post_proof
-                      and not unexpected and clean_after)
+                      and not unexpected and not denied_executable and clean_after)
             detail=repr((returned,parents,tree==candidate_tree,len(trace),identity_seen,
-                         base_oid_requested,fetched,ordered_relock,post_proof,unexpected,clean_after))
+                         base_oid_requested,fetched,ordered_relock,post_proof,unexpected,
+                         denied_executable,clean_after))
         except Exception as exc:
             detail=f"{type(exc).__name__}:{exc} trace={trace[-8:]}"
         finally:
@@ -2074,6 +2107,54 @@ def publication_contract_controls(tmp: Path) -> None:
                                              callable_override=absolute_git_reference)
     check(accepted and not publisher_rejected,
           "J_PUBLICATION_ABSOLUTE_GIT_AUDIT_POSITIVE",why)
+    for fake_name in ("git","gh"):
+        marker=tmp/f"absolute-fake-{fake_name}-executed"
+        fake=tmp/f"absolute-fake-{fake_name}"
+        fake.mkdir(); executable=fake/fake_name
+        executable.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(marker))}\nexit 0\n",encoding="utf-8")
+        executable.chmod(0o755)
+        def absolute_fake(*args,_exe=executable,**kwargs):
+            merged=reference_publish(*args,**kwargs)
+            captured_run([str(_exe),"--version"])
+            return merged
+        accepted,why,publisher_rejected=evaluate("absolute-fake-"+fake_name,
+                                                 callable_override=absolute_fake)
+        check(not accepted and not marker.exists(),
+              "P_PUBLICATION_ABSOLUTE_FAKE_"+fake_name.upper()+"_DENIED",why)
+
+        shadow=tmp/f"path-shadow-{fake_name}"; shadow.mkdir(); shadow_exe=shadow/fake_name
+        shadow_marker=tmp/f"path-shadow-{fake_name}-executed"
+        shadow_exe.write_text(f"#!/bin/sh\ntouch {shlex.quote(str(shadow_marker))}\nexit 0\n",encoding="utf-8")
+        shadow_exe.chmod(0o755)
+        def path_shadow(*args,_name=fake_name,_shadow=shadow,**kwargs):
+            merged=reference_publish(*args,**kwargs)
+            captured_run([_name,"--version"],env={**os.environ,"PATH":str(_shadow)})
+            return merged
+        accepted,why,publisher_rejected=evaluate("path-shadow-"+fake_name,
+                                                 callable_override=path_shadow)
+        check(not accepted and not shadow_marker.exists(),
+              "P_PUBLICATION_PATH_SHADOW_"+fake_name.upper()+"_DENIED",why)
+
+        def shim_positive(*args,_name=fake_name,_label="shim-positive-"+fake_name,**kwargs):
+            merged=reference_publish(*args,**kwargs)
+            shim=tmp/f"publish-{_label}-shims"/_name
+            if _name=="git": captured_check_call([str(shim),"--version"],text=True)
+            else: captured_check_call([str(shim),"repo","view","--json","nameWithOwner"],text=True)
+            return merged
+        accepted,why,publisher_rejected=evaluate("shim-positive-"+fake_name,
+                                                 callable_override=shim_positive)
+        check(accepted and not publisher_rejected,
+              "J_PUBLICATION_HERMETIC_SYMLINK_"+fake_name.upper()+"_POSITIVE",why)
+
+    copy_dir=tmp/"copied-git-dir"; copy_dir.mkdir(); copied_git=copy_dir/"git"
+    copied_git.write_bytes(Path(audited_executables["git"][0][0]).read_bytes())
+    copied_git.chmod(0o755)
+    def copied_identity_mutant(*args,**kwargs):
+        merged=reference_publish(*args,**kwargs)
+        captured_run([str(copied_git),"--version"])
+        return merged
+    accepted,why,publisher_rejected=evaluate("copied-git",callable_override=copied_identity_mutant)
+    check(not accepted,"P_PUBLICATION_IDENTICAL_BYTES_WRONG_GIT_PATH_DENIED",why)
     def omit_postproof(*args,**kwargs):
         return reference_publish(*args,**kwargs,omit_postproof=True)
     accepted,why,_=evaluate("omit-postproof",callable_override=omit_postproof)
