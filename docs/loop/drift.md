@@ -263,3 +263,33 @@ empirical-runner är en falsifierande andra blick, aldrig ersättning för gate 
 - S2/S4/S5 must not freeze without h-030 dependency after this amendment.
 - Pre-amendment quota-aborted h-003/h-004 worktree is preserved local evidence, not authority, not a resume candidate.
 - No frozen gate, constitution/rulebook boundary, G20, candidate identity, attestation/fencing, promotion identity or no-force rule is weakened by this amendment.
+
+## 2026-08-13 — Python interpreter-authority prerequisite r3
+
+This is owner-authorized prerequisite-gate remediation before H-034, not H-034/H-033/H-032/H-031
+production or runtime work and not a task in `specs/tasks.spec.json`. R2
+`10844933033015fc56493bebeae24a29fa657f0e` was independently reviewed and rejected before
+freeze: R-004 proved its candidate audit followed an active repository-local `refs/replace`
+mapping and bound substituted authority/gate bytes to the original SHA; R-005 proved its
+review-relative documentation became false when review occurred. R2 was never frozen or
+published. R2 and all earlier rejected candidates remain forensic evidence only and are not
+authority.
+
+R3 retains the owner-audited authority JSON byte-for-byte and keeps the sound R2 controls:
+absolute `/usr/bin/python3 -I -S` judging; one duplicate-aware exact-type authority object;
+wrong-type, duplicate, missing and extra rejection; semantic reorder/whitespace/escape
+acceptance; absolute non-symlink regular executable identity; exact Python 3.12.13 and digest;
+fixed target invocation; stale-path and invalid-object controls; direct-child topology; exact
+four-path scope; and equality between executing gate bytes and candidate gate bytes. Candidate
+Git commands use absolute `/usr/bin/git` with an isolated caller environment and the explicit
+no-replacement object view. The candidate's direct parent is read from its raw actual commit
+object rather than replacement-/graft-aware ancestry traversal. Thus repository replacement
+state may change default Git presentation but cannot supply the bytes or parent used by a
+successful R3 audit of the original 40-hex SHA.
+
+The gate remains a judge, not runtime authority. Future H-034 must implement verified source →
+private protected snapshot → final rehash → protected-path execution. R3 makes no claim of
+arbitrary same-UID race-free source-path execution. The legitimate owner prerequisite is expected
+GREEN, so a generic RED baseline is not manufactured. Independent review is a mandatory
+precondition for R3 publication; this candidate records that rule and contains no assertion that
+R3 received a passing review verdict.
