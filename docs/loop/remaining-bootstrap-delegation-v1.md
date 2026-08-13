@@ -53,6 +53,12 @@ returned SHA or the presence of publication-related source tokens is not evidenc
 chain must include the exact non-force candidate push; repository, base, head, PR and file relock
 after that push and immediately before merge; `gh pr merge --merge --match-head-commit`; GitHub's
 merged state; the fetched `origin/main`; two ordered parents; and the candidate-identical tree.
+The publication request also binds task id, candidate Git-object task-spec and gate paths plus their
+SHA-256 identities, and the immutable independent-review artifact path plus SHA-256. The publisher
+must re-read all three identities in the immediate premerge relock. It uses only supported GitHub
+fields (`state`, `mergedAt`, `mergeCommit`, `headRefOid`) and, after that response, itself executes
+the fetch/main-equality, ordered-parent and candidate-tree proof. A caller, judge, or return value
+performing those checks on its behalf is insufficient.
 
 The current observed GitHub protection is contextual evidence, not a replacement for the relock:
 `enforce_admins=true`, force pushes/deletions disabled, no required linear history, and normal merge

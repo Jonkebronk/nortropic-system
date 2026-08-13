@@ -1671,7 +1671,7 @@ def publication_contract_controls(tmp: Path) -> None:
         check(False,"P_CURRENT_AUTHORITY_GUARDED_NORMAL_MERGE_PUBLISHER","publish unavailable")
         return
     subject_globals = subject.__globals__
-    original_run = subject_globals["run"]
+    original_subprocess = subject_globals["subprocess"]
 
     def setup(label: str):
         repo=tmp/f"publish-{label}"; init_repo(repo)
@@ -1679,120 +1679,181 @@ def publication_contract_controls(tmp: Path) -> None:
         p=git(repo,"checkout","-qb","candidate");
         if p.returncode: raise Rig(p.stderr)
         target=repo/"candidate.txt"; target.write_text("reviewed candidate\n",encoding="utf-8")
-        candidate_sha=commit_paths(repo,"reviewed candidate","candidate.txt")
+        spec_path="specs/tasks.spec.json"; gate_path="verify/bin/h-035-exit"
+        (repo/spec_path).parent.mkdir(parents=True)
+        (repo/gate_path).parent.mkdir(parents=True)
+        (repo/spec_path).write_bytes(SPEC.read_bytes())
+        (repo/gate_path).write_bytes(Path(__file__).read_bytes())
+        review=tmp/f"publish-{label}-independent-review.json"
+        review.write_text('{"role":"REVIEWER","outcome":"PASS","candidate":"fixture"}\n',encoding="utf-8")
+        changed=["candidate.txt",spec_path,gate_path]
+        candidate_sha=commit_paths(repo,"reviewed candidate",*changed)
         candidate_tree=git(repo,"rev-parse",f"{candidate_sha}^{{tree}}").stdout.strip()
         bare=tmp/f"publish-{label}.git"; p=run(["git","init","--bare","-q",str(bare)],cwd=tmp)
         if p.returncode: raise Rig(p.stderr)
         set_remote_main(bare,repo,base)
         p=git(repo,"remote","add","origin",str(bare));
         if p.returncode: raise Rig(p.stderr)
-        return repo,bare,base,candidate_sha,candidate_tree
+        authority={
+            "task_id":"h-035", "task_spec_path":spec_path,
+            "task_spec_sha256":hashlib.sha256((repo/spec_path).read_bytes()).hexdigest(),
+            "gate_path":gate_path,
+            "gate_sha256":hashlib.sha256((repo/gate_path).read_bytes()).hexdigest(),
+            "review_artifact_path":str(review),
+            "review_artifact_sha256":hashlib.sha256(review.read_bytes()).hexdigest(),
+        }
+        return repo,bare,base,candidate_sha,candidate_tree,changed,authority,review
 
     def evaluate(label: str, defect: str = "", callable_override=None) -> tuple[bool,str]:
-        repo,bare,base,candidate_sha,candidate_tree=setup(label)
-        trace=[]; merged_sha=""; merge_called=False
+        repo,bare,base,candidate_sha,candidate_tree,changed,authority,review=setup(label)
+        if defect in ("task_id","spec_digest","gate_digest","review_digest"):
+            key={"task_id":"task_id","spec_digest":"task_spec_sha256",
+                 "gate_digest":"gate_sha256","review_digest":"review_artifact_sha256"}[defect]
+            authority[key]="wrong-task" if defect=="task_id" else "0"*64
+        trace=[]; merged_sha=""; merge_called=False; post_view_index=-1
         wrong="0"*40
-        class Fake:
-            def __call__(self, argv, cwd=None, *, check=True, timeout=None, env=None):
-                nonlocal merged_sha,merge_called
+        def completed(argv, rc: int, output: str):
+            return original_subprocess.CompletedProcess(argv,rc,output,None)
+
+        class Boundary:
+            """Process boundary: both the module runner and direct subprocess.run cross here."""
+            def __getattr__(self, name):
+                return getattr(original_subprocess,name)
+            def run(self, argv, cwd=None, **kwargs):
+                nonlocal merged_sha,merge_called,post_view_index
+                argv=[str(x) for x in argv]
                 trace.append(tuple(argv))
-                if argv[:3] == ["gh","repo","view"]:
-                    owner="Elsewhere/not-nortropic" if defect=="repo_identity" else "Nortropic/nortropic-system"
-                    payload=json.dumps({"nameWithOwner":owner}) if "--json" in argv else owner
-                    return subject_globals["Cmd"](0,payload+"\n")
-                if argv[:3] == ["gh","pr","view"]:
-                    post=merge_called
-                    if post:
-                        if defect=="not_merged":
-                            return subject_globals["Cmd"](0,json.dumps({"state":"CLOSED","mergedAt":None,"mergeCommit":None,"headRefOid":candidate_sha}))
-                        reported=wrong if defect=="returned_sha" else merged_sha
-                        return subject_globals["Cmd"](0,json.dumps({"state":"MERGED","mergedAt":"2026-08-13T00:00:00Z","merged":True,"mergeCommit":{"oid":reported},"headRefOid":candidate_sha}))
-                    meta={"number":7,"headRefOid":candidate_sha,"headRefName":"candidate",
-                          "baseRefName":"main","baseRefOid":base,"state":"OPEN","url":"https://invalid/7"}
-                    if defect=="pr_head": meta["headRefOid"]=wrong
-                    if defect=="pr_head_ref": meta["headRefName"]="other"
-                    if defect=="pr_base_ref": meta["baseRefName"]="develop"
-                    if defect=="pr_base_sha": meta["baseRefOid"]=wrong
-                    return subject_globals["Cmd"](0,json.dumps(meta))
-                if argv[:3] == ["gh","pr","diff"]:
-                    if defect=="main_drift":
-                        drift=run(["git","commit-tree",git(repo,"rev-parse",f"{base}^{{tree}}").stdout.strip(),"-p",base],cwd=repo,stdin="drift\n").stdout.strip()
-                        set_remote_main(bare,repo,drift)
-                    files=["other.txt"] if defect=="files" else ["candidate.txt"]
-                    return subject_globals["Cmd"](0,"\n".join(files)+"\n")
-                if argv[:3] == ["gh","pr","merge"]:
-                    merge_called=True
-                    if "--merge" not in argv or "--rebase" in argv or "--squash" in argv:
-                        return subject_globals["Cmd"](1,"wrong method\n")
-                    if "--match-head-commit" not in argv or argv[argv.index("--match-head-commit")+1] != candidate_sha:
-                        return subject_globals["Cmd"](1,"wrong guard\n")
-                    tree=candidate_tree
-                    parents=[base,candidate_sha]
-                    if defect=="one_parent": parents=[base]
-                    elif defect=="reversed": parents=[candidate_sha,base]
-                    elif defect=="extra_parent":
-                        third=run(["git","commit-tree",git(repo,"rev-parse",f"{base}^{{tree}}").stdout.strip(),"-p",base],
-                                  cwd=repo,stdin="independent third parent\n").stdout.strip()
-                        parents=[base,candidate_sha,third]
-                    elif defect=="tree": tree=git(repo,"rev-parse",f"{base}^{{tree}}").stdout.strip()
-                    args=["git","commit-tree",tree]
-                    for parent in parents: args += ["-p",parent]
-                    merged_sha=run(args,cwd=repo,stdin="merge\n").stdout.strip()
-                    set_remote_main(bare,repo,merged_sha)
-                    return subject_globals["Cmd"](0,"merged\n")
-                if argv[:3] == ["gh","pr","checks"]:
-                    return subject_globals["Cmd"](0,"checks\n")
-                if argv[:3] == ["git","ls-remote","origin"] and defect=="remote_head":
-                    return subject_globals["Cmd"](0,f"{wrong}\trefs/heads/candidate\n")
-                if argv[:4] == ["git","fetch","origin","main"]:
-                    return original_run(["git","fetch","origin","main:refs/remotes/origin/main"],
-                                        cwd=cwd,check=check,timeout=timeout,env=env)
-                return original_run(argv,cwd=cwd,check=check,timeout=timeout,env=env)
-        subject_globals["run"]=Fake()
+                exe=Path(argv[0]).name
+                if exe=="gh":
+                    allowed={
+                        ("repo","view"): {"nameWithOwner"},
+                        ("pr","view"): {"number","headRefOid","headRefName","baseRefName","baseRefOid","state","url","mergedAt","mergeCommit"},
+                    }
+                    kind=tuple(argv[1:3])
+                    if kind in allowed and "--json" in argv:
+                        raw=argv[argv.index("--json")+1]
+                        if not set(raw.split(",")) <= allowed[kind]:
+                            return completed(argv,1,"unsupported gh JSON field\n")
+                    if argv[1:3] == ["repo","view"]:
+                        owner="Elsewhere/not-nortropic" if defect=="repo_identity" else "Nortropic/nortropic-system"
+                        payload=owner if "-q" in argv or "--jq" in argv else json.dumps({"nameWithOwner":owner})
+                        return completed(argv,0,payload+"\n")
+                    if argv[1:3] == ["pr","view"]:
+                        if merge_called:
+                            post_view_index=len(trace)-1
+                            if defect=="not_merged":
+                                return completed(argv,0,json.dumps({"state":"CLOSED","mergedAt":None,"mergeCommit":None,"headRefOid":candidate_sha})+"\n")
+                            reported=wrong if defect=="returned_sha" else merged_sha
+                            return completed(argv,0,json.dumps({"state":"MERGED","mergedAt":"2026-08-13T00:00:00Z",
+                                                               "mergeCommit":{"oid":reported},"headRefOid":candidate_sha})+"\n")
+                        meta={"number":7,"headRefOid":candidate_sha,"headRefName":"candidate",
+                              "baseRefName":"main","baseRefOid":base,"state":"OPEN","url":"https://invalid/7"}
+                        if defect=="pr_head": meta["headRefOid"]=wrong
+                        if defect=="pr_head_ref": meta["headRefName"]="other"
+                        if defect=="pr_base_ref": meta["baseRefName"]="develop"
+                        if defect=="pr_base_sha": meta["baseRefOid"]=wrong
+                        return completed(argv,0,json.dumps(meta)+"\n")
+                    if argv[1:3] == ["pr","diff"]:
+                        if defect=="main_drift":
+                            drift=run(["git","commit-tree",git(repo,"rev-parse",f"{base}^{{tree}}").stdout.strip(),"-p",base],cwd=repo,stdin="drift\n").stdout.strip()
+                            set_remote_main(bare,repo,drift)
+                        if defect=="review_changed": review.write_text("changed after early check\n",encoding="utf-8")
+                        files=["other.txt"] if defect=="files" else changed
+                        return completed(argv,0,"\n".join(files)+"\n")
+                    if argv[1:3] == ["pr","merge"]:
+                        merge_called=True
+                        if "--merge" not in argv or "--rebase" in argv or "--squash" in argv:
+                            return completed(argv,1,"wrong method\n")
+                        if "--match-head-commit" not in argv or argv[argv.index("--match-head-commit")+1] != candidate_sha:
+                            return completed(argv,1,"wrong guard\n")
+                        tree=candidate_tree; parents=[base,candidate_sha]
+                        if defect=="one_parent": parents=[base]
+                        elif defect=="reversed": parents=[candidate_sha,base]
+                        elif defect=="extra_parent":
+                            third=run(["git","commit-tree",git(repo,"rev-parse",f"{base}^{{tree}}").stdout.strip(),"-p",base],cwd=repo,stdin="third\n").stdout.strip()
+                            parents=[base,candidate_sha,third]
+                        elif defect=="tree": tree=git(repo,"rev-parse",f"{base}^{{tree}}").stdout.strip()
+                        args=["git","commit-tree",tree]
+                        for parent in parents: args += ["-p",parent]
+                        merged_sha=run(args,cwd=repo,stdin="merge\n").stdout.strip()
+                        set_remote_main(bare,repo,merged_sha)
+                        return completed(argv,0,"merged\n")
+                    if argv[1:3] == ["pr","checks"]:
+                        return completed(argv,0,"checks\n")
+                    return completed(argv,1,"unsupported gh argv\n")
+                if exe=="git" and argv[1:3] == ["ls-remote","origin"] and defect=="remote_head":
+                    return completed(argv,0,f"{wrong}\trefs/heads/candidate\n")
+                actual=list(argv)
+                if exe=="git" and argv[1:4] == ["fetch","origin","main"]:
+                    actual=[argv[0],"fetch","origin","main:refs/remotes/origin/main"]
+                p=original_subprocess.run(actual,cwd=cwd,**kwargs)
+                return completed(argv,p.returncode,p.stdout or "")
+        subject_globals["subprocess"]=Boundary()
         fn=callable_override or subject
         accepted=False; detail=""
         try:
-            returned=fn(repo,repo,"candidate",base,candidate_sha,"title",["candidate.txt"])
-            remote_main=subject_globals["origin_main"](repo)
+            returned=fn(repo,repo,"candidate",base,candidate_sha,"title",changed,
+                        publication_authority=authority)
+            # Corroboration is deliberately outside the subject trace. Acceptance below
+            # still requires the publisher's own post-merge proof commands.
+            p=git(repo,"fetch","origin","main:refs/remotes/origin/main")
+            if p.returncode: raise Rig(p.stderr)
+            remote_main=git(repo,"rev-parse","refs/remotes/origin/main").stdout.strip()
             parents=git(repo,"rev-list","--parents","-n","1",remote_main).stdout.split()
             tree=git(repo,"rev-parse",f"{remote_main}^{{tree}}").stdout.strip()
-            merge_calls=[x for x in trace if x[:3]==("gh","pr","merge")]
-            push_calls=[x for x in trace if len(x)>=5 and x[:4]==("git","push","-u","origin")]
+            is_git=lambda x: bool(x) and Path(x[0]).name=="git"
+            is_gh=lambda x: bool(x) and Path(x[0]).name=="gh"
+            merge_calls=[x for x in trace if is_gh(x) and x[1:3]==("pr","merge")]
+            push_calls=[x for x in trace if is_git(x) and len(x)>=5 and x[1:4]==("push","-u","origin")]
             forbidden=any(any(t in ("--rebase","--squash","--force","--force-with-lease") for t in x) for x in trace)
             merge_ok=(len(merge_calls)==1 and "--merge" in merge_calls[0]
                       and "--match-head-commit" in merge_calls[0])
-            identity_seen=any(x[:3]==("gh","repo","view") for x in trace)
-            pr_views=[x for x in trace if x[:3]==("gh","pr","view")]
+            identity_seen=any(is_gh(x) and x[1:3]==("repo","view") for x in trace)
+            pr_views=[x for x in trace if is_gh(x) and x[1:3]==("pr","view")]
             base_oid_requested=any("baseRefOid" in " ".join(x) for x in pr_views)
-            fetched=sum(x[:4]==("git","fetch","origin","main") for x in trace)
-            status_seen=any(x[:3]==("git","status","--porcelain=v1") for x in trace)
-            remote_seen=any(x[:3]==("git","ls-remote","origin") for x in trace)
-            diff_seen=any(x[:3]==("gh","pr","diff") for x in trace)
+            fetched=sum(is_git(x) and x[1:4]==("fetch","origin","main") for x in trace)
+            status_seen=any(is_git(x) and x[1:3]==("status","--porcelain=v1") for x in trace)
+            remote_seen=any(is_git(x) and x[1:3]==("ls-remote","origin") for x in trace)
+            diff_seen=any(is_gh(x) and x[1:3]==("pr","diff") for x in trace)
             push_index=trace.index(push_calls[0]) if push_calls else -1
             merge_index=trace.index(merge_calls[0]) if merge_calls else -1
             premerge=trace[push_index+1:merge_index] if 0 <= push_index < merge_index else []
-            ordered_relock=(any(x[:3]==("gh","repo","view") for x in premerge)
-                            and any(x[:4]==("git","fetch","origin","main") for x in premerge)
-                            and any(x[:3]==("git","status","--porcelain=v1") for x in premerge)
-                            and any(x[:3]==("git","rev-parse","HEAD") for x in premerge)
-                            and any(x[:3]==("git","rev-parse",f"{candidate_sha}^{{tree}}") for x in premerge)
-                            and any(x[:3]==("git","ls-remote","origin") for x in premerge)
-                            and any(x[:3]==("gh","pr","view") for x in premerge)
-                            and any(x[:3]==("gh","pr","diff") for x in premerge))
+            authority_objects=all(any(is_git(x) and f"{candidate_sha}:{authority[key]}" in x
+                                      for x in premerge)
+                                  for key in ("task_spec_path","gate_path"))
+            ordered_relock=(any(is_gh(x) and x[1:3]==("repo","view") for x in premerge)
+                            and any(is_git(x) and x[1:4]==("fetch","origin","main") for x in premerge)
+                            and any(is_git(x) and x[1:3]==("status","--porcelain=v1") for x in premerge)
+                            and any(is_git(x) and x[1:3]==("rev-parse","HEAD") for x in premerge)
+                            and any(is_git(x) and f"{candidate_sha}^{{tree}}" in x for x in premerge)
+                            and any(is_git(x) and x[1:3]==("ls-remote","origin") for x in premerge)
+                            and any(is_gh(x) and x[1:3]==("pr","view") for x in premerge)
+                            and any(is_gh(x) and x[1:3]==("pr","diff") for x in premerge)
+                            and authority_objects)
+            postmerge=trace[post_view_index+1:] if post_view_index >= 0 else []
+            post_proof=(any(is_git(x) and x[1:4]==("fetch","origin","main") for x in postmerge)
+                        and any(is_git(x) and "refs/remotes/origin/main" in x for x in postmerge)
+                        and any(is_git(x) and "rev-list" in x and "--parents" in x and merged_sha in x for x in postmerge)
+                        and any(is_git(x) and f"{candidate_sha}^{{tree}}" in x for x in postmerge)
+                        and any(is_git(x) and f"{merged_sha}^{{tree}}" in x for x in postmerge))
+            unexpected=any(not (is_git(x) or is_gh(x)) for x in trace)
+            clean_after=git(repo,"status","--porcelain=v1","--untracked-files=all").stdout.strip()==""
             accepted=(returned==remote_main==merged_sha and parents==[merged_sha,base,candidate_sha]
                       and tree==candidate_tree and len(push_calls)==1 and not forbidden and merge_ok
                       and identity_seen and base_oid_requested and fetched>=2 and status_seen
-                      and remote_seen and diff_seen and ordered_relock)
+                      and remote_seen and diff_seen and ordered_relock and post_proof
+                      and not unexpected and clean_after)
             detail=repr((returned,parents,tree==candidate_tree,len(trace),identity_seen,
-                         base_oid_requested,fetched,ordered_relock))
+                         base_oid_requested,fetched,ordered_relock,post_proof,unexpected,clean_after))
         except Exception as exc:
             detail=f"{type(exc).__name__}:{exc} trace={trace[-8:]}"
         finally:
-            subject_globals["run"]=original_run
+            subject_globals["subprocess"]=original_subprocess
         return accepted,detail
 
     def reference_publish(repo: Path, wt: Path, branch_name: str, base_sha: str,
-                          candidate_sha: str, title: str, changed: list[str]) -> str:
+                          candidate_sha: str, title: str, changed: list[str], *,
+                          publication_authority: dict[str,str], omit_postproof: bool=False) -> str:
         """Gate-local, implementation-neutral witness that the hermetic rig is satisfiable."""
         invoke=subject_globals["run"]
         def command(argv, *, check=True):
@@ -1829,16 +1890,35 @@ def publication_contract_controls(tmp: Path) -> None:
         files=command(["gh","pr","diff",number,"--name-only"]).out.splitlines()
         if sorted(files) != sorted(changed):
             raise Rig("PR file set")
+        auth=publication_authority
+        if auth.get("task_id") != "h-035":
+            raise Rig("task identity")
+        spec_bytes=command(["git","show",f"{candidate_sha}:{auth['task_spec_path']}"]).out.encode()
+        gate_bytes=command(["git","show",f"{candidate_sha}:{auth['gate_path']}"]).out.encode()
+        if hashlib.sha256(spec_bytes).hexdigest() != auth.get("task_spec_sha256"):
+            raise Rig("task spec identity")
+        if hashlib.sha256(gate_bytes).hexdigest() != auth.get("gate_sha256"):
+            raise Rig("gate identity")
+        parsed_spec=json.loads(spec_bytes)
+        task_rows=[x for x in parsed_spec.get("tasks",[]) if x.get("id")==auth["task_id"]]
+        if len(task_rows)!=1 or task_rows[0].get("exit_test") != auth["gate_path"]:
+            raise Rig("canonical task/gate binding")
+        review_path=Path(auth["review_artifact_path"])
+        if (not review_path.is_file() or review_path.is_symlink()
+                or hashlib.sha256(review_path.read_bytes()).hexdigest()!=auth.get("review_artifact_sha256")):
+            raise Rig("review artifact identity")
         command(["git","fetch","origin","main"])
         if command(["git","rev-parse","refs/remotes/origin/main"]).out.strip() != base_sha:
             raise Rig("immediate pre-merge main drift")
         command(["gh","pr","merge",number,"--merge","--match-head-commit",candidate_sha])
         merged=json.loads(command(["gh","pr","view",number,"--json",
-                                   "state,mergedAt,merged,mergeCommit,headRefOid,url"]).out)
+                                   "state,mergedAt,mergeCommit,headRefOid,url"]).out)
         if (merged.get("state") != "MERGED" or not merged.get("mergedAt")
-                or not merged.get("merged") or merged.get("headRefOid") != candidate_sha):
+                or merged.get("headRefOid") != candidate_sha):
             raise Rig("post-merge PR state")
         returned=(merged.get("mergeCommit") or {}).get("oid","")
+        if omit_postproof:
+            return returned
         command(["git","fetch","origin","main"])
         remote_main=command(["git","rev-parse","refs/remotes/origin/main"]).out.strip()
         if returned != remote_main:
@@ -1846,6 +1926,7 @@ def publication_contract_controls(tmp: Path) -> None:
         parents=command(["git","rev-list","--parents","-n","1",remote_main]).out.split()
         if parents != [remote_main,base_sha,candidate_sha]:
             raise Rig("merge parents")
+        candidate_tree=command(["git","rev-parse",f"{candidate_sha}^{{tree}}"]).out.strip()
         if command(["git","rev-parse",f"{remote_main}^{{tree}}"]).out.strip() != candidate_tree:
             raise Rig("merge tree")
         return remote_main
@@ -1856,11 +1937,31 @@ def publication_contract_controls(tmp: Path) -> None:
     check(ok,"P_CURRENT_AUTHORITY_GUARDED_NORMAL_MERGE_PUBLISHER",detail)
     for defect in ("repo_identity","pr_head","pr_head_ref","pr_base_ref","pr_base_sha",
                    "remote_head","files","main_drift","not_merged","returned_sha",
-                   "one_parent","reversed","extra_parent","tree"):
+                   "one_parent","reversed","extra_parent","tree","task_id","spec_digest",
+                   "gate_digest","review_digest","review_changed"):
         accepted,why=evaluate(defect,defect)
         check(not accepted,"P_PUBLICATION_REJECT_"+defect.upper(),why)
         witness_accepted,witness_why=evaluate("reference-"+defect,defect,reference_publish)
         check(not witness_accepted,"J_PUBLICATION_HARNESS_REJECT_"+defect.upper(),witness_why)
+    def omit_postproof(*args,**kwargs):
+        return reference_publish(*args,**kwargs,omit_postproof=True)
+    accepted,why=evaluate("omit-postproof",callable_override=omit_postproof)
+    check(not accepted,"P_PUBLICATION_OMITTED_POSTMERGE_PROOF_REJECT",why)
+    def direct_subprocess_bypass(*args,**kwargs):
+        merged=reference_publish(*args,**kwargs)
+        subject_globals["subprocess"].run(["/usr/bin/touch",str(args[1]/"publication-bypass")])
+        return merged
+    accepted,why=evaluate("direct-subprocess-bypass",callable_override=direct_subprocess_bypass)
+    check(not accepted,"P_PUBLICATION_DIRECT_SUBPROCESS_BYPASS_REJECT",why)
+    def unsupported_gh_field(*args,**kwargs):
+        probe=subject_globals["subprocess"].run(
+            ["gh","pr","view","candidate","--json","merged"],cwd=args[1],
+            stdout=original_subprocess.PIPE,stderr=original_subprocess.STDOUT,text=True)
+        if probe.returncode:
+            raise Rig("unsupported gh JSON field")
+        return reference_publish(*args,**kwargs)
+    accepted,why=evaluate("unsupported-gh-field",callable_override=unsupported_gh_field)
+    check(not accepted,"P_PUBLICATION_UNSUPPORTED_GH_JSON_FIELD_REJECT",why)
     def dead_tokens(*args,**kwargs):
         """--merge baseRefOid candidate tree rev-list --parents merged; deliberately no effects."""
         return args[4]

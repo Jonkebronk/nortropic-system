@@ -198,3 +198,10 @@ Frozen acceptance invokes that actual publisher using a hermetic GitHub command 
 disposable Git repositories. It accepts only the observed end-to-end effects and ordering above;
 source strings, dead code and returned claims cannot substitute for the pushed refs, revalidated
 metadata, merge command, GitHub merged transition, fetched merge object, parent order or tree.
+The publication request carries the exact task id, candidate-bound task-spec path and SHA-256,
+candidate-bound gate path and SHA-256, and immutable independent-review artifact path and SHA-256.
+The publisher itself re-reads and verifies these identities immediately before merge. After the
+supported GitHub fields `state`, `mergedAt`, `mergeCommit` and `headRefOid` prove the merged
+transition, the publisher itself fetches main and executes the exact main/SHA, ordered-parent and
+candidate-tree checks. Judge-side inspection only corroborates those effects and cannot replace
+their presence in the publisher's process trace.

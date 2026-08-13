@@ -311,3 +311,12 @@ parents and candidate-identical tree as one operational chain. Hostile repositor
 main drift, wrong remote head or files, unmerged state, returned-SHA mismatch, malformed parent
 topology and tree mismatch all reject. A gate-local conforming witness proves the rig satisfiable;
 the dead-token/no-op publisher rejected by the same effect checks proves source text is insufficient.
+
+R2 independent review then showed that its judge performed the decisive postmerge Git inspection,
+its fake accepted a nonexistent GitHub JSON field, and its publication request omitted frozen
+spec/gate/review identities. R3 moves acceptance to the publisher's observed process effects: the
+actual module subprocess boundary records both helper-mediated and direct invocations; only real
+supported GitHub fields are modeled; the request carries candidate-bound task/spec/gate plus
+independent-review identities; and immediate premerge reads must verify them. After GitHub reports
+the merge, the publisher itself must fetch main, compare the mergeCommit SHA, inspect exact ordered
+parents, and compare candidate/merge trees. Dedicated omission and direct-subprocess mutants reject.
