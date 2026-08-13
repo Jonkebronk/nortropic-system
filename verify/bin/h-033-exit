@@ -228,7 +228,13 @@ def main():
    print(f"H033_GATE_SUMMARY={passed} PASS {failed+1} FAIL")
    print("H033_GATE_RESULT=EXPECTED_RED")
    return 1
-  fixture_contract();owner_environment();owner_execution()
+  fixture_contract()
+  if failed:
+   print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
+   print(f"H033_GATE_SUMMARY={passed} PASS {failed} FAIL")
+   print("H033_GATE_RESULT=FAIL")
+   return 1
+  owner_environment();owner_execution()
  except Rig as exc:
   print("ODÖMBART:",exc,file=sys.stderr);return 2
  except (OSError,ValueError,subprocess.SubprocessError) as exc:
