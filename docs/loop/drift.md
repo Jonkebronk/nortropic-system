@@ -293,3 +293,11 @@ arbitrary same-UID race-free source-path execution. The legitimate owner prerequ
 GREEN, so a generic RED baseline is not manufactured. Independent review is a mandatory
 precondition for R3 publication; this candidate records that rule and contains no assertion that
 R3 received a passing review verdict.
+
+On 2026-08-13 the owner removed interactive approval only for the bounded remaining-bootstrap chain
+while retaining every mechanical gate, identity, reviewer, empirical, scope and fail-closed
+precondition. H-035 is freshly re-materialized from authoritative main `15693f9…`; old H-035
+candidates are design evidence only. The migration preserves current Python-interpreter authority,
+all sound R12 owner/task/gate/Git-object controls and H-034 absence. It additionally freezes guarded
+normal merge-commit publication: immediate base/candidate/remote/PR/file relock, `--merge` only, and
+post-merge proof of exact two-parent order plus candidate-identical tree. Production remains RED.

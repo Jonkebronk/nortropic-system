@@ -75,6 +75,12 @@ MERGE=NO
 
 Pusha eller merga endast när användaren uttryckligen har gett den befogenheten för den aktuella fasen och projektets gates tillåter det.
 
+För den strikt avgränsade kvarvarande bootstrapkedjan H-035 → H-034 → H-033 →
+H-032 → H-031 → supervisor-resume → första verkliga autonoma start gäller den
+versionerade owner-delegationen i
+`docs/loop/remaining-bootstrap-delegation-v1.md`. Den tar bort interaktiv human
+närvaro men aldrig de mekaniska grindarna, och kräver guarded normal merge commit.
+
 <!-- CODEX-OPERATING-MODEL-V2 -->
 ## Codex operating model v2 — stående owner-befogenhet för mekanisk exekvering
 
