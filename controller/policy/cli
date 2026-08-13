@@ -47,6 +47,12 @@ if sys.version_info < (3, 12):
 ROT = Path(__file__).resolve().parents[2]
 SPEC = ROT / "specs/tasks.spec.json"
 EVIDENCE = ROT / "controller/policy/evidence"
+# Policy may read the shared authority parser but never materialize runtime
+# cache bytes in the immutable candidate repository.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROT / "controller/authority"))
+from core import (AuthorityError, overlaps, permits, strict_json_bytes, strict_json_file,
+                  task_authority, validate_registry)  # noqa: E402
 
 # Vaktas av ägarhand, inte av den här komponenten (byggplan v3 §3.1,
 # "Två mekanismer, olika ytor"). controller/** står inte i denied_write.
@@ -67,10 +73,8 @@ def git(*argv: str) -> subprocess.CompletedProcess:
 
 
 def matchar(sokvag: str, monster: str) -> bool:
-    """Sökvägsmönster i specens form: exakt sökväg, eller prefix/**."""
-    if monster.endswith("/**"):
-        return sokvag.startswith(monster[:-2])
-    return sokvag == monster
+    """The shared H-035 exact-or-terminal-prefix path oracle."""
+    return permits(monster, sokvag)
 
 
 def los_upp_sha(sha: str) -> str | None:
@@ -108,6 +112,24 @@ def diffen(base: str, kandidat: str) -> tuple[list[str], int, list[str]]:
         else:
             rader += int(lagt)
     return filer, rader, binara
+
+
+def prospective_task(base: str, task_id: str) -> bool:
+    """Whether the task was allocated after the registry activated protection."""
+    history = git("log", "--format=%H", "--reverse", base, "--",
+                  "specs/owner-production-paths.v1.json")
+    commits = history.stdout.splitlines() if history.returncode == 0 else []
+    if not commits:
+        raise AuthorityError("owner path registry has no reachable activation commit")
+    at_activation = git("show", f"{commits[0]}:specs/tasks.spec.json")
+    if at_activation.returncode:
+        raise AuthorityError("task spec missing at registry activation")
+    document = strict_json_bytes(at_activation.stdout.encode("utf-8"))
+    if not isinstance(document, dict) or not isinstance(document.get("tasks"), list):
+        raise AuthorityError("task spec malformed at registry activation")
+    hits = [task for task in document["tasks"]
+            if isinstance(task, dict) and task.get("id") == task_id]
+    return len(hits) != 1
 
 
 def skriv_evidence(task: str, base: str, kandidat: str, verdikt: str, orsak: str,
@@ -161,6 +183,34 @@ def gor_check(task_id: str, base_arg: str, kand_arg: str, spec_fil: Path = SPEC)
     filer, rader, binara = diffen(base, kandidat)
     arg = (task_id, base, kandidat, filer, rader)
 
+    # Schema-v2 ordinary grants are checked prospectively by the same policy
+    # entrypoint the normal loop invokes. A future task cannot grant itself
+    # authority-control or owner-production paths even before such a path is
+    # present in its candidate diff.
+    if spec.get("spec_version") == "2.0.0":
+        is_canonical = spec_fil.resolve() == SPEC.resolve()
+        try:
+            is_prospective = is_canonical and prospective_task(base, task_id)
+        except AuthorityError as e:
+            return avslag(UTANFOR, "authority_contract",
+                          f"authority-aktivering kan inte bindas för {task_id}: {e}", *arg)
+        if is_prospective:
+            try:
+                _task, authority, surface = task_authority(spec, task_id)
+                registry = validate_registry(strict_json_file(
+                    ROT / "specs/owner-production-paths.v1.json"))
+            except AuthorityError as e:
+                return avslag(UTANFOR, "authority_contract",
+                              f"ogiltig authority contract för {task_id}: {e}", *arg)
+            if authority != "ordinary":
+                return avslag(UTANFOR, "owner_route",
+                              f"owner task {task_id} får inte gå genom ordinary policy", *arg)
+            protected = (registry["owner_production_paths"]
+                         + registry["prospective_ordinary_protected_paths"])
+            if any(overlaps(grant, guard) for grant in surface for guard in protected):
+                return avslag(UTANFOR, "protected_authority_grant",
+                              f"ordinary task {task_id} överlappar skyddad authority-yta", *arg)
+
     # 1. §A — den enda överträdelse som aldrig får maskeras av ett lindrigare
     #    avslag. Ytan är specens denied_write minus ägarhandsytorna.
     vaktad = [m for m in std.get("denied_write", []) if m not in AGARHAND]
@@ -187,13 +237,13 @@ def gor_check(task_id: str, base_arg: str, kand_arg: str, spec_fil: Path = SPEC)
                       f"{', '.join(saknade)} ändrades inte i samma commit", *arg)
 
     # 4. Budgetarna. Tak, inte mål (LOOP-ÄGARHAND-10).
-    tak_filer = std.get("max_changed_files")
+    tak_filer = task.get("max_changed_files", std.get("max_changed_files"))
     if tak_filer is not None and len(filer) > tak_filer:
         return avslag(FILBUDGET, "filbudget",
                       f"filbudget överskriden: {len(filer)} ändrade filer, taket är {tak_filer}",
                       *arg)
 
-    tak_rader = std.get("max_added_lines")
+    tak_rader = task.get("max_added_lines", std.get("max_added_lines"))
     if tak_rader is not None and rader > tak_rader:
         return avslag(RADBUDGET, "radbudget",
                       f"radbudget överskriden: {rader} tillagda rader, taket är {tak_rader}",

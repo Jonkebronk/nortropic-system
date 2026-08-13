@@ -342,3 +342,10 @@ names use only the captured host PATH identity; harness symlinks pass only by re
 audited target. Absolute same-name fakes and PATH shadows are denied before marker execution, as is
 a byte-identical Git copy at another canonical path. Both exact system Git identities available on
 the owner host and the hermetic Git/GitHub reference symlinks remain positive.
+
+The fresh H-035 production candidate from authoritative main `b3137f3` closes the published RED
+contract at 303 PASS and 0 FAIL with `MATERIAL_PROPERTIES_JUDGE_ONLY=NONE`. It re-materializes the
+R12 owner workflow without importing old history, preserves frozen Python interpreter-authority
+bytes, and adds the effect-bound guarded publisher. Focused historical taskval, policy and H-007
+checks pass. The owner-terminal V6 subgate is `ODÖMBART` in the builder sandbox because `ps` is
+denied; no product failure is inferred from that environment limitation. No push or merge occurred.
