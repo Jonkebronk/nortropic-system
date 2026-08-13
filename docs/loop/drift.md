@@ -417,3 +417,10 @@ H-034-task/byte absence checks become exact published H-034 plus exact materiali
 dependency and canonical-gate checks, with absence/duplicate/wrong-dependency/wrong-gate mutants for
 both downstream tasks and an exact four-file H-034 artifact set. H-035's owner routing, publication,
 identity, atomicity and provider-observation mechanism controls are otherwise byte-for-byte unchanged.
+
+Independent review of the first H-033 contract found that live owner acceptance required an evidence
+leaf owned by merely any non-requester UID. The additive remediation applies one shared live-`lstat`
+predicate to judge controls and canonical owner acceptance: evidence UID must equal the exact
+OS-resolved non-root `_nortropic_provenance` UID, receipt UID must equal root, the two inodes and UIDs
+must differ, and neither leaf may be group/other writable or a symlink. A live separated-ownership
+positive and root-writes-both, requester-owned and symlink negatives run before the component RED.

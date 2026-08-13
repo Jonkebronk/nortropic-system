@@ -107,6 +107,31 @@ def kernel_anchor():
   expected=f"VERIFIED_RESULT={result}\nREQUEST_ID={e['request_id']}\nEFFECT_SHA256={e['effect_sha256']}\n"
   check(q.returncode==0 and q.stdout==expected,"J_H034_DIRECT_"+result,(q.returncode,q.stdout,q.stderr))
 
+def separated_leaf_ownership(evidence:Path,receipt:Path,producer_uid:int,requester_uid:int)->bool:
+ try:es=os.lstat(evidence);rs=os.lstat(receipt)
+ except OSError:return False
+ return (producer_uid not in (0,requester_uid)
+  and stat.S_ISREG(es.st_mode) and not stat.S_ISLNK(es.st_mode)
+  and stat.S_ISREG(rs.st_mode) and not stat.S_ISLNK(rs.st_mode)
+  and es.st_uid==producer_uid and rs.st_uid==0 and es.st_uid!=rs.st_uid
+  and not (es.st_mode&0o022) and not (rs.st_mode&0o022)
+  and (es.st_dev,es.st_ino)!=(rs.st_dev,rs.st_ino))
+
+def ownership_controls():
+ # Live filesystem controls exercise the same lstat/uid/mode/inode predicate used
+ # by owner acceptance. The synthetic requester is deliberately distinct from
+ # this process so its real leaf can stand in for a non-root dedicated producer.
+ root_receipt=Path("/etc/hosts")
+ if not root_receipt.is_file() or os.lstat(root_receipt).st_uid!=0:raise Rig("root-owned ownership control unavailable")
+ with tempfile.TemporaryDirectory(prefix="h033-ownership-") as d:
+  w=Path(d);evidence=w/"evidence";evidence.write_bytes(b"evidence\n");evidence.chmod(0o600)
+  producer_uid=os.lstat(evidence).st_uid;requester_uid=producer_uid+1
+  check(separated_leaf_ownership(evidence,root_receipt,producer_uid,requester_uid),"J_EXACT_PRODUCER_ROOT_OBSERVER_POSITIVE")
+  check(not separated_leaf_ownership(root_receipt,Path("/etc/passwd"),producer_uid,requester_uid),"J_ROOT_WRITES_BOTH_REJECT")
+  check(not separated_leaf_ownership(evidence,root_receipt,requester_uid,requester_uid),"J_REQUESTER_EVIDENCE_REJECT")
+  link=w/"evidence-link";link.symlink_to(evidence.name)
+  check(not separated_leaf_ownership(link,root_receipt,producer_uid,requester_uid),"J_OWNERSHIP_SYMLINK_REJECT")
+
 def fixture(root:Path,e,r,a):
  (root/"evidence").mkdir(parents=True);(root/"probe-receipts").mkdir()
  (root/"evidence"/(e["request_id"]+".json")).write_bytes(canon(e))
@@ -171,7 +196,7 @@ def fixture_contract():
   q=run([str(CLI),"verify","--root",str(root)],timeout=2)[0]
   check(q.returncode==1 and q.stdout=="","K_CALLER_AUTHORITY_ROOT_REJECTED",(q.returncode,q.stdout,q.stderr))
 
-def owner_environment():
+def owner_environment()->int:
  # This is evaluated only after the repository implementation exists and its
  # disposable black-box contract passes. Absence/permission denial is ODÖMBART.
  try:
@@ -185,6 +210,7 @@ def owner_environment():
   ok=(stat.S_ISDIR(s.st_mode) if kind=="dir" else stat.S_ISREG(s.st_mode)) and not stat.S_ISLNK(s.st_mode) and s.st_uid==uid and not (s.st_mode&0o022)
   if not ok:raise Rig("canonical authority identity/protection mismatch: "+str(path))
  check(True,"K_OWNER_PROTECTED_AUTHORITY_PRESENT")
+ return producer.pw_uid
 
 def parse_lines(raw:str):
  out={}
@@ -195,7 +221,7 @@ def parse_lines(raw:str):
    out[key]=value
  return out
 
-def owner_execution():
+def owner_execution(producer_uid:int):
  candidate=run(["/usr/bin/git","-C",str(ROOT),"rev-parse","HEAD"],timeout=2)[0].stdout.strip()
  spec_digest=sha(SPEC.read_bytes());gate_digest=sha(Path(__file__).read_bytes())
  seen=[]
@@ -205,8 +231,7 @@ def owner_execution():
   rid=fields.get("REQUEST_ID","");evidence=Path(fields.get("EVIDENCE",""));receipt=Path(fields.get("RECEIPT",""))
   check(q.returncode==0 and len(rid)==64 and all(c in "0123456789abcdef" for c in rid),"K_OWNER_FRESH_REQUEST_"+result,(q.returncode,q.stdout,q.stderr))
   check(evidence==EVIDENCE_ROOT/(rid+".json") and receipt==RECEIPT_ROOT/(rid+".json"),"K_OWNER_CANONICAL_DESTINATION_"+result,(evidence,receipt))
-  es=os.lstat(evidence);rs=os.lstat(receipt)
-  check(stat.S_ISREG(es.st_mode) and es.st_uid!=os.getuid() and stat.S_ISREG(rs.st_mode) and rs.st_uid==0 and not (es.st_mode&0o022) and not (rs.st_mode&0o022),"K_OWNER_SEPARATE_PRODUCER_OBSERVER_"+result)
+  check(separated_leaf_ownership(evidence,receipt,producer_uid,os.getuid()),"K_OWNER_EXACT_PRODUCER_ROOT_OBSERVER_"+result)
   verify=[str(CLI),"verify","--request-id",rid,"--task","h-033","--candidate",candidate,"--task-spec-sha256",spec_digest,"--gate-sha256",gate_digest,"--probe",probe,"--require-result",result]
   v=run(verify,timeout=8)[0]
   expected_prefix=f"VERIFIED_RESULT={result}\nREQUEST_ID={rid}\nEFFECT_SHA256="
@@ -221,7 +246,7 @@ def owner_execution():
 
 def main():
  try:
-  lifecycle_controls();kernel_anchor()
+  lifecycle_controls();kernel_anchor();ownership_controls()
   if not CLI.is_file() or CLI.is_symlink() or not os.access(CLI,os.X_OK):
    print("CURRENT_RED_REASON=AUTHENTICATED_RUNNER_COMPONENT_ABSENT")
    print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
@@ -234,7 +259,7 @@ def main():
    print(f"H033_GATE_SUMMARY={passed} PASS {failed} FAIL")
    print("H033_GATE_RESULT=FAIL")
    return 1
-  owner_environment();owner_execution()
+  producer_uid=owner_environment();owner_execution(producer_uid)
  except Rig as exc:
   print("ODÖMBART:",exc,file=sys.stderr);return 2
  except (OSError,ValueError,subprocess.SubprocessError) as exc:
