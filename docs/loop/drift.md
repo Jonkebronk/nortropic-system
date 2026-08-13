@@ -378,3 +378,11 @@ data, and missing/duplicate/malformed forms of every required descriptor/binding
 through the production kernel. Receipt-dependent evidence is recomputed only where needed to isolate
 the intended parser, exact-value or finite-bound defect. The valid positive and real permissive arm64
 C mutant controls remain intact; production remains absent and RED only on its four owner paths.
+
+After the first native implementation review exposed C-prefix acceptance of a decoded escaped NUL,
+the contract was freshly extended from published main rather than from an unpublished test-author
+branch. Black-box rows now inject escaped NUL, embedded control and lone-surrogate sequences into
+every material evidence, receipt and allowlist string while preserving dependent receipt digests.
+Exact decoded byte length plus bytes is required; a legitimate Unicode probe/path/marker family stays
+positive. The vulnerable native artifact is RED and the additive builder fix is GREEN in disposable
+composition; neither production lineage is copied into this contract-only candidate.
