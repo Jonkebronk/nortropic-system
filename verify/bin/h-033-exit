@@ -247,6 +247,11 @@ def owner_execution(producer_uid:int):
 def main():
  try:
   lifecycle_controls();kernel_anchor();ownership_controls()
+  if failed:
+   print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
+   print(f"H033_GATE_SUMMARY={passed} PASS {failed} FAIL")
+   print("H033_GATE_RESULT=GATE_SELFTEST_FAIL")
+   return 2
   if not CLI.is_file() or CLI.is_symlink() or not os.access(CLI,os.X_OK):
    print("CURRENT_RED_REASON=AUTHENTICATED_RUNNER_COMPONENT_ABSENT")
    print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
