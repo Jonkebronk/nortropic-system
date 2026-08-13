@@ -920,8 +920,12 @@ def publish(repo: Path, wt: Path, branch_name: str, base_sha: str, candidate_sha
     if len(remote_files) != len(set(remote_files)) or sorted(remote_files) != sorted(changed):
         raise Stop(f"remote PR file set mismatch expected={changed} actual={remote_files}")
 
-    spec_raw = git(wt, "show", f"{candidate_sha}:{task_spec_path}").out.encode("utf-8")
-    gate_raw = git(wt, "show", f"{candidate_sha}:{gate_path}").out.encode("utf-8")
+    spec_object = git(wt, "show", f"{candidate_sha}:{task_spec_path}", check=False)
+    gate_object = git(wt, "show", f"{candidate_sha}:{gate_path}", check=False)
+    if spec_object.rc or gate_object.rc:
+        raise Stop("candidate publication authority object is missing")
+    spec_raw = spec_object.out.encode("utf-8")
+    gate_raw = gate_object.out.encode("utf-8")
     if hashlib.sha256(spec_raw).hexdigest() != publication_authority["task_spec_sha256"]:
         raise Stop("candidate task-spec identity mismatch")
     if hashlib.sha256(gate_raw).hexdigest() != publication_authority["gate_sha256"]:
@@ -934,7 +938,10 @@ def publish(repo: Path, wt: Path, branch_name: str, base_sha: str, candidate_sha
         raise Stop("candidate task spec lacks tasks")
     rows = [row for row in spec["tasks"]
             if isinstance(row, dict) and row.get("id") == publication_authority["task_id"]]
-    if len(rows) != 1 or rows[0].get("exit_test") != gate_path:
+    if publication_authority["task_id"] == EMPIRICAL_STAGE:
+        if rows or gate_path != EMPIRICAL_GATE_PATH:
+            raise Stop("canonical empirical program-gate binding mismatch")
+    elif len(rows) != 1 or rows[0].get("exit_test") != gate_path:
         raise Stop("canonical task/gate binding mismatch")
 
     review_path = Path(publication_authority["review_artifact_path"])
@@ -986,6 +993,62 @@ def publish(repo: Path, wt: Path, branch_name: str, base_sha: str, candidate_sha
     journal(repo, "MERGED", pr=number, candidate=candidate_sha,
             main=new_main, tree=merged_tree)
     return new_main
+
+
+def publication_authority(repo: Path, candidate_sha: str, task_id: str,
+                          review_artifact: Path, *,
+                          program_gate: str | None = None) -> dict[str, str]:
+    """Derive the publication bundle from immutable candidate/review objects.
+
+    Ordinary and owner tasks derive their gate only from their unique canonical
+    task row.  Stage L is deliberately not a synthetic task: its exact program
+    gate is owner-locked separately and must be supplied by that one caller.
+    """
+    task_spec_path = "specs/tasks.spec.json"
+    spec_object = git(repo, "show", f"{candidate_sha}:{task_spec_path}", check=False)
+    if spec_object.rc:
+        raise Stop("candidate task spec object is missing")
+    spec_raw = spec_object.out.encode("utf-8")
+    try:
+        spec = strict_json_bytes(spec_raw)
+    except AuthorityError as exc:
+        raise Stop(f"candidate task spec is invalid: {exc}") from exc
+    if not isinstance(spec, dict) or not isinstance(spec.get("tasks"), list):
+        raise Stop("candidate task spec lacks tasks")
+    rows = [row for row in spec["tasks"]
+            if isinstance(row, dict) and row.get("id") == task_id]
+    if program_gate is None:
+        if len(rows) != 1:
+            raise Stop(f"publication task count for {task_id}: {len(rows)}")
+        try:
+            gate_path = canonical_path(rows[0].get("exit_test"))
+        except AuthorityError as exc:
+            raise Stop(f"publication task gate is invalid: {exc}") from exc
+    else:
+        if task_id != EMPIRICAL_STAGE or program_gate != EMPIRICAL_GATE_PATH or rows:
+            raise Stop("program-gate publication identity is not canonical stage L")
+        gate_path = canonical_path(program_gate)
+    gate_object = git(repo, "show", f"{candidate_sha}:{gate_path}", check=False)
+    if gate_object.rc:
+        raise Stop("candidate publication gate object is missing")
+    gate_raw = gate_object.out.encode("utf-8")
+    try:
+        descriptor = os.open(review_artifact, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise Stop("review artifact is not a regular file")
+            review_raw = handle.read()
+    except OSError as exc:
+        raise Stop(f"cannot bind independent-review artifact: {exc}") from exc
+    return {
+        "task_id": task_id,
+        "task_spec_path": task_spec_path,
+        "task_spec_sha256": hashlib.sha256(spec_raw).hexdigest(),
+        "gate_path": gate_path,
+        "gate_sha256": hashlib.sha256(gate_raw).hexdigest(),
+        "review_artifact_path": str(review_artifact.resolve()),
+        "review_artifact_sha256": hashlib.sha256(review_raw).hexdigest(),
+    }
 
 
 
@@ -1257,7 +1320,8 @@ def roadmap_contract_flow(repo: Path, wt_root: Path, sl: RoadmapSlice, guidance:
     while True:
         rvwt = detached_worktree(repo, wt_root, f"gate-review-{sl.code.lower()}-{candidate[:12]}", candidate)
         try:
-            review = run_codex_resolving_architecture(repo, rvwt, "GATE_REVIEWER", roadmap_gate_reviewer_prompt(sl, base, candidate), f"{sl.code}_GATE_REVIEW", sl.task_id).report
+            review_run = run_codex_resolving_architecture(repo, rvwt, "GATE_REVIEWER", roadmap_gate_reviewer_prompt(sl, base, candidate), f"{sl.code}_GATE_REVIEW", sl.task_id)
+            review = review_run.report
             if not clean(rvwt):
                 raise Stop(f"gate reviewer modified roadmap candidate slice={sl.code}")
         finally:
@@ -1299,7 +1363,11 @@ def roadmap_contract_flow(repo: Path, wt_root: Path, sl: RoadmapSlice, guidance:
     if inv is not None and inv.rc != 0:
         raise Stop(f"invariants regressed in roadmap contract slice={sl.code}: {inv.out}")
     changed = [x for x in git(wt, "diff", "--name-only", f"{base}..{candidate}").out.splitlines() if x]
-    return publish(repo, wt, branch(wt), base, candidate, f"[LOOP] ÄGARHAND: freeze {sl.code} {sl.title}", changed)
+    authority = publication_authority(repo, candidate, sl.task_id,
+                                      review_run.result_file)
+    return publish(repo, wt, branch(wt), base, candidate,
+                   f"[LOOP] ÄGARHAND: freeze {sl.code} {sl.title}", changed,
+                   publication_authority=authority)
 
 
 def slice_builder_extra(sl: RoadmapSlice, *, refrozen: bool = False) -> str:
@@ -1535,10 +1603,11 @@ def empirical_gate_contract_flow(repo: Path, wt_root: Path, guidance: str = "") 
     while True:
         rvwt = detached_worktree(repo, wt_root, f"gate-review-L-{candidate[:12]}", candidate)
         try:
-            review = run_codex_resolving_architecture(
+            review_run = run_codex_resolving_architecture(
                 repo, rvwt, "GATE_REVIEWER", empirical_gate_reviewer_prompt(base, candidate),
                 "EMPIRICAL_GATE_REVIEW", "L"
-            ).report
+            )
+            review = review_run.report
             if not clean(rvwt):
                 raise Stop("empirical gate reviewer modified candidate")
         finally:
@@ -1582,7 +1651,12 @@ product RED for the incomplete roadmap and strengthen only the truthful stage-L 
     if inv is not None and inv.rc != 0:
         raise Stop(f"invariants regressed in empirical gate candidate: {inv.out}")
     changed = [x for x in git(wt, "diff", "--name-only", f"{base}..{candidate}").out.splitlines() if x]
-    return publish(repo, wt, branch(wt), base, candidate, EMPIRICAL_GATE_SUBJECT, changed)
+    authority = publication_authority(repo, candidate, EMPIRICAL_STAGE,
+                                      review_run.result_file,
+                                      program_gate=EMPIRICAL_GATE_PATH)
+    return publish(repo, wt, branch(wt), base, candidate,
+                   EMPIRICAL_GATE_SUBJECT, changed,
+                   publication_authority=authority)
 
 
 def ensure_empirical_program_gate(repo: Path, wt_root: Path) -> None:
@@ -1934,7 +2008,8 @@ def test_author_flow(repo: Path, wt_root: Path) -> str:
     while True:
         rvwt = detached_worktree(repo, wt_root, f"gate-review-h003-{candidate[:12]}", candidate)
         try:
-            review = run_codex_resolving_architecture(repo, rvwt, "GATE_REVIEWER", gate_reviewer_prompt(base, candidate), "H003_GATE_REVIEW", "h-003").report
+            review_run = run_codex_resolving_architecture(repo, rvwt, "GATE_REVIEWER", gate_reviewer_prompt(base, candidate), "H003_GATE_REVIEW", "h-003")
+            review = review_run.report
             if not clean(rvwt):
                 raise Stop("gate reviewer modified reviewed worktree")
         finally:
@@ -1975,8 +2050,11 @@ def test_author_flow(repo: Path, wt_root: Path) -> str:
     if inv is not None and inv.rc != 0:
         raise Stop(f"invariants regressed in owner gate candidate: {inv.out}")
     changed = [x for x in git(wt, "diff", "--name-only", f"{base}..{candidate}").out.splitlines() if x]
+    authority = publication_authority(repo, candidate, "h-003",
+                                      review_run.result_file)
     new_main = publish(repo, wt, branch(wt), base, candidate,
-                       "[LOOP] ÄGARHAND: freeze h-003 attestation authority v1", changed)
+                       "[LOOP] ÄGARHAND: freeze h-003 attestation authority v1", changed,
+                       publication_authority=authority)
     return new_main
 
 
@@ -2031,7 +2109,8 @@ def builder_flow(repo: Path, wt_root: Path, task_id: str, branch_name: str, dirn
     while True:
         rvwt = detached_worktree(repo, wt_root, f"review-{task_id}-{candidate[:12]}", candidate)
         try:
-            review = run_codex_resolving_architecture(repo, rvwt, "REVIEWER", reviewer_prompt(task_id, base, candidate), "REVIEWER", task_id).report
+            review_run = run_codex_resolving_architecture(repo, rvwt, "REVIEWER", reviewer_prompt(task_id, base, candidate), "REVIEWER", task_id)
+            review = review_run.report
             if not clean(rvwt):
                 raise Stop(f"reviewer modified candidate worktree task={task_id}")
         finally:
@@ -2068,7 +2147,10 @@ def builder_flow(repo: Path, wt_root: Path, task_id: str, branch_name: str, dirn
     if origin_main(repo) != base:
         raise Stop(f"REMOTE_MAIN_CHANGED before publication task={task_id}")
     changed = [x for x in git(wt, "diff", "--name-only", f"{base}..{candidate}").out.splitlines() if x]
-    return publish(repo, wt, branch_name, base, candidate, subject, changed)
+    authority = publication_authority(repo, candidate, task_id,
+                                      review_run.result_file)
+    return publish(repo, wt, branch_name, base, candidate, subject, changed,
+                   publication_authority=authority)
 
 
 def main_has_subject(repo: Path, subject: str) -> bool:
