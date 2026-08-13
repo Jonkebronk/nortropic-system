@@ -352,6 +352,12 @@ def kernel_call(e_raw:bytes,r_raw:bytes,a_raw:bytes,e:dict,extra=(),result=None,
 def reject(name,e_raw,r_raw,a_raw,bindings):
  q=kernel_call(e_raw,r_raw,a_raw,bindings);check(q.returncode==1 and q.stdout=="","K_REJECT_"+name,(q.returncode,q.stdout,q.stderr))
 
+def escaped_string(raw:bytes,value:str,escape:bytes)->bytes:
+ token=json.dumps(value,ensure_ascii=False,separators=(",",":")).encode()
+ replacement=b'"'+value.encode("utf-8")+escape+b'evil"'
+ if raw.count(token)!=1:raise Rig("escaped-string target is not unique")
+ return raw.replace(token,replacement,1)
+
 def semantic_contract():
  for result in ("PASS","FAIL","ODÖMBART"):
   e,r,a=documents(result=result);q=kernel_call(canon(e),canon(r),canon(a),e)
@@ -363,6 +369,23 @@ def semantic_contract():
  expected=f"VERIFIED_RESULT=PASS\nREQUEST_ID={e['request_id']}\nEFFECT_SHA256={e['effect_sha256']}\n"
  q=kernel_call(er,rr,ar,e,replace=True,seek=True);check(q.returncode==0 and q.stdout==expected,"K_SAME_OPEN_DESCRIPTION_PATH_REPLACEMENT")
  q1=kernel_call(er,rr,ar,e,seek=True);q2=kernel_call(er,rr,ar,e,seek=True);check(q1.returncode==q2.returncode==0 and q1.stdout==q2.stdout==expected,"K_STABLE_DOUBLE_READ")
+ # JSON escape decoding must preserve explicit lengths. C-prefix comparisons may
+ # never turn embedded NUL/control/surrogate-plus-suffix values into exact matches.
+ evidence_strings=("producer_authority","task","candidate_sha","task_spec_sha256","gate_sha256","probe_identity","request_id","result","effect_sha256")
+ receipt_strings=("observer_authority","request_id","candidate_sha","probe_identity","probe_path","probe_sha256","effect_marker")
+ probe_strings=("probe_identity","probe_path","probe_sha256","effect_marker","result")
+ for label,escape in (("NUL",b"\\u0000"),("CONTROL",b"\\u0001"),("SURROGATE",b"\\ud800")):
+  for key in evidence_strings:reject("EVIDENCE_ESCAPED_"+label+"_"+key.upper(),escaped_string(er,e[key],escape),rr,ar,e)
+  for key in receipt_strings:
+   bad_rr=escaped_string(rr,r[key],escape);em=dict(e);em["effect_sha256"]=sha(bad_rr)
+   reject("RECEIPT_ESCAPED_"+label+"_"+key.upper(),canon(em),bad_rr,ar,em)
+  for key in probe_strings:reject("ALLOWLIST_ESCAPED_"+label+"_"+key.upper(),er,rr,escaped_string(ar,a["probes"][0][key],escape),e)
+ ue,ur,ua=documents();unicode_probe="h033-räksmörgås-雪";unicode_marker="effekt-åäö-雪";unicode_path="/Library/Application Support/Nortropic/provenance/probes/"+unicode_probe
+ ue["probe_identity"]=ur["probe_identity"]=ua["probes"][0]["probe_identity"]=unicode_probe
+ ur["probe_path"]=ua["probes"][0]["probe_path"]=unicode_path;ur["effect_marker"]=ua["probes"][0]["effect_marker"]=unicode_marker
+ urr=canon(ur);ue["effect_sha256"]=sha(urr);uq=kernel_call(canon(ue),urr,canon(ua),ue)
+ uexpected=f"VERIFIED_RESULT=PASS\nREQUEST_ID={ue['request_id']}\nEFFECT_SHA256={ue['effect_sha256']}\n"
+ check(uq.returncode==0 and uq.stdout==uexpected,"K_LEGITIMATE_UNICODE_BOUND_STRINGS")
  wrong_digest=dict(e);right=e["effect_sha256"];wrong_digest["effect_sha256"]=("0" if right[0]!="0" else "1")+right[1:]
  reject("EFFECT_DIGEST_RELATION",canon(wrong_digest),rr,ar,e)
  ev2=dict(e);ev2["schema_version"]=2;reject("EVIDENCE_SCHEMA_VERSION_EXACT",canon(ev2),rr,ar,e)
