@@ -43,7 +43,7 @@ before merge the publisher fetches and atomically relocks all of:
 
 The single authorized merge command has method `gh pr merge --merge` and an exact head-commit guard.
 Repository configuration permitting squash or rebase is not authority to use them. After GitHub
-reports `merged=true`, the publisher fetches main and proves: returned merge SHA is a commit;
+reports `state=MERGED` with non-null `mergedAt` and `mergeCommit`, the publisher fetches main and proves: returned merge SHA is a commit;
 `origin/main` equals it; it has exactly two parents; parent 1 equals the frozen base; parent 2 equals
 the reviewed candidate; and its tree equals the reviewed candidate tree. Any mismatch fails closed.
 
@@ -59,6 +59,9 @@ must re-read all three identities in the immediate premerge relock. It uses only
 fields (`state`, `mergedAt`, `mergeCommit`, `headRefOid`) and, after that response, itself executes
 the fetch/main-equality, ordered-parent and candidate-tree proof. A caller, judge, or return value
 performing those checks on its behalf is insufficient.
+Every returned value must affect the publisher's decision: hostile main, parent-list and tree
+responses reject even while the underlying disposable merge graph remains valid. Merely issuing
+the full command sequence and discarding its outputs is not proof.
 
 The current observed GitHub protection is contextual evidence, not a replacement for the relock:
 `enforce_admins=true`, force pushes/deletions disabled, no required linear history, and normal merge

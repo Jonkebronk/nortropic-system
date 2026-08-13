@@ -1783,6 +1783,15 @@ def publication_contract_controls(tmp: Path) -> None:
                     return completed(argv,1,"unsupported gh argv\n")
                 if exe=="git" and argv[1:3] == ["ls-remote","origin"] and defect=="remote_head":
                     return completed(argv,0,f"{wrong}\trefs/heads/candidate\n")
+                if exe=="git" and post_view_index >= 0:
+                    if defect=="reported_main" and argv[1:3]==["rev-parse","refs/remotes/origin/main"]:
+                        return completed(argv,0,wrong+"\n")
+                    if defect=="reported_parents" and "rev-list" in argv and "--parents" in argv:
+                        return completed(argv,0,f"{merged_sha} {base} {wrong}\n")
+                    if defect=="reported_candidate_tree" and argv[1:3]==["rev-parse",f"{candidate_sha}^{{tree}}"]:
+                        return completed(argv,0,wrong+"\n")
+                    if defect=="reported_merge_tree" and argv[1:3]==["rev-parse",f"{merged_sha}^{{tree}}"]:
+                        return completed(argv,0,wrong+"\n")
                 actual=list(argv)
                 if exe=="git" and argv[1:4] == ["fetch","origin","main"]:
                     actual=[argv[0],"fetch","origin","main:refs/remotes/origin/main"]
@@ -1790,10 +1799,11 @@ def publication_contract_controls(tmp: Path) -> None:
                 return completed(argv,p.returncode,p.stdout or "")
         subject_globals["subprocess"]=Boundary()
         fn=callable_override or subject
-        accepted=False; detail=""
+        accepted=False; detail=""; subject_completed=False
         try:
             returned=fn(repo,repo,"candidate",base,candidate_sha,"title",changed,
                         publication_authority=authority)
+            subject_completed=True
             # Corroboration is deliberately outside the subject trace. Acceptance below
             # still requires the publisher's own post-merge proof commands.
             p=git(repo,"fetch","origin","main:refs/remotes/origin/main")
@@ -1849,11 +1859,12 @@ def publication_contract_controls(tmp: Path) -> None:
             detail=f"{type(exc).__name__}:{exc} trace={trace[-8:]}"
         finally:
             subject_globals["subprocess"]=original_subprocess
-        return accepted,detail
+        return accepted,detail,not subject_completed
 
     def reference_publish(repo: Path, wt: Path, branch_name: str, base_sha: str,
                           candidate_sha: str, title: str, changed: list[str], *,
-                          publication_authority: dict[str,str], omit_postproof: bool=False) -> str:
+                          publication_authority: dict[str,str], omit_postproof: bool=False,
+                          ignore_postgraph_outputs: bool=False) -> str:
         """Gate-local, implementation-neutral witness that the hermetic rig is satisfiable."""
         invoke=subject_globals["run"]
         def command(argv, *, check=True):
@@ -1921,6 +1932,12 @@ def publication_contract_controls(tmp: Path) -> None:
             return returned
         command(["git","fetch","origin","main"])
         remote_main=command(["git","rev-parse","refs/remotes/origin/main"]).out.strip()
+        if ignore_postgraph_outputs:
+            probe_target=command(["git","rev-parse","refs/remotes/origin/main^{commit}"]).out.strip()
+            command(["git","rev-list","--parents","-n","1",probe_target])
+            command(["git","rev-parse",f"{candidate_sha}^{{tree}}"]).out.strip()
+            command(["git","rev-parse",f"{probe_target}^{{tree}}"]).out.strip()
+            return returned
         if returned != remote_main:
             raise Rig(f"returned merge mismatch returned={returned} remote={remote_main}")
         parents=command(["git","rev-list","--parents","-n","1",remote_main]).out.split()
@@ -1931,27 +1948,37 @@ def publication_contract_controls(tmp: Path) -> None:
             raise Rig("merge tree")
         return remote_main
 
-    witness,witness_detail=evaluate("reference-positive",callable_override=reference_publish)
+    witness,witness_detail,_=evaluate("reference-positive",callable_override=reference_publish)
     check(witness,"J_PUBLICATION_HARNESS_REFERENCE_POSITIVE",witness_detail)
-    ok,detail=evaluate("positive")
+    ok,detail,_=evaluate("positive")
     check(ok,"P_CURRENT_AUTHORITY_GUARDED_NORMAL_MERGE_PUBLISHER",detail)
     for defect in ("repo_identity","pr_head","pr_head_ref","pr_base_ref","pr_base_sha",
                    "remote_head","files","main_drift","not_merged","returned_sha",
                    "one_parent","reversed","extra_parent","tree","task_id","spec_digest",
-                   "gate_digest","review_digest","review_changed"):
-        accepted,why=evaluate(defect,defect)
-        check(not accepted,"P_PUBLICATION_REJECT_"+defect.upper(),why)
-        witness_accepted,witness_why=evaluate("reference-"+defect,defect,reference_publish)
-        check(not witness_accepted,"J_PUBLICATION_HARNESS_REJECT_"+defect.upper(),witness_why)
+                   "gate_digest","review_digest","review_changed","reported_main",
+                   "reported_parents","reported_candidate_tree","reported_merge_tree"):
+        accepted,why,publisher_rejected=evaluate(defect,defect)
+        check(publisher_rejected,"P_PUBLICATION_REJECT_"+defect.upper(),why)
+        witness_accepted,witness_why,witness_rejected=evaluate("reference-"+defect,defect,reference_publish)
+        check(witness_rejected,"J_PUBLICATION_HARNESS_REJECT_"+defect.upper(),witness_why)
+    def ignore_outputs(*args,**kwargs):
+        return reference_publish(*args,**kwargs,ignore_postgraph_outputs=True)
+    ignored=[]
+    for defect in ("returned_sha","one_parent","reversed","extra_parent","tree",
+                   "reported_main","reported_parents","reported_candidate_tree","reported_merge_tree"):
+        accepted,why,publisher_rejected=evaluate("ignore-"+defect,defect,ignore_outputs)
+        ignored.append((defect,accepted,publisher_rejected,why))
+    check(all(not rejected for _,_,rejected,_ in ignored),
+          "J_PUBLICATION_INVOKE_BUT_IGNORE_OUTPUT_MUTANT_CAUGHT",repr(ignored))
     def omit_postproof(*args,**kwargs):
         return reference_publish(*args,**kwargs,omit_postproof=True)
-    accepted,why=evaluate("omit-postproof",callable_override=omit_postproof)
+    accepted,why,_=evaluate("omit-postproof",callable_override=omit_postproof)
     check(not accepted,"P_PUBLICATION_OMITTED_POSTMERGE_PROOF_REJECT",why)
     def direct_subprocess_bypass(*args,**kwargs):
         merged=reference_publish(*args,**kwargs)
         subject_globals["subprocess"].run(["/usr/bin/touch",str(args[1]/"publication-bypass")])
         return merged
-    accepted,why=evaluate("direct-subprocess-bypass",callable_override=direct_subprocess_bypass)
+    accepted,why,_=evaluate("direct-subprocess-bypass",callable_override=direct_subprocess_bypass)
     check(not accepted,"P_PUBLICATION_DIRECT_SUBPROCESS_BYPASS_REJECT",why)
     def unsupported_gh_field(*args,**kwargs):
         probe=subject_globals["subprocess"].run(
@@ -1960,12 +1987,12 @@ def publication_contract_controls(tmp: Path) -> None:
         if probe.returncode:
             raise Rig("unsupported gh JSON field")
         return reference_publish(*args,**kwargs)
-    accepted,why=evaluate("unsupported-gh-field",callable_override=unsupported_gh_field)
+    accepted,why,_=evaluate("unsupported-gh-field",callable_override=unsupported_gh_field)
     check(not accepted,"P_PUBLICATION_UNSUPPORTED_GH_JSON_FIELD_REJECT",why)
     def dead_tokens(*args,**kwargs):
         """--merge baseRefOid candidate tree rev-list --parents merged; deliberately no effects."""
         return args[4]
-    accepted,why=evaluate("dead-token",callable_override=dead_tokens)
+    accepted,why,_=evaluate("dead-token",callable_override=dead_tokens)
     check(not accepted,"P_PUBLICATION_DEAD_TOKEN_NOOP_REJECT",why)
 
 

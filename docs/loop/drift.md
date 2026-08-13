@@ -320,3 +320,11 @@ supported GitHub fields are modeled; the request carries candidate-bound task/sp
 independent-review identities; and immediate premerge reads must verify them. After GitHub reports
 the merge, the publisher itself must fetch main, compare the mergeCommit SHA, inspect exact ordered
 parents, and compare candidate/merge trees. Dedicated omission and direct-subprocess mutants reject.
+
+R3 independent review found that command presence still did not prove response-dependent behavior:
+a publisher could invoke all postmerge probes, ignore every output and let judge corroboration mask
+the omission. R4 records `publisher_rejected` separately from actual graph correctness. It injects
+hostile main/parent/candidate-tree/merge-tree responses while leaving the real merge valid, and also
+runs malformed returned-SHA/parent/tree graphs through the real publisher. Each requires the
+publisher itself to raise. A complete-trace ignore-output mutant therefore fails the frozen
+production negatives rather than being rescued by judge-side Git inspection.

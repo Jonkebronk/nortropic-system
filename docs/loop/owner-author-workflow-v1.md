@@ -205,3 +205,8 @@ supported GitHub fields `state`, `mergedAt`, `mergeCommit` and `headRefOid` prov
 transition, the publisher itself fetches main and executes the exact main/SHA, ordered-parent and
 candidate-tree checks. Judge-side inspection only corroborates those effects and cannot replace
 their presence in the publisher's process trace.
+Invocation is not validation: each GitHub and Git result must control publisher success. With the
+actual merge graph held valid, hostile returned main, parent-list, candidate-tree or merge-tree
+values must make the publisher raise before success. With malformed actual graphs, the same is
+required for returned merge identity, one/reversed/extra parents and wrong tree. A publisher that
+issues every probe but ignores every output is rejected even though its command trace is complete.
