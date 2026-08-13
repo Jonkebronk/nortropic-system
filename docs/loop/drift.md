@@ -393,3 +393,34 @@ fresh additive gate now runs the complete U+0000..U+001F matrix over probe ident
 marker, updates every related caller/document binding and recomputes the receipt digest. U+0000 probe
 identity stays in parser-only document controls because an operating-system argv cannot carry NUL;
 its path and marker rows remain coordinated. The existing legitimate Unicode positive is unchanged.
+
+After final H-034 publication at authoritative main `9436387`, H-033 is freshly materialized from
+that main as an ordinary authenticated-runner task depending exactly on H-034. Current H-034 is the
+architecture authority: H-033 owns protected origin and safe opening, supplies the exact three
+already-opened evidence/observer-receipt/allowlist descriptors, and delegates semantic judgment to
+the exact frozen native kernel with candidate/spec/gate/probe/request/result bindings. The new
+contract does not import the historical launchd service shape. It freezes effects and identities:
+OS-resolved `_nortropic_provenance`, an independent root-owned observer, protected canonical roots,
+fresh caller-unselectable request IDs, no-follow same-opened-object traversal, and exact H-034
+handoff. The disposable gate surface exists only to exercise path substitutions and a deterministic
+rename race; it cannot select authority during the normal verify operation.
+
+H-034's former phase assertion that H-033 was absent is monotonically replaced by exact-one H-033,
+dependency `h-034`, and canonical `verify/bin/h-033-exit` lifecycle checks. Absence, duplication,
+wrong dependency and wrong gate are explicit adversarial controls. All prior H-034 semantic,
+artifact, rebuild and identity controls remain unchanged; the materialized phase runs H-034 green.
+H-033 itself is RED only because `controller/provenance/cli` is absent. No provenance production
+implementation or external provisioning is created by this contract candidate.
+
+The same phase reconciliation is applied additively to H-035's lifecycle-only assertions. Its stale
+H-034-task/byte absence checks become exact published H-034 plus exact materialized H-033 identity,
+dependency and canonical-gate checks, with absence/duplicate/wrong-dependency/wrong-gate mutants for
+both downstream tasks and an exact four-file H-034 artifact set. H-035's owner routing, publication,
+identity, atomicity and provider-observation mechanism controls are otherwise byte-for-byte unchanged.
+
+Independent review of the first H-033 contract found that live owner acceptance required an evidence
+leaf owned by merely any non-requester UID. The additive remediation applies one shared live-`lstat`
+predicate to judge controls and canonical owner acceptance: evidence UID must equal the exact
+OS-resolved non-root `_nortropic_provenance` UID, receipt UID must equal root, the two inodes and UIDs
+must differ, and neither leaf may be group/other writable or a symlink. A live separated-ownership
+positive and root-writes-both, requester-owned and symlink negatives run before the component RED.

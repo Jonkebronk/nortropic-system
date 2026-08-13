@@ -1657,11 +1657,33 @@ def frozen_checks() -> None:
           "F_CURRENT_MAIN_PYTHON_AUTHORITY_BYTES_PRESERVED")
     forbidden = {"specs/tasks.spec.json", "specs/owner-production-paths.v1.json", "verify/bin/h-035-exit"}
     check(len(hits) == 1 and not forbidden.intersection(hits[0].get("allowed_write", [])), "F_BUILDER_CANNOT_EDIT_GATE")
-    check(not any(isinstance(t, dict) and t.get("id") == "h-034" for t in tasks), "F_H034_TASK_ABSENT")
+    def downstream_phase_ok(rows: list[object]) -> bool:
+        h034_rows = [t for t in rows if isinstance(t, dict) and t.get("id") == "h-034"]
+        h033_rows = [t for t in rows if isinstance(t, dict) and t.get("id") == "h-033"]
+        return (len(h034_rows) == len(h033_rows) == 1
+                and h034_rows[0].get("authority_class") == "owner_authority"
+                and h034_rows[0].get("depends_on") == ["h-035"]
+                and h034_rows[0].get("exit_test") == "verify/bin/h-034-exit"
+                and h033_rows[0].get("authority_class") == "ordinary"
+                and h033_rows[0].get("depends_on") == ["h-034"]
+                and h033_rows[0].get("exit_test") == "verify/bin/h-033-exit")
+    check(downstream_phase_ok(tasks), "F_H034_H033_EXACT_MATERIALIZED_PHASE")
+    for label,mutate in (
+        ("H034_ABSENT", lambda rows: [t for t in rows if not (isinstance(t,dict) and t.get("id")=="h-034")]),
+        ("H034_DUPLICATE", lambda rows: rows+[dict(next(t for t in rows if isinstance(t,dict) and t.get("id")=="h-034"))]),
+        ("H034_WRONG_DEPENDENCY", lambda rows: [({**t,"depends_on":["h-017"]} if isinstance(t,dict) and t.get("id")=="h-034" else t) for t in rows]),
+        ("H034_WRONG_GATE", lambda rows: [({**t,"exit_test":"verify/bin/h-035-exit"} if isinstance(t,dict) and t.get("id")=="h-034" else t) for t in rows]),
+        ("H033_ABSENT", lambda rows: [t for t in rows if not (isinstance(t,dict) and t.get("id")=="h-033")]),
+        ("H033_DUPLICATE", lambda rows: rows+[dict(next(t for t in rows if isinstance(t,dict) and t.get("id")=="h-033"))]),
+        ("H033_WRONG_DEPENDENCY", lambda rows: [({**t,"depends_on":["h-035"]} if isinstance(t,dict) and t.get("id")=="h-033" else t) for t in rows]),
+        ("H033_WRONG_GATE", lambda rows: [({**t,"exit_test":"verify/bin/h-034-exit"} if isinstance(t,dict) and t.get("id")=="h-033" else t) for t in rows]),
+    ):
+        check(not downstream_phase_ok(mutate(list(tasks))), "J_DOWNSTREAM_PHASE_"+label+"_REJECT")
     ok, why = validate_registry(reg); check(ok, "F_REGISTRY_STRICT", why)
     registry_selftests(reg)
-    h034 = [p for p in ROOT.glob("controller/h034-native/**/*") if p.is_file()] + [p for p in ROOT.glob("verify/h034/**/*") if p.is_file()]
-    check(not h034, "F_H034_BYTES_ABSENT", repr(h034))
+    h034 = sorted(str(p.relative_to(ROOT)) for p in ROOT.glob("controller/h034-native/**/*") if p.is_file()) + sorted(str(p.relative_to(ROOT)) for p in ROOT.glob("verify/h034/**/*") if p.is_file())
+    check(sorted(h034) == ["controller/h034-native/kernel.c","verify/h034/build-recipe.json","verify/h034/identity-manifest.json","verify/h034/kernel"],
+          "F_H034_EXACT_PUBLISHED_BYTES", repr(h034))
 
 
 def publication_contract_controls(tmp: Path) -> None:
