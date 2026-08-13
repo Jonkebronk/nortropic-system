@@ -328,3 +328,10 @@ hostile main/parent/candidate-tree/merge-tree responses while leaving the real m
 runs malformed returned-SHA/parent/tree graphs through the real publisher. Each requires the
 publisher itself to raise. A complete-trace ignore-output mutant therefore fails the frozen
 production negatives rather than being rescued by judge-side Git inspection.
+
+R4 independent review then demonstrated that replacing the module's `subprocess` name after import
+missed callable aliases captured during module execution. R5 installs wrappers before `runpy`
+executes the subject and restores host functions afterward; captured `run`, `Popen`, `check_output`,
+`check_call` and `os.system` aliases retain the audited boundary. Each form is tested with an
+absolute unexpected executable that is denied without execution, and separately with legitimate
+absolute Git that passes. The prior identity, response-validation and graph controls remain intact.

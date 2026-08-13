@@ -62,6 +62,10 @@ performing those checks on its behalf is insufficient.
 Every returned value must affect the publisher's decision: hostile main, parent-list and tree
 responses reject even while the underlying disposable merge graph remains valid. Merely issuing
 the full command sequence and discarding its outputs is not proof.
+Acceptance installs the executable boundary before importing the publisher. Module-load aliases of
+`subprocess.run`, `Popen`, `check_output`, `check_call` and `os.system` therefore cannot bypass the
+trace. Git and GitHub remain available through those audited forms, including absolute Git paths;
+an unexpected absolute executable is denied and rejects publication.
 
 The current observed GitHub protection is contextual evidence, not a replacement for the relock:
 `enforce_admins=true`, force pushes/deletions disabled, no required linear history, and normal merge

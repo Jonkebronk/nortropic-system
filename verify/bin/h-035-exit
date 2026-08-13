@@ -7,6 +7,7 @@ entrypoints against disposable repositories/state; they are acceptance.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -1665,7 +1666,35 @@ def frozen_checks() -> None:
 
 def publication_contract_controls(tmp: Path) -> None:
     script = ROOT / "scripts/nortropic-codex-autopilot.py"
-    namespace = runpy.run_path(str(script), run_name="h035_publication_subject")
+    active_boundary=[None]
+    saved_subprocess={name:getattr(subprocess,name) for name in
+                      ("run","Popen","check_output","check_call")}
+    saved_os_system=os.system
+    def captured_run(*args,**kwargs):
+        if active_boundary[0] is None: raise Rig("captured run outside publication boundary")
+        return active_boundary[0].run(*args,**kwargs)
+    def captured_popen(*args,**kwargs):
+        if active_boundary[0] is None: raise Rig("captured Popen outside publication boundary")
+        return active_boundary[0].Popen(*args,**kwargs)
+    def captured_check_output(*args,**kwargs):
+        if active_boundary[0] is None: raise Rig("captured check_output outside publication boundary")
+        return active_boundary[0].check_output(*args,**kwargs)
+    def captured_check_call(*args,**kwargs):
+        if active_boundary[0] is None: raise Rig("captured check_call outside publication boundary")
+        return active_boundary[0].check_call(*args,**kwargs)
+    def captured_os_system(command):
+        if active_boundary[0] is None: raise Rig("captured os.system outside publication boundary")
+        return active_boundary[0].system(command)
+    subprocess.run=captured_run
+    subprocess.Popen=captured_popen
+    subprocess.check_output=captured_check_output
+    subprocess.check_call=captured_check_call
+    os.system=captured_os_system
+    try:
+        namespace = runpy.run_path(str(script), run_name="h035_publication_subject")
+    finally:
+        for name,value in saved_subprocess.items(): setattr(subprocess,name,value)
+        os.system=saved_os_system
     subject = namespace.get("publish")
     if not callable(subject):
         check(False,"P_CURRENT_AUTHORITY_GUARDED_NORMAL_MERGE_PUBLISHER","publish unavailable")
@@ -1792,12 +1821,48 @@ def publication_contract_controls(tmp: Path) -> None:
                         return completed(argv,0,wrong+"\n")
                     if defect=="reported_merge_tree" and argv[1:3]==["rev-parse",f"{merged_sha}^{{tree}}"]:
                         return completed(argv,0,wrong+"\n")
+                if exe not in ("git","gh"):
+                    return completed(argv,126,"publication executable denied\n")
                 actual=list(argv)
                 if exe=="git" and argv[1:4] == ["fetch","origin","main"]:
                     actual=[argv[0],"fetch","origin","main:refs/remotes/origin/main"]
                 p=original_subprocess.run(actual,cwd=cwd,**kwargs)
                 return completed(argv,p.returncode,p.stdout or "")
+            def check_output(self, argv, cwd=None, **kwargs):
+                kwargs.pop("check",None)
+                p=self.run(argv,cwd=cwd,**kwargs)
+                if p.returncode:
+                    raise original_subprocess.CalledProcessError(p.returncode,argv,output=p.stdout)
+                return p.stdout if kwargs.get("text") or kwargs.get("universal_newlines") else p.stdout.encode()
+            def check_call(self, argv, cwd=None, **kwargs):
+                kwargs.pop("check",None)
+                p=self.run(argv,cwd=cwd,**kwargs)
+                if p.returncode:
+                    raise original_subprocess.CalledProcessError(p.returncode,argv,output=p.stdout)
+                return 0
+            def Popen(self, argv, cwd=None, **kwargs):
+                p=self.run(argv,cwd=cwd,**{k:v for k,v in kwargs.items()
+                                          if k not in ("stdin","bufsize","start_new_session")})
+                text_mode=bool(kwargs.get("text") or kwargs.get("universal_newlines"))
+                payload=p.stdout if text_mode else p.stdout.encode()
+                class Immediate:
+                    def __init__(self):
+                        self.returncode=p.returncode
+                        self.stdout=(io.StringIO(payload) if text_mode else io.BytesIO(payload)) if kwargs.get("stdout") is not None else None
+                        self.stderr=None
+                    def communicate(self,input=None,timeout=None): return payload,None
+                    def wait(self,timeout=None): return self.returncode
+                    def poll(self): return self.returncode
+                    def __enter__(self): return self
+                    def __exit__(self,*exc): return False
+                return Immediate()
+            def system(self, command):
+                try: argv=shlex.split(command)
+                except ValueError: argv=["<invalid-shell-command>"]
+                p=self.run(argv)
+                return p.returncode << 8
         subject_globals["subprocess"]=Boundary()
+        active_boundary[0]=subject_globals["subprocess"]
         fn=callable_override or subject
         accepted=False; detail=""; subject_completed=False
         try:
@@ -1858,6 +1923,7 @@ def publication_contract_controls(tmp: Path) -> None:
         except Exception as exc:
             detail=f"{type(exc).__name__}:{exc} trace={trace[-8:]}"
         finally:
+            active_boundary[0]=None
             subject_globals["subprocess"]=original_subprocess
         return accepted,detail,not subject_completed
 
@@ -1970,6 +2036,44 @@ def publication_contract_controls(tmp: Path) -> None:
         ignored.append((defect,accepted,publisher_rejected,why))
     check(all(not rejected for _,_,rejected,_ in ignored),
           "J_PUBLICATION_INVOKE_BUT_IGNORE_OUTPUT_MUTANT_CAUGHT",repr(ignored))
+    load_aliases={"run":captured_run,"Popen":captured_popen,
+                  "check_output":captured_check_output,"check_call":captured_check_call,
+                  "os_system":captured_os_system}
+    for alias_name,alias in load_aliases.items():
+        def captured_alias_mutant(*args,_alias=alias,_name=alias_name,**kwargs):
+            merged=reference_publish(*args,**kwargs)
+            try:
+                if _name=="os_system": _alias("/usr/bin/true")
+                elif _name=="Popen": _alias(["/usr/bin/true"]).wait()
+                else: _alias(["/usr/bin/true"])
+            except Exception:
+                pass
+            return merged
+        accepted,why,publisher_rejected=evaluate("captured-"+alias_name,
+                                                 callable_override=captured_alias_mutant)
+        check(not accepted and not publisher_rejected,
+              "P_PUBLICATION_CAPTURED_AT_LOAD_"+alias_name.upper()+"_REJECT",why)
+        def captured_alias_positive(*args,_alias=alias,_name=alias_name,**kwargs):
+            merged=reference_publish(*args,**kwargs)
+            if _name=="os_system": rc=_alias("/usr/bin/git --version")
+            elif _name=="Popen": rc=_alias(["/usr/bin/git","--version"],text=True).wait()
+            elif _name=="check_output": _alias(["/usr/bin/git","--version"],text=True); rc=0
+            elif _name=="check_call": rc=_alias(["/usr/bin/git","--version"],text=True)
+            else: rc=_alias(["/usr/bin/git","--version"],text=True).returncode
+            if rc: raise Rig("audited captured alias failed")
+            return merged
+        alias_ok,alias_why,alias_rejected=evaluate("captured-positive-"+alias_name,
+                                                   callable_override=captured_alias_positive)
+        check(alias_ok and not alias_rejected,
+              "J_PUBLICATION_CAPTURED_AT_LOAD_"+alias_name.upper()+"_GIT_POSITIVE",alias_why)
+    def absolute_git_reference(*args,**kwargs):
+        merged=reference_publish(*args,**kwargs)
+        subject_globals["subprocess"].check_call(["/usr/bin/git","--version"],cwd=args[1])
+        return merged
+    accepted,why,publisher_rejected=evaluate("absolute-git-positive",
+                                             callable_override=absolute_git_reference)
+    check(accepted and not publisher_rejected,
+          "J_PUBLICATION_ABSOLUTE_GIT_AUDIT_POSITIVE",why)
     def omit_postproof(*args,**kwargs):
         return reference_publish(*args,**kwargs,omit_postproof=True)
     accepted,why,_=evaluate("omit-postproof",callable_override=omit_postproof)

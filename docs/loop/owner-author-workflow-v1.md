@@ -210,3 +210,8 @@ actual merge graph held valid, hostile returned main, parent-list, candidate-tre
 values must make the publisher raise before success. With malformed actual graphs, the same is
 required for returned merge identity, one/reversed/extra parents and wrong tree. A publisher that
 issues every probe but ignores every output is rejected even though its command trace is complete.
+The process boundary is installed before the publisher module executes. Therefore aliases captured
+at module load for `subprocess.run`, `Popen`, `check_output`, `check_call` or `os.system` remain
+audited after the normal module names are restored. Only required Git/GitHub executables are
+permitted during publication; an absolute unexpected executable is denied and makes acceptance
+fail. Absolute Git and each captured API remain valid for legitimate audited Git operations.
