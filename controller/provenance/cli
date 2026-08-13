@@ -11,11 +11,12 @@ import stat
 import subprocess
 import sys
 import time
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "verify/h034/kernel"
-KERNEL_MANIFEST = ROOT / "verify/h034/identity-manifest.json"
+H034_MANIFEST_SHA256 = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
 AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
 EVIDENCE_ROOT = AUTHORITY / "evidence"
 RECEIPT_ROOT = AUTHORITY / "probe-receipts"
@@ -128,7 +129,12 @@ def open_authority(root, request_id, fixture):
 
 def kernel_handoff(fds, v):
     try:
-        manifest_raw = KERNEL_MANIFEST.read_bytes()
+        git = "/usr/bin/git"
+        manifest_raw = subprocess.run([git, "-C", str(ROOT), "show", "HEAD:verify/h034/identity-manifest.json"],
+                                      check=True, capture_output=True).stdout
+        kernel_object = subprocess.run([git, "-C", str(ROOT), "show", "HEAD:verify/h034/kernel"],
+                                       check=True, capture_output=True).stdout
+        if hashlib.sha256(manifest_raw).hexdigest() != H034_MANIFEST_SHA256: fail(2)
         manifest = json.loads(manifest_raw.decode("utf-8"))
         expected_keys = ("schema_version", "language", "artifact_path", "artifact_sha256",
                          "build_recipe_sha256", "source_sha256", "architecture", "file_type",
@@ -141,47 +147,65 @@ def kernel_handoff(fds, v):
         if manifest["code_signature"] != "adhoc" or not manifest["cdhash"] or not manifest["uuid"]:
             fail(2)
         kernel_fd = os.open(KERNEL, os.O_RDONLY | os.O_NOFOLLOW)
-        kernel_exec_fd = os.open(KERNEL, os.O_EXEC | os.O_NOFOLLOW)
         before = os.fstat(kernel_fd)
-        executable_stat = os.fstat(kernel_exec_fd)
         if not stat.S_ISREG(before.st_mode) or not (before.st_mode & 0o111) or before.st_nlink != 1:
             fail(2)
         kernel_bytes = os.pread(kernel_fd, before.st_size, 0)
         middle = os.fstat(kernel_fd)
-        if len(kernel_bytes) != before.st_size or hashlib.sha256(kernel_bytes).hexdigest() != manifest["artifact_sha256"]:
+        if kernel_bytes != kernel_object or len(kernel_bytes) != before.st_size or hashlib.sha256(kernel_bytes).hexdigest() != manifest["artifact_sha256"]:
             fail(2)
         if (before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != \
            (middle.st_dev, middle.st_ino, middle.st_mode, middle.st_size, middle.st_mtime_ns, middle.st_ctime_ns):
             fail(2)
-        if (before.st_dev, before.st_ino) != (executable_stat.st_dev, executable_stat.st_ino): fail(2)
-    except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         fail(2)
-    argv = [str(KERNEL), "h033-verify",
+    # Darwin has no fexecve(2), and devfs rejects execve("/dev/fd/N").  Pin
+    # the already-verified vnode with a same-filesystem hard link instead: it
+    # neither copies the H-034 artifact nor depends on the canonical pathname
+    # after this point.  Any swap before link(2) is caught by the inode check.
+    stage = tempfile.TemporaryDirectory(prefix="h033-kernel-", dir="/private/tmp")
+    staged = Path(stage.name) / "kernel"
+    try:
+        os.link(KERNEL, staged, follow_symlinks=False)
+        linked = os.stat(staged, follow_symlinks=False)
+        handoff = os.fstat(kernel_fd)
+        Path(stage.name).chmod(0o500)
+        stage_stat = os.stat(stage.name, follow_symlinks=False)
+    except (OSError, ValueError):
+        stage.cleanup(); os.close(kernel_fd); fail(2)
+    if (not stat.S_ISDIR(stage_stat.st_mode) or stage_stat.st_uid != os.geteuid()
+            or stat.S_IMODE(stage_stat.st_mode) != 0o500 or not stat.S_ISREG(linked.st_mode)
+            or (linked.st_dev, linked.st_ino) != (handoff.st_dev, handoff.st_ino)):
+        Path(stage.name).chmod(0o700); stage.cleanup(); os.close(kernel_fd); fail(2)
+    argv = [str(staged), "h033-verify",
             "--evidence-fd", str(fds[0]), "--receipt-fd", str(fds[1]),
             "--allowlist-fd", str(fds[2]), "--task", "h-033",
             "--candidate", v["candidate"], "--task-spec-sha256", v["task-spec-sha256"],
             "--gate-sha256", v["gate-sha256"], "--probe", v["probe"],
             "--request-id", v["request-id"], "--require-result", v["require-result"]]
-    process = subprocess.Popen(argv, executable=str(KERNEL), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, pass_fds=tuple(fds) + (kernel_exec_fd,), start_new_session=True,
-                               env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"})
     try:
-        out, _ = process.communicate(timeout=3)
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   pass_fds=fds, start_new_session=True,
+                                   env={"PATH":"/usr/bin:/bin","LANG":"C","LC_ALL":"C"})
+    except OSError:
+        Path(stage.name).chmod(0o700); stage.cleanup(); os.close(kernel_fd); fail(2)
+    try: out, _ = process.communicate(timeout=3)
     except subprocess.TimeoutExpired:
         try: os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError: pass
-        process.communicate()
-        os.close(kernel_fd); os.close(kernel_exec_fd); fail(2)
+        process.communicate(); os.close(kernel_fd); Path(stage.name).chmod(0o700); stage.cleanup(); fail(2)
+    returncode = process.returncode
     after = os.fstat(kernel_fd)
-    os.close(kernel_fd)
-    os.close(kernel_exec_fd)
-    if (before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != \
+    if (handoff.st_dev, handoff.st_ino, handoff.st_mode, handoff.st_size, handoff.st_mtime_ns, handoff.st_ctime_ns) != \
        (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        os.close(kernel_fd); Path(stage.name).chmod(0o700); stage.cleanup()
         fail(2)
-    if process.returncode == 0:
+    os.close(kernel_fd)
+    Path(stage.name).chmod(0o700); stage.cleanup()
+    if returncode == 0:
         sys.stdout.write(out)
         return
-    fail(1 if process.returncode == 1 else 2)
+    fail(1 if returncode == 1 else 2)
 
 
 def gate_verify(argv):
