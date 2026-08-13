@@ -16,12 +16,12 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
-import fnmatch
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +29,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+
+AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"
+sys.path.insert(0, str(AUTHORITY_LIB))
+from core import (AuthorityError, canonical_path, permits,
+                  strict_json_bytes)  # noqa: E402
 
 EXPECTED_REPO = "Nortropic/nortropic-system"
 OWNER_DECISION_PATH = "docs/loop/owner-h003-attestation-authority-v1.md"
@@ -253,16 +258,10 @@ def changed_files(repo: Path, base_ref: str = "HEAD") -> list[str]:
 
 
 def path_allowed(rel: str, patterns: Iterable[str]) -> bool:
-    rel = rel.replace(os.sep, "/")
-    for pat in patterns:
-        pat = pat.replace(os.sep, "/")
-        if pat.endswith("/**"):
-            prefix = pat[:-3].rstrip("/")
-            if rel == prefix or rel.startswith(prefix + "/"):
-                return True
-        if fnmatch.fnmatchcase(rel, pat):
-            return True
-    return False
+    try:
+        return any(permits(pattern, rel) for pattern in patterns)
+    except AuthorityError as exc:
+        raise Stop(f"invalid authority path: {exc}") from exc
 
 
 def common_git_dir(repo: Path) -> Path:
@@ -829,101 +828,163 @@ Make the smallest remediation inside the existing frozen task allowed_write. Do 
 
 
 def publish(repo: Path, wt: Path, branch_name: str, base_sha: str, candidate_sha: str,
-            title: str, changed: list[str]) -> str:
+            title: str, changed: list[str], *,
+            publication_authority: dict[str, str]) -> str:
+    """Publish one reviewed candidate using the bounded normal-merge protocol.
+
+    Every identity used at the merge boundary is re-read after the ordinary
+    push.  In particular, the task spec and gate are Git-object bytes from the
+    reviewed candidate; mutable checkout bytes and caller-selected alternate
+    authority never participate.
+    """
+    authority_keys = {
+        "task_id", "task_spec_path", "task_spec_sha256", "gate_path",
+        "gate_sha256", "review_artifact_path", "review_artifact_sha256",
+    }
+    if not isinstance(publication_authority, dict) or set(publication_authority) != authority_keys:
+        raise Stop("publication_authority must contain the exact required fields")
+    if not all(isinstance(value, str) and value for value in publication_authority.values()):
+        raise Stop("publication_authority values must be non-empty strings")
+    if publication_authority["task_spec_path"] != "specs/tasks.spec.json":
+        raise Stop("publication task spec is not canonical")
+    try:
+        task_spec_path = canonical_path(publication_authority["task_spec_path"])
+        gate_path = canonical_path(publication_authority["gate_path"])
+    except AuthorityError as exc:
+        raise Stop(f"invalid publication authority path: {exc}") from exc
+    for key in ("task_spec_sha256", "gate_sha256", "review_artifact_sha256"):
+        if re.fullmatch(r"[0-9a-f]{64}", publication_authority[key]) is None:
+            raise Stop(f"invalid publication authority digest: {key}")
+    if not re.fullmatch(r"[0-9a-f]{40}", base_sha) or not re.fullmatch(r"[0-9a-f]{40}", candidate_sha):
+        raise Stop("publication commit identities must be exact lowercase SHA-1 values")
+    if not isinstance(changed, list) or not changed or len(changed) != len(set(changed)):
+        raise Stop("publication changed-file set must be non-empty and unique")
+    try:
+        changed = [canonical_path(path) for path in changed]
+    except AuthorityError as exc:
+        raise Stop(f"invalid publication changed path: {exc}") from exc
+
+    # Pre-push lock.  Push is ordinary and never force-updates a ref.
     if not clean(wt) or sha(wt) != candidate_sha:
         raise Stop("publication candidate identity/cleanliness mismatch")
-    actual_main = origin_main(repo)
-    if actual_main != base_sha:
-        raise Stop(f"REMOTE_MAIN_CHANGED before push expected={base_sha} actual={actual_main}")
+    git(wt, "fetch", "origin", "main")
+    if sha(wt, "refs/remotes/origin/main") != base_sha:
+        raise Stop("REMOTE_MAIN_CHANGED before push")
     git(wt, "push", "-u", "origin", branch_name)
-    ls = git(repo, "ls-remote", "origin", f"refs/heads/{branch_name}").out.split()
-    if not ls or ls[0] != candidate_sha:
-        raise Stop(f"remote head mismatch after push expected={candidate_sha} got={ls[:1]}")
+
+    # A body lives under the common Git metadata, never in the candidate tree.
     body_dir = journal_root(repo) / "publish"
     body_dir.mkdir(exist_ok=True)
     body = body_dir / f"{now_id()}-{branch_name.replace('/', '-')}.md"
     body.write_text(
-        "Nortropic Codex Operating Model v4 provider-neutral trust-kernel publication.\n\n"
+        "Nortropic guarded normal merge publication.\n\n"
         f"- expected base: `{base_sha}`\n"
         f"- reviewed candidate: `{candidate_sha}`\n"
-        f"- changed files: {len(changed)}\n"
-        "- no force/amend/rebase remediation semantics used\n"
-        "- frozen/mechanical gates were rerun by the orchestrator before push\n",
+        f"- changed files: {len(changed)}\n",
         encoding="utf-8",
     )
-    existing = run([
-        "gh", "pr", "view", branch_name,
-        "--json", "number,headRefOid,headRefName,baseRefName,state,url",
-    ], cwd=wt, check=False)
-    if existing.rc == 0:
-        journal(repo, "PR_REUSE", branch=branch_name)
-        view = existing
-    else:
-        created = run([
-            "gh", "pr", "create", "--base", "main", "--head", branch_name,
-            "--title", title, "--body-file", str(body)
-        ], cwd=wt)
-        journal(repo, "PR_CREATE", branch=branch_name, output=created.out.strip())
-        view = run([
-            "gh", "pr", "view", branch_name,
-            "--json", "number,headRefOid,headRefName,baseRefName,state,url",
-        ], cwd=wt)
-    meta = json.loads(view.out)
-    if meta.get("headRefOid") != candidate_sha or meta.get("headRefName") != branch_name or meta.get("baseRefName") != "main":
+    existing = run(["gh", "pr", "view", branch_name, "--json",
+                    "number,headRefOid,headRefName,baseRefName,baseRefOid,state,url"],
+                   cwd=wt, check=False)
+    if existing.rc != 0:
+        run(["gh", "pr", "create", "--base", "main", "--head", branch_name,
+             "--title", title, "--body-file", str(body)], cwd=wt)
+
+    # Immediate pre-merge relock.  No network mutation occurs between the
+    # final main fetch/identity checks below and the expected-head merge.
+    repository_meta = json.loads(run(
+        ["gh", "repo", "view", "--json", "nameWithOwner"], cwd=wt).out)
+    if repository_meta.get("nameWithOwner") != EXPECTED_REPO:
+        raise Stop(f"repository identity mismatch: {repository_meta}")
+    git(wt, "fetch", "origin", "main")
+    if sha(wt, "refs/remotes/origin/main") != base_sha:
+        raise Stop("REMOTE_MAIN_CHANGED before merge")
+    if not clean(wt) or sha(wt) != candidate_sha:
+        raise Stop("candidate changed before merge")
+    candidate_tree = sha(wt, f"{candidate_sha}^{{tree}}")
+    remote = git(wt, "ls-remote", "origin", f"refs/heads/{branch_name}").out.split()
+    if remote != [candidate_sha, f"refs/heads/{branch_name}"]:
+        raise Stop(f"remote candidate mismatch: {remote}")
+
+    meta = json.loads(run([
+        "gh", "pr", "view", branch_name, "--json",
+        "number,headRefOid,headRefName,baseRefName,baseRefOid,state,url",
+    ], cwd=wt).out)
+    if (meta.get("headRefOid"), meta.get("headRefName"), meta.get("baseRefName"),
+            meta.get("baseRefOid"), meta.get("state")) != (
+            candidate_sha, branch_name, "main", base_sha, "OPEN"):
         raise Stop(f"PR identity mismatch: {meta}")
-    num = int(meta["number"])
-    remote_files = [x for x in run(["gh", "pr", "diff", str(num), "--name-only"], cwd=wt).out.splitlines() if x]
-    if sorted(remote_files) != sorted(changed):
+    number = str(meta.get("number"))
+    remote_files = [line for line in run(
+        ["gh", "pr", "diff", number, "--name-only"], cwd=wt).out.splitlines() if line]
+    if len(remote_files) != len(set(remote_files)) or sorted(remote_files) != sorted(changed):
         raise Stop(f"remote PR file set mismatch expected={changed} actual={remote_files}")
-    if origin_main(repo) != base_sha:
-        raise Stop("main changed during PR creation")
-    merge_argv = [
-        "gh", "pr", "merge", str(num), "--rebase",
-        "--match-head-commit", candidate_sha, "--delete-branch"
-    ]
-    merge = run(merge_argv, cwd=wt, check=False)
-    if merge.rc != 0:
-        # Required checks may still be running. Wait for them if the repository has checks,
-        # then retry the same expected-head guarded merge exactly once.
-        checks = run(["gh", "pr", "checks", str(num), "--watch", "--fail-fast"], cwd=wt, check=False)
-        if checks.rc != 0:
-            raise Stop(
-                f"guarded merge refused and required checks did not become green; "
-                f"merge_rc={merge.rc} checks_rc={checks.rc}\nMERGE:\n{merge.out}\nCHECKS:\n{checks.out}"
-            )
-        if origin_main(repo) != base_sha:
-            raise Stop("main changed while waiting for PR checks")
-        merge = run(merge_argv, cwd=wt, check=False)
-        if merge.rc != 0:
-            raise Stop(f"guarded merge still refused after green checks rc={merge.rc}\n{merge.out}")
-    deadline = time.time() + 4 * 60 * 60
-    merged_sha = ""
-    while time.time() < deadline:
-        q = run([
-            "gh", "pr", "view", str(num),
-            "--json", "state,mergedAt,mergeCommit,headRefOid,url"
-        ], cwd=wt)
-        m = json.loads(q.out)
-        if m.get("headRefOid") != candidate_sha:
-            raise Stop(f"PR head moved while waiting for merge: {m}")
-        if m.get("mergedAt"):
-            mc = m.get("mergeCommit") or {}
-            merged_sha = mc.get("oid") or ""
-            break
-        if str(m.get("state")).upper() == "CLOSED":
-            raise Stop(f"PR closed without merge: {m}")
-        time.sleep(20)
-    if not merged_sha:
-        raise Stop(f"merge wait timed out for PR #{num}")
-    new_main = origin_main(repo)
-    if new_main != merged_sha:
-        # Rebase merge metadata should point at the resulting main commit. Fail if not exact.
-        raise Stop(f"merged main identity mismatch PR mergeCommit={merged_sha} origin/main={new_main}")
-    candidate_tree = sha(repo, f"{candidate_sha}^{{tree}}")
-    merged_tree = sha(repo, f"{new_main}^{{tree}}")
-    if candidate_tree != merged_tree:
-        raise Stop(f"merged tree differs from reviewed candidate tree candidate={candidate_tree} main={merged_tree}")
-    journal(repo, "MERGED", pr=num, candidate=candidate_sha, main=new_main, tree=merged_tree)
+
+    spec_raw = git(wt, "show", f"{candidate_sha}:{task_spec_path}").out.encode("utf-8")
+    gate_raw = git(wt, "show", f"{candidate_sha}:{gate_path}").out.encode("utf-8")
+    if hashlib.sha256(spec_raw).hexdigest() != publication_authority["task_spec_sha256"]:
+        raise Stop("candidate task-spec identity mismatch")
+    if hashlib.sha256(gate_raw).hexdigest() != publication_authority["gate_sha256"]:
+        raise Stop("candidate gate identity mismatch")
+    try:
+        spec = strict_json_bytes(spec_raw)
+    except AuthorityError as exc:
+        raise Stop(f"candidate task spec is invalid: {exc}") from exc
+    if not isinstance(spec, dict) or not isinstance(spec.get("tasks"), list):
+        raise Stop("candidate task spec lacks tasks")
+    rows = [row for row in spec["tasks"]
+            if isinstance(row, dict) and row.get("id") == publication_authority["task_id"]]
+    if len(rows) != 1 or rows[0].get("exit_test") != gate_path:
+        raise Stop("canonical task/gate binding mismatch")
+
+    review_path = Path(publication_authority["review_artifact_path"])
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(review_path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise Stop("review artifact is not a regular file")
+            review_raw = handle.read()
+    except OSError as exc:
+        raise Stop(f"cannot read immutable review artifact: {exc}") from exc
+    if hashlib.sha256(review_raw).hexdigest() != publication_authority["review_artifact_sha256"]:
+        raise Stop("independent-review artifact identity mismatch")
+
+    # Last main observation is publisher-owned and immediately precedes the
+    # merge command.  The exact expected head is supplied to GitHub.
+    git(wt, "fetch", "origin", "main")
+    if sha(wt, "refs/remotes/origin/main") != base_sha:
+        raise Stop("REMOTE_MAIN_CHANGED at final merge boundary")
+    run(["gh", "pr", "merge", number, "--merge",
+         "--match-head-commit", candidate_sha], cwd=wt)
+
+    merged = json.loads(run([
+        "gh", "pr", "view", number,
+        "--json", "state,mergedAt,mergeCommit,headRefOid,url",
+    ], cwd=wt).out)
+    merge_commit = merged.get("mergeCommit")
+    returned_sha = merge_commit.get("oid") if isinstance(merge_commit, dict) else None
+    if (merged.get("state") != "MERGED" or not merged.get("mergedAt")
+            or merged.get("headRefOid") != candidate_sha
+            or not isinstance(returned_sha, str)
+            or re.fullmatch(r"[0-9a-f]{40}", returned_sha) is None):
+        raise Stop(f"GitHub did not report an exact merged result: {merged}")
+
+    # GitHub's response is not success authority by itself.  Fetch and prove
+    # the returned merge commit's exact main identity, graph and tree.
+    git(wt, "fetch", "origin", "main")
+    new_main = sha(wt, "refs/remotes/origin/main")
+    if new_main != returned_sha:
+        raise Stop(f"returned merge mismatch returned={returned_sha} origin/main={new_main}")
+    parents = git(wt, "rev-list", "--parents", "-n", "1", returned_sha).out.split()
+    if parents != [returned_sha, base_sha, candidate_sha]:
+        raise Stop(f"merge parent order/count mismatch: {parents}")
+    proved_candidate_tree = sha(wt, f"{candidate_sha}^{{tree}}")
+    merged_tree = sha(wt, f"{returned_sha}^{{tree}}")
+    if proved_candidate_tree != candidate_tree or merged_tree != candidate_tree:
+        raise Stop("merge tree differs from reviewed candidate tree")
+    journal(repo, "MERGED", pr=number, candidate=candidate_sha,
+            main=new_main, tree=merged_tree)
     return new_main
 
 
