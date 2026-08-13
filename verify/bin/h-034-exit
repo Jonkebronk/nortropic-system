@@ -317,7 +317,7 @@ def production_contract():
   check(rebuilt and x1.returncode==x2.returncode==1,"K_SIGNED_REBUILDS_LOADABLE",(x1.returncode,x2.returncode))
  semantic_contract()
 
-def kernel_call(e_raw:bytes,r_raw:bytes,a_raw:bytes,e:dict,extra=(),result=None,kernel=None,replace=False,seek=False,nonregular=None):
+def kernel_call(e_raw:bytes,r_raw:bytes,a_raw:bytes,e:dict,extra=(),result=None,kernel=None,replace=False,seek=False,nonregular=None,omit=(),argv_values=None,duplicate=()):
  with tempfile.TemporaryDirectory(prefix="h034-semantic-") as d:
   w=Path(d);paths=[];fds=[];owned=[]
   for name,raw in (("evidence",e_raw),("receipt",r_raw),("allowlist",a_raw)):
@@ -335,7 +335,12 @@ def kernel_call(e_raw:bytes,r_raw:bytes,a_raw:bytes,e:dict,extra=(),result=None,
    for fd in fds:
     try:os.lseek(fd,7,os.SEEK_SET)
     except OSError:pass
-  argv=[str(kernel or KERNEL),"h033-verify","--evidence-fd",str(fds[0]),"--receipt-fd",str(fds[1]),"--allowlist-fd",str(fds[2]),"--task","h-033","--candidate",e["candidate_sha"],"--task-spec-sha256",e["task_spec_sha256"],"--gate-sha256",e["gate_sha256"],"--probe",e["probe_identity"],"--request-id",e["request_id"],"--require-result",result or e["result"],*extra]
+  values={"evidence-fd":str(fds[0]),"receipt-fd":str(fds[1]),"allowlist-fd":str(fds[2]),"task":"h-033","candidate":e["candidate_sha"],"task-spec-sha256":e["task_spec_sha256"],"gate-sha256":e["gate_sha256"],"probe":e["probe_identity"],"request-id":e["request_id"],"require-result":result or e["result"]}
+  values.update(argv_values or {});argv=[str(kernel or KERNEL),"h033-verify"]
+  for key,value in values.items():
+   if key not in omit:argv.extend(("--"+key,value))
+  for key in duplicate:argv.extend(("--"+key,values[key]))
+  argv.extend(extra)
   try:q=run(argv,pass_fds=tuple(fds),timeout=3,rig_timeout=False)[0]
   finally:
    for obj in owned:obj.close()
@@ -358,6 +363,24 @@ def semantic_contract():
  expected=f"VERIFIED_RESULT=PASS\nREQUEST_ID={e['request_id']}\nEFFECT_SHA256={e['effect_sha256']}\n"
  q=kernel_call(er,rr,ar,e,replace=True,seek=True);check(q.returncode==0 and q.stdout==expected,"K_SAME_OPEN_DESCRIPTION_PATH_REPLACEMENT")
  q1=kernel_call(er,rr,ar,e,seek=True);q2=kernel_call(er,rr,ar,e,seek=True);check(q1.returncode==q2.returncode==0 and q1.stdout==q2.stdout==expected,"K_STABLE_DOUBLE_READ")
+ wrong_digest=dict(e);right=e["effect_sha256"];wrong_digest["effect_sha256"]=("0" if right[0]!="0" else "1")+right[1:]
+ reject("EFFECT_DIGEST_RELATION",canon(wrong_digest),rr,ar,e)
+ ev2=dict(e);ev2["schema_version"]=2;reject("EVIDENCE_SCHEMA_VERSION_EXACT",canon(ev2),rr,ar,e)
+ rv2=dict(r);rv2["schema_version"]=2;rv2_raw=canon(rv2);rv2_e=dict(e);rv2_e["effect_sha256"]=sha(rv2_raw);reject("RECEIPT_SCHEMA_VERSION_EXACT",canon(rv2_e),rv2_raw,ar,rv2_e)
+ wrong_observer=dict(r);wrong_observer["observer_authority"]="other-nonempty-observer";wrong_observer_raw=canon(wrong_observer);wrong_observer_e=dict(e);wrong_observer_e["effect_sha256"]=sha(wrong_observer_raw);reject("RECEIPT_OBSERVER_AUTHORITY_EXACT",canon(wrong_observer_e),wrong_observer_raw,ar,wrong_observer_e)
+ av2=dict(a);av2["schema_version"]=2;reject("ALLOWLIST_SCHEMA_VERSION_EXACT",er,rr,canon(av2),e)
+ reject("ALLOWLIST_EMPTY",er,rr,canon({"schema_version":1,"probes":[]}),e)
+ reject("ALLOWLIST_INVALID_UTF8",er,rr,b'{"schema_version":1,"probes":["\xff"]}\n',e)
+ reject("EVIDENCE_WRONG_TOP_LEVEL",canon([]),rr,ar,e)
+ empty_receipt=b"";empty_receipt_e=dict(e);empty_receipt_e["effect_sha256"]=sha(empty_receipt);reject("RECEIPT_EMPTY_DOCUMENT",canon(empty_receipt_e),empty_receipt,ar,empty_receipt_e)
+ reject("RECEIPT_WRONG_TOP_LEVEL",canon({**e,"effect_sha256":sha(canon([]))}),canon([]),ar,{**e,"effect_sha256":sha(canon([]))})
+ reject("ALLOWLIST_EMPTY_DOCUMENT",er,rr,b"",e)
+ reject("ALLOWLIST_WRONG_TOP_LEVEL",er,rr,canon([]),e)
+ oversize_receipt=rr+b" "*(1024*1024);oversize_e=dict(e);oversize_e["effect_sha256"]=sha(oversize_receipt);reject("RECEIPT_OVERSIZE",canon(oversize_e),oversize_receipt,ar,oversize_e)
+ reject("ALLOWLIST_OVERSIZE",er,rr,ar+b" "*(1024*1024),e)
+ reject("EVIDENCE_TRAILING_DATA",er+b"{}\n",rr,ar,e)
+ trailing_receipt=rr+b"{}\n";trailing_e=dict(e);trailing_e["effect_sha256"]=sha(trailing_receipt);reject("RECEIPT_TRAILING_DATA",canon(trailing_e),trailing_receipt,ar,trailing_e)
+ reject("ALLOWLIST_TRAILING_DATA",er,rr,ar+b"{}\n",e)
  for key in E_KEYS:
   m=dict(e);m.pop(key);reject("EVIDENCE_MISSING_"+key.upper(),canon(m),rr,ar,e)
  m=dict(e);m["unexpected"]="decoy:"+e["candidate_sha"]+":"+e["task_spec_sha256"]+":"+e["gate_sha256"];reject("EVIDENCE_UNEXPECTED_DECOY",canon(m),rr,ar,e)
@@ -403,6 +426,16 @@ def semantic_contract():
  for doc in ("evidence","receipt","allowlist"):
   for kind in ("directory","pipe","socket"):
    q=kernel_call(er,rr,ar,e,nonregular=(doc,kind));check(q.returncode==1 and q.stdout=="","K_REJECT_NONREGULAR_"+doc.upper()+"_"+kind.upper())
+ required_argv=("evidence-fd","receipt-fd","allowlist-fd","task","candidate","task-spec-sha256","gate-sha256","probe","request-id","require-result")
+ for key in required_argv:
+  q=kernel_call(er,rr,ar,e,omit=(key,));check(q.returncode==1 and q.stdout=="","K_REJECT_ARGV_MISSING_"+key.upper())
+  q=kernel_call(er,rr,ar,e,duplicate=(key,));check(q.returncode==1 and q.stdout=="","K_REJECT_ARGV_DUPLICATE_"+key.upper())
+ malformed=(
+  ("evidence-fd","not-a-decimal"),("receipt-fd","-1"),("allowlist-fd","999999999999999999999"),
+  ("task","h-032"),("candidate","g"*40),("task-spec-sha256","g"*64),("gate-sha256","g"*64),
+  ("probe",""),("request-id","g"*64),("require-result","GREEN"))
+ for key,bad in malformed:
+  q=kernel_call(er,rr,ar,e,argv_values={key:bad});check(q.returncode==1 and q.stdout=="","K_REJECT_ARGV_MALFORMED_"+key.upper())
  q=kernel_call(er,rr,ar,e,extra=("--request-id",secrets.token_hex(32)));check(q.returncode==1 and q.stdout=="","K_DUPLICATE_OR_STALE_REQUEST_REJECT")
  q=kernel_call(er,rr,ar,e,extra=("--unknown","x"));check(q.returncode==1 and q.stdout=="","K_UNKNOWN_ARGUMENT_REJECT")
 

@@ -370,3 +370,11 @@ output, signs and compares stable native identities, and tests inherited same-op
 nonregular and bounded-input behavior. Fresh black-box evidence/receipt/allowlist families now isolate
 every schema and cross-binding defect; a real arm64 C consumer that is receipt-focused, uses substring
 evidence and ignores the allowlist is caught. Production remains absent and RED only on its four paths.
+
+R3 closes the remaining semantic input-space gap with isolated black-box rows. An unchanged valid
+receipt paired with a different valid-hex evidence digest now rejects as a relation failure. Exact
+schema versions and observer authority, empty/invalid allowlists, receipt/allowlist size and trailing
+data, and missing/duplicate/malformed forms of every required descriptor/binding argument are sent
+through the production kernel. Receipt-dependent evidence is recomputed only where needed to isolate
+the intended parser, exact-value or finite-bound defect. The valid positive and real permissive arm64
+C mutant controls remain intact; production remains absent and RED only on its four owner paths.
