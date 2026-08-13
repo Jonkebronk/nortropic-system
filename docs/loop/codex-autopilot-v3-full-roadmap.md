@@ -179,3 +179,11 @@ S3/h-003+h-004 förblir först och klassas KEEP. Därefter kör autopiloten SUB-
 Provider/session/reviewer READY är aldrig PASS authority. Frozen task gates, candidate identity, policy, attestation/fencing och promotion förblir mekaniska Nortropic-gränser.
 
 Den quota-avbrutna dirty h-003/h-004 test-author-worktreen från `44d525a…` återanvänds inte. När v4 senare resumear skapas fresh base-specific owner-work från amended main; den gamla worktreen lämnas orörd som evidence.
+
+## v5 bounded remaining-bootstrap delegation
+
+The owner has removed interactive approval from the remaining H-035 → H-034 → H-033 →
+H-032 → H-031 → supervisor-resume → first-real-launch bootstrap only. The complete bounded
+authority is `docs/loop/remaining-bootstrap-delegation-v1.md`. Mechanical preconditions remain
+mandatory. Publication no longer uses rebase merge: it uses guarded normal merge-commit semantics
+and proves the exact two-parent object and candidate-identical tree after fetching `origin/main`.

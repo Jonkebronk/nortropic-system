@@ -293,3 +293,52 @@ arbitrary same-UID race-free source-path execution. The legitimate owner prerequ
 GREEN, so a generic RED baseline is not manufactured. Independent review is a mandatory
 precondition for R3 publication; this candidate records that rule and contains no assertion that
 R3 received a passing review verdict.
+
+On 2026-08-13 the owner removed interactive approval only for the bounded remaining-bootstrap chain
+while retaining every mechanical gate, identity, reviewer, empirical, scope and fail-closed
+precondition. H-035 is freshly re-materialized from authoritative main `15693f9…`; old H-035
+candidates are design evidence only. The migration preserves current Python-interpreter authority,
+all sound R12 owner/task/gate/Git-object controls and H-034 absence. It additionally freezes guarded
+normal merge-commit publication: immediate base/candidate/remote/PR/file relock, `--merge` only, and
+post-merge proof of exact two-parent order plus candidate-identical tree. Production remains RED.
+
+The independent gate review of the first fresh candidate found that publication was still inferred
+from source tokens and disconnected Git-shape fixtures. The frozen gate now calls the real
+production `publish()` against disposable repositories and a hermetic GitHub command boundary.
+It observes the non-force branch push, complete repository/PR/base/head/file relock, guarded
+`gh pr merge --merge`, GitHub merged state, returned merge identity, fetched `origin/main`, ordered
+parents and candidate-identical tree as one operational chain. Hostile repository/PR metadata,
+main drift, wrong remote head or files, unmerged state, returned-SHA mismatch, malformed parent
+topology and tree mismatch all reject. A gate-local conforming witness proves the rig satisfiable;
+the dead-token/no-op publisher rejected by the same effect checks proves source text is insufficient.
+
+R2 independent review then showed that its judge performed the decisive postmerge Git inspection,
+its fake accepted a nonexistent GitHub JSON field, and its publication request omitted frozen
+spec/gate/review identities. R3 moves acceptance to the publisher's observed process effects: the
+actual module subprocess boundary records both helper-mediated and direct invocations; only real
+supported GitHub fields are modeled; the request carries candidate-bound task/spec/gate plus
+independent-review identities; and immediate premerge reads must verify them. After GitHub reports
+the merge, the publisher itself must fetch main, compare the mergeCommit SHA, inspect exact ordered
+parents, and compare candidate/merge trees. Dedicated omission and direct-subprocess mutants reject.
+
+R3 independent review found that command presence still did not prove response-dependent behavior:
+a publisher could invoke all postmerge probes, ignore every output and let judge corroboration mask
+the omission. R4 records `publisher_rejected` separately from actual graph correctness. It injects
+hostile main/parent/candidate-tree/merge-tree responses while leaving the real merge valid, and also
+runs malformed returned-SHA/parent/tree graphs through the real publisher. Each requires the
+publisher itself to raise. A complete-trace ignore-output mutant therefore fails the frozen
+production negatives rather than being rescued by judge-side Git inspection.
+
+R4 independent review then demonstrated that replacing the module's `subprocess` name after import
+missed callable aliases captured during module execution. R5 installs wrappers before `runpy`
+executes the subject and restores host functions afterward; captured `run`, `Popen`, `check_output`,
+`check_call` and `os.system` aliases retain the audited boundary. Each form is tested with an
+absolute unexpected executable that is denied without execution, and separately with legitimate
+absolute Git that passes. The prior identity, response-validation and graph controls remain intact.
+
+R5 independent review found that executable classification still trusted the requested basename.
+R6 captures real Git/GitHub canonical paths and SHA-256 identities before subject execution. Bare
+names use only the captured host PATH identity; harness symlinks pass only by resolving to an exact
+audited target. Absolute same-name fakes and PATH shadows are denied before marker execution, as is
+a byte-identical Git copy at another canonical path. Both exact system Git identities available on
+the owner host and the hermetic Git/GitHub reference symlinks remain positive.
