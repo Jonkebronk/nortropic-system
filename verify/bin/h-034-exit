@@ -358,12 +358,18 @@ def escaped_string(raw:bytes,value:str,escape:bytes)->bytes:
  if raw.count(token)!=1:raise Rig("escaped-string target is not unique")
  return raw.replace(token,replacement,1)
 
-def coordinated_escaped_control_documents():
- e,r,a=documents();suffix="\x01evil"
- probe=e["probe_identity"]+suffix;path=r["probe_path"]+suffix;marker=r["effect_marker"]+suffix
- e["probe_identity"]=r["probe_identity"]=a["probes"][0]["probe_identity"]=probe
- r["probe_path"]=a["probes"][0]["probe_path"]=path
- r["effect_marker"]=a["probes"][0]["effect_marker"]=marker
+def coordinated_escaped_control_documents(codepoint:int,field:str):
+ e,r,a=documents();suffix=chr(codepoint)+"evil"
+ if field=="probe_identity":
+  probe=e["probe_identity"]+suffix
+  e["probe_identity"]=r["probe_identity"]=a["probes"][0]["probe_identity"]=probe
+ elif field=="probe_path":
+  path=r["probe_path"]+suffix
+  r["probe_path"]=a["probes"][0]["probe_path"]=path
+ elif field=="effect_marker":
+  marker=r["effect_marker"]+suffix
+  r["effect_marker"]=a["probes"][0]["effect_marker"]=marker
+ else:raise Rig("unknown coordinated control field")
  rr=canon(r);e["effect_sha256"]=sha(rr)
  return canon(e),rr,canon(a),e
 
@@ -389,8 +395,14 @@ def semantic_contract():
    bad_rr=escaped_string(rr,r[key],escape);em=dict(e);em["effect_sha256"]=sha(bad_rr)
    reject("RECEIPT_ESCAPED_"+label+"_"+key.upper(),canon(em),bad_rr,ar,em)
   for key in probe_strings:reject("ALLOWLIST_ESCAPED_"+label+"_"+key.upper(),er,rr,escaped_string(ar,a["probes"][0][key],escape),e)
- coordinated_er,coordinated_rr,coordinated_ar,coordinated_e=coordinated_escaped_control_documents()
- reject("COORDINATED_ESCAPED_CONTROL_BINDINGS",coordinated_er,coordinated_rr,coordinated_ar,coordinated_e)
+ # Isolate parser rejection from cross-document mismatch: each C0 value is bound
+ # consistently everywhere that field appears and the receipt digest is refreshed.
+ # U+0000 cannot exist in argv, so its probe/caller row remains covered by the
+ # single-document parser controls above; path and marker still get coordinated rows.
+ for codepoint in range(0x20):
+  for field in (("probe_identity",) if codepoint else ())+("probe_path","effect_marker"):
+   coordinated_er,coordinated_rr,coordinated_ar,coordinated_e=coordinated_escaped_control_documents(codepoint,field)
+   reject(f"COORDINATED_C0_{codepoint:02X}_{field.upper()}",coordinated_er,coordinated_rr,coordinated_ar,coordinated_e)
  ue,ur,ua=documents();unicode_probe="h033-räksmörgås-雪";unicode_marker="effekt-åäö-雪";unicode_path="/Library/Application Support/Nortropic/provenance/probes/"+unicode_probe
  ue["probe_identity"]=ur["probe_identity"]=ua["probes"][0]["probe_identity"]=unicode_probe
  ur["probe_path"]=ua["probes"][0]["probe_path"]=unicode_path;ur["effect_marker"]=ua["probes"][0]["effect_marker"]=unicode_marker
