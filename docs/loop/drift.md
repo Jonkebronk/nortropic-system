@@ -418,6 +418,13 @@ dependency and canonical-gate checks, with absence/duplicate/wrong-dependency/wr
 both downstream tasks and an exact four-file H-034 artifact set. H-035's owner routing, publication,
 identity, atomicity and provider-observation mechanism controls are otherwise byte-for-byte unchanged.
 
+The H-033 builder candidate adds one closed provenance CLI. Its fixture-only gate operation performs
+protected no-follow opens, stable bounded reads and exact descriptor handoff to the repository H-034
+kernel; normal verification never accepts a caller-selected authority root or kernel. Production
+request creation is delegated only to fixed protected OS helpers and fails closed when the canonical
+producer identity or authority installation is unavailable. On an unprovisioned host this boundary is
+ODÖMBART by the frozen contract, while all disposable product controls remain judgeable.
+
 Independent review of the first H-033 contract found that live owner acceptance required an evidence
 leaf owned by merely any non-requester UID. The additive remediation applies one shared live-`lstat`
 predicate to judge controls and canonical owner acceptance: evidence UID must equal the exact
