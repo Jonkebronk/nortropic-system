@@ -204,7 +204,12 @@ def judge_controls():
   t=rows[0];check(t.get("authority_class")=="owner_authority" and t.get("depends_on")==["h-035"],"F_H034_OWNER_AFTER_H035")
   check(t.get("allowed_write")==[] and t.get("owner_author_allowed_write")==OWNER and t.get("exit_test")=="verify/bin/h-034-exit","F_H034_EXACT_OWNER_SURFACE")
  reg=json.load(open(REG));check(reg.get("owner_production_paths")==OWNER,"F_REGISTRY_EXACT_H034_RESERVATION")
- check(not any(t.get("id")=="h-033" for t in spec["tasks"]),"F_H033_NOT_PREMATURELY_MATERIALIZED")
+ h033=[t for t in spec["tasks"] if t.get("id")=="h-033"]
+ check(len(h033)==1,"F_H033_EXACTLY_ONE_MATERIALIZED")
+ if h033:
+  t=h033[0]
+  check(t.get("depends_on")==["h-034"],"F_H033_DEPENDS_EXACT_H034")
+  check(t.get("exit_test")=="verify/bin/h-033-exit","F_H033_CANONICAL_GATE")
  closed_argv_selftests();manifest_schema_selftest()
  receipt_isolation();permissive_c_receipt_mutant();permissive_c_evidence_allowlist_mutant()
  for result in ("PASS","FAIL","ODÖMBART"):

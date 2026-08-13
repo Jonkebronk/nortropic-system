@@ -409,11 +409,36 @@
       ]
     },
     {
+      "id": "h-033",
+      "slice": "H033_AUTHENTICATED_RUNNER_PROVENANCE",
+      "authority_class": "ordinary",
+      "title": "Authenticated runner provenance and protected H034 handoff",
+      "summary": "A narrowly typed H-033 runner obtains fresh probe effects from the dedicated _nortropic_provenance execution identity, pairs them with an independently authenticated root-owned observer receipt and a protected allowlist, safely opens the three canonical regular objects, and delegates the final semantic verdict to the exact frozen H-034 native kernel.",
+      "allowed_write": [
+        "controller/provenance/**",
+        "tests/controller/provenance/**",
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
+      "owner_author_allowed_write": [],
+      "exit_test": "verify/bin/h-033-exit",
+      "exit_criterion": "AUTHORITY AND IDENTITY: H-033 follows final H-034. It does not replace or reinterpret H-034. A successful request executes exactly one of h033-auth-pass-v1, h033-auth-fail-v1 or h033-auth-odombart-v1 under the OS-resolved dedicated _nortropic_provenance identity. The requester can select only task=h-033, exact candidate/spec/gate bindings and one frozen probe identity; it cannot choose request_id, result, effect, executable, producer identity, observer identity, authority root, destination or arbitrary command. A root-owned observer independently authenticates the live probe executable identity against the protected allowlist and writes the exact ordered root-owned-h033-observer-v1 receipt outside producer authority. Producer-authored evidence is never its own execution oracle. PROTECTED ORIGIN: the canonical roots are /Library/Application Support/Nortropic/provenance/evidence, /Library/Application Support/Nortropic/provenance/probe-receipts and /Library/Application Support/Nortropic/provenance/probes.json. The account, roots, observer and allowlist are resolved from this frozen contract and OS facts, never request/environment/mutable user configuration. Every accepted parent and leaf is no-follow, non-symlink, non-requester-writable and non-replaceable by the requester. Evidence is producer-owned; receipt and allowlist are root-owned. Safe opening binds openat/no-follow parent traversal, fstat regular-file identity, complete bounded read and stable same-opened-object metadata. Path stat followed by reopen, symlink/hardlink substitution, outside copy, writable parent, type change, rename race, trailing mutation or object drift rejects; fixture-only race synchronization cannot authorize normal verification. FRESHNESS AND BINDINGS: every trusted request_id is fresh cryptographically strong lowercase 64-hex and caller-unselectable. Two otherwise identical requests differ. Each accepted request is single-consumption; stale request/evidence/receipt replay, mixed request families and wrong task/candidate/task-spec/gate/probe/result/effect digest reject. PASS, FAIL and ODÖMBART authenticate only as themselves. H034 HANDOFF: after safe opening, H-033 invokes the exact repository verify/h034/kernel artifact whose digest and native identity are frozen by H-034, with exactly the three already-opened descriptors and exact task/candidate/spec/gate/probe/request/result arguments. It neither parses around, substitutes, copies nor reimplements the verdict. Exit/stdout are the H-034 result; kernel rejection remains rejection, timeout/cleanup inability is ODÖMBART, and the entire child process group is bounded and cleaned. Black-box differential families compare the production handoff with direct execution of the frozen kernel across valid tri-state, malformed, stale, binding and substitution cases. A fake verifier, PATH shadow, alternate kernel, producer-only receipt, hardcoded result, permissive parser or disconnected helper must fail. LIFECYCLE: H-034 remains green after exact-one H-033 materialization; absence, duplicate H-033, wrong dependency or wrong canonical h-033 gate fails lifecycle controls. The H-033 gate's current pre-builder RED is exactly AUTHENTICATED_RUNNER_COMPONENT_ABSENT. Owner-environment identity/protection inability is ODÖMBART, never PASS or product FAIL. MATERIAL_PROPERTIES_JUDGE_ONLY=NONE.",
+      "docs_impact": [
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
+      "depends_on": [
+        "h-034"
+      ],
+      "max_changed_files": 24,
+      "max_added_lines": 3200
+    },
+    {
       "id": "h-034",
       "slice": "H034_NATIVE_FINITE_VERIFIER_KERNEL",
       "authority_class": "owner_authority",
       "title": "Native finite verifier kernel for authenticated provenance semantics",
-      "summary": "A fixed C verification plan becomes the native semantic authority consumed later by H-033. Authority is the exact final signed arm64 macOS Mach-O, bound by a closed non-shell build recipe and strict identity manifest. It has zero third-party runtime dependencies, never uses Python as runtime authority, consumes three already-opened regular descriptors, validates strict ordered finite JSON and fresh bindings, and fails closed with bounded process-group cleanup.",
+      "summary": "A fixed C verification plan is the native semantic authority consumed by H-033. Authority is the exact final signed arm64 macOS Mach-O, bound by a closed non-shell build recipe and strict identity manifest. It has zero third-party runtime dependencies, never uses Python as runtime authority, consumes three already-opened regular descriptors, validates strict ordered finite JSON and fresh bindings, and fails closed with bounded process-group cleanup.",
       "allowed_write": [],
       "owner_author_allowed_write": [
         "controller/h034-native/**",
