@@ -472,14 +472,6 @@ def ensure_dependencies() -> None:
             raise Stop(f"required executable missing: {name}")
     if sys.version_info < (3, 11):
         raise Stop(f"Python 3.11+ required, got {sys.version.split()[0]}")
-    help_text = run(["codex", "exec", "--help"], check=False).out
-    for flag in ("--json", "--output-schema"):
-        if flag not in help_text:
-            raise Stop(f"Codex CLI lacks required flag {flag}")
-    global_help = run(["codex", "--help"], check=False).out
-    for flag in ("--ask-for-approval", "--sandbox"):
-        if flag not in global_help:
-            raise Stop(f"Codex CLI lacks required global flag {flag}")
     run(["gh", "auth", "status"])
 
 

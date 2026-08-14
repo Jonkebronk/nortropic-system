@@ -765,3 +765,16 @@ The generic subprocess helper remains available for Git, GitHub, node and contro
 rejects any executable basename whose Unicode case-fold is `codex` before its sole subprocess.run site.
 No alternate provider process component, session store or selector was introduced. The frozen whole-
 module source audit and its process/import/reflection mutants remain the bounded enforcement surface.
+
+## 2026-08-14 — H-031 post-publication dependency-preflight remediation
+
+The first real file-backed observer execution after publication exposed a call-site conflict that the
+frozen role-routing gate did not exercise. `ensure_dependencies()` retained two historical
+`codex --help` probes through generic `run()`, while H-031 intentionally made that boundary reject every
+Codex basename. Consequently both `status` and `doctor` stopped before their actual observer work.
+
+The dependency preflight now checks executable presence without executing Codex. The removed help text
+was not identity authority and could not certify the later process: provider identity, exact supported
+model/effort argv and the actual process effect remain bound at the sole H-032-protected `run_codex`
+boundary. Generic `run()` remains closed to Codex, and no subprocess site or alternate launch route was
+added. Physical file-backed `status` and `doctor` runs now proceed through dependency preflight.
