@@ -1135,3 +1135,12 @@ also inventories every reachable `ast.stmt` class supported by the gate runtime 
 fails closed on an unmodeled class instead of silently ignoring it. Subject, guard,
 class-pattern and exception-type Popen mutants reject, while ordinary nonprocess
 match and except forms remain admissible.
+
+R29 separates constructor identity from constructor execution: a class/value pattern
+may reference `subprocess.Popen` without creating a process. Constant match subjects,
+literal patterns, guards and ordered exhaustive cases provide bounded reachability;
+unknown subjects remain conservative. Try paths similarly distinguish provable
+no-raise, explicit raise and unknown effects before traversing handler types/bodies.
+Thus a Popen class-pattern, a guard behind a known nonmatch and a handler after
+`try: pass` are legitimate, while a matching guard call or explicit-raise handler-type
+call remains a recorded extra process site and rejects.
