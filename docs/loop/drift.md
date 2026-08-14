@@ -732,3 +732,12 @@ classes. The same review removed a gap in the early-stop composition: complete r
 joins task identity, upstream identity, source form and observer separation as a mandatory precondition
 before either upstream execution or subject import. Authority-shadow and missing-API mutants bind both
 transitions.
+
+Nineteenth review used two binding mechanisms outside ordinary Name(Store). An exception handler stores
+its `as` target as a string AST field, allowing temporary `AUTHORITY_LIB` replacement, and public
+assignment to `Path.resolve` changed the exact expression's semantics before restoring the class. All
+exception and global/nonlocal bindings of protected authority names now reject. `Path` itself is a
+non-capturable capability: it may appear in annotations or as the direct constructor/class-method root,
+but not as an alias, container value or class-attribute mutation target. The gate deliberately targets
+the owner Python AST version; newer pattern syntax cannot compile there and therefore cannot reach
+subject import. Exact exception-binding and public-monkeypatch mutants bind the closure.

@@ -304,6 +304,17 @@ def process_shape(text: str) -> dict[str, object]:
         return {"boundary_ok": False, "observer_ok": False, "detail": f"syntax:{exc}"}
     owners = owner_map(tree)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    annotation_nodes: set[ast.AST] = set()
+    for candidate in ast.walk(tree):
+        annotations = []
+        if isinstance(candidate, ast.arg) and candidate.annotation is not None:
+            annotations.append(candidate.annotation)
+        elif isinstance(candidate, (ast.FunctionDef, ast.AsyncFunctionDef)) and candidate.returns is not None:
+            annotations.append(candidate.returns)
+        elif isinstance(candidate, ast.AnnAssign):
+            annotations.append(candidate.annotation)
+        for annotation in annotations:
+            annotation_nodes.update(ast.walk(annotation))
     funcs = {node.name for node in ast.walk(tree)
              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     calls: dict[str, set[str]] = {name: set() for name in funcs}
@@ -326,6 +337,15 @@ def process_shape(text: str) -> dict[str, object]:
             violations.append((owner, node.lineno, f"protected-binding:{node.name}"))
         if isinstance(node, ast.arg) and node.arg in {"str", "Path", "AUTHORITY_LIB", "__file__"}:
             violations.append((owner, node.lineno, f"protected-argument:{node.arg}"))
+        if (isinstance(node, ast.ExceptHandler)
+                and node.name in {"str", "Path", "AUTHORITY_LIB", "__file__"}):
+            violations.append((owner, node.lineno, f"protected-except-binding:{node.name}"))
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            protected_declarations = sorted(
+                set(node.names) & {"str", "Path", "AUTHORITY_LIB", "__file__"})
+            if protected_declarations:
+                violations.append((owner, node.lineno,
+                                   f"protected-declaration:{protected_declarations}"))
         if isinstance(node, ast.Assign) and any(
                 isinstance(target, ast.Name) and target.id == "AUTHORITY_LIB"
                 for target in node.targets):
@@ -341,6 +361,16 @@ def process_shape(text: str) -> dict[str, object]:
                 and node.id == "AUTHORITY_LIB"
                 and not isinstance(parents.get(node), ast.Assign)):
             violations.append((owner, node.lineno, "authority-lib-rebinding"))
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "Path":
+            parent = parents.get(node)
+            grandparent = parents.get(parent) if parent is not None else None
+            direct_path_call = isinstance(parent, ast.Call) and parent.func is node
+            direct_path_class_call = (
+                isinstance(parent, ast.Attribute) and parent.value is node
+                and isinstance(grandparent, ast.Call) and grandparent.func is parent
+            )
+            if node not in annotation_nodes and not direct_path_call and not direct_path_class_call:
+                violations.append((owner, node.lineno, "capturable-path-class"))
         if isinstance(node, ast.AsyncFunctionDef):
             violations.append((owner, node.lineno, f"deferred-async-function:{node.name}"))
         if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -871,6 +901,15 @@ try:
         "STR_SHADOW": (
             "\ndef str(value):\n"
             "    return '/private/tmp/h031-shadow' if value is AUTHORITY_LIB else value\n"
+        ),
+        "AUTHORITY_EXCEPT_BINDING": (
+            "\ntry:\n    raise Exception('/private/tmp/h031-shadow')\n"
+            "except Exception as AUTHORITY_LIB:\n    pass\n"
+        ),
+        "PATH_PUBLIC_MONKEYPATCH": (
+            "\nh031_resolve = Path.resolve\n"
+            "Path.resolve = lambda self: Path('/private/tmp/a/b/c')\n"
+            "Path.resolve = h031_resolve\n"
         ),
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
