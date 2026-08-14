@@ -631,3 +631,9 @@ single exact `super().__init__()` call already present, and `getattr` is admitte
 read-only `os.O_*` fallback constants production uses. Module dictionaries, reflected builtins, Python
 frames and function globals are explicit mutants. This closes the path that dynamically recovered FFI
 and keeps the scoped audit hook within the source domain it can actually observe.
+
+Fifth review found a remaining composition error: a safe-form check on a builtin call is ineffective if
+the builtin can first be stored under another name. Sensitive builtin names are now capabilities at
+every load site. `getattr` and `globals` must be the direct callee of their separately checked exact safe
+forms; all references or aliases reject. `vars`, `locals`, dynamic-code and import builtins reject on load.
+Mutants cover assignment aliases that previously recovered ctypes without adding an import node.

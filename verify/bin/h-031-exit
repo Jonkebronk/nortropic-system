@@ -226,9 +226,13 @@ def process_shape(text: str) -> dict[str, object]:
             )
             if not ((isinstance(parent, ast.Attribute) and parent.value is node) or safe_getattr):
                 violations.append((owner, node.lineno, f"bare-process-module:{node.id}"))
-        if (isinstance(node, ast.Name) and node.id in {"__import__", "__builtins__"}
-                and isinstance(node.ctx, ast.Load)):
-            violations.append((owner, node.lineno, f"dynamic-import-builtin:{node.id}"))
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            direct_call = isinstance(parent, ast.Call) and parent.func is node
+            if node.id in {"__import__", "__builtins__", "vars", "locals", "eval", "exec", "compile"}:
+                violations.append((owner, node.lineno, f"sensitive-builtin:{node.id}"))
+            elif node.id in {"getattr", "globals"} and not direct_call:
+                violations.append((owner, node.lineno, f"sensitive-builtin-reference:{node.id}"))
         if isinstance(node, ast.Name) and node.id == "sys" and isinstance(node.ctx, ast.Load):
             parent = parents.get(node)
             direct_attribute = isinstance(parent, ast.Attribute) and parent.value is node
@@ -464,6 +468,10 @@ try:
         "CTYPES_LIBC": "\nimport ctypes\nctypes.CDLL(None).system(b'/usr/bin/true')\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
+        "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
+        "GLOBALS_ALIAS": "\nh031_globals = globals\nh031_globals()['__builtins__']['__import__']('ctypes')\n",
+        "VARS_ALIAS": "\nh031_vars = vars\nh031_vars(json)['__builtins__']['__import__']('ctypes')\n",
+        "LOCALS_ALIAS": "\nh031_locals = locals\nh031_locals()['__builtins__']['__import__']('ctypes')\n",
         "SYS_FRAME_GLOBALS": "\nsys._getframe().f_globals['subprocess'].Popen(['/bin/true'])\n",
         "FUNCTION_GLOBALS": "\nsha256_bytes.__globals__['subprocess'].Popen(['/bin/true'])\n",
         "PROCESS_DICTIONARY": "\nsubprocess.__dict__['Popen'](['/bin/true'])\n",
