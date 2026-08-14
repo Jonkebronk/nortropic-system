@@ -1040,3 +1040,12 @@ resolved before inventory, and the structured control-flow check rejects branch,
 context-manager or exception bypass around the sole timeout-bearing wait/communicate.
 Atomic same-object promotion, bounded retained-source verification and live-phase skip
 semantics remain unchanged.
+
+R18 makes identity and process origins concrete. Provider-family authority parsing and
+derived path/digest/snapshot values seed IDENTITY; actual argument tags flow into helper
+formals context-sensitively and returned descriptor capabilities flow back to callers,
+with recursion rejected conservatively. subprocess module, Popen constructor and process
+object tags propagate through aliases, containers, attributes and helper returns before
+the sole-site CFG check. Exact-body admissibility now separately executes preadv, readv,
+BufferedReader.read, raw.read and a mandatory nested bounded helper through complete
+fresh-process run_codex effects, without crediting the exact production verdict.
