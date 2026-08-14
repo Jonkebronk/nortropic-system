@@ -712,9 +712,9 @@ if mode == 'output_then_fail': sys.exit(17)
             if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
                     and isinstance(node.func.value,ast.Name)
                     and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
-                return {"__attrs__":{kw.arg:r38_assignment_value(kw.value,env)
-                                     for kw in node.keywords if kw.arg},
-                        "__attr_names__":frozenset(kw.arg for kw in node.keywords if kw.arg)}
+                return {"__objref__":f"namespace:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}",
+                        "__initial_attrs__":{kw.arg:r38_assignment_value(kw.value,env)
+                                             for kw in node.keywords if kw.arg}}
             return r34_value(node,env)
         def r39_store_flow(target,env,delete=False):
             if isinstance(target,ast.Name):
@@ -722,8 +722,9 @@ if mode == 'output_then_fail': sys.exit(17)
                 return True,frozenset()
             if isinstance(target,ast.Attribute):
                 base=r34_value(target.value,env)
-                if isinstance(base,dict) and "__attrs__" in base:
-                    if delete and target.attr not in base.get("__attr_names__",frozenset()):
+                if isinstance(base,dict) and "__objref__" in base:
+                    attrs=env.get("__heap__",{}).get(base["__objref__"],{})
+                    if delete and target.attr not in attrs:
                         return False,frozenset({"AttributeError"})
                     return True,frozenset()
                 return True,frozenset({"UNKNOWN"})
@@ -762,11 +763,9 @@ if mode == 'output_then_fail': sys.exit(17)
                 if isinstance(target,ast.Name): updated[target.id]=value
                 elif isinstance(target,ast.Attribute):
                     base=r34_value(target.value,updated)
-                    if (isinstance(base,dict) and "__attrs__" in base
-                            and isinstance(target.value,ast.Name)):
-                        replacement={**base,"__attrs__":{**base["__attrs__"],target.attr:value},
-                                     "__attr_names__":base.get("__attr_names__",frozenset())|{target.attr}}
-                        updated[target.value.id]=replacement
+                    if isinstance(base,dict) and "__objref__" in base:
+                        heap=dict(updated.get("__heap__",{}));attrs=dict(heap.get(base["__objref__"],{}))
+                        attrs[target.attr]=value;heap[base["__objref__"]]=attrs;updated["__heap__"]=heap
                 elif isinstance(target,ast.Starred):
                     return r37_store_target(target.value,value,updated)
                 elif isinstance(target,(ast.Tuple,ast.List)):
@@ -801,6 +800,9 @@ if mode == 'output_then_fail': sys.exit(17)
                 for env in normals:
                     if isinstance(statement,(ast.Assign,ast.AnnAssign)):
                         value=r38_assignment_value(statement.value,env)
+                        if isinstance(value,dict) and "__objref__" in value:
+                            heap=dict(env.get("__heap__",{}));heap[value["__objref__"]]=dict(value.pop("__initial_attrs__",{}))
+                            env={**env,"__heap__":heap}
                         targets=statement.targets if isinstance(statement,ast.Assign) else [statement.target]
                         expr_normal,expr_raises=r31_expr_flow(statement.value)
                         exceptions.extend((exc,dict(env)) for exc in expr_raises)
@@ -849,11 +851,9 @@ if mode == 'output_then_fail': sys.exit(17)
                             if one_normal and isinstance(target,ast.Name): env.pop(target.id,None)
                             if one_normal and isinstance(target,ast.Attribute):
                                 base=r34_value(target.value,env)
-                                if (isinstance(base,dict) and "__attrs__" in base
-                                        and isinstance(target.value,ast.Name)):
-                                    attrs=dict(base["__attrs__"]);attrs.pop(target.attr,None)
-                                    env[target.value.id]={**base,"__attrs__":attrs,
-                                        "__attr_names__":base.get("__attr_names__",frozenset())-{target.attr}}
+                                if isinstance(base,dict) and "__objref__" in base:
+                                    heap=dict(env.get("__heap__",{}));attrs=dict(heap.get(base["__objref__"],{}))
+                                    attrs.pop(target.attr,None);heap[base["__objref__"]]=attrs;env["__heap__"]=heap
                         if target_normal: next_normals.append(dict(env))
                     elif isinstance(statement,ast.Expr):
                         expr_normal,expr_raises=r38_expr_flow(statement.value,env)
@@ -1975,6 +1975,19 @@ if mode == 'output_then_fail': sys.exit(17)
             "else:\n    holder.value = 3\n"
             "try:\n    del holder.value\n"
             "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        namespace_alias_delete_negative=not r28_control(
+            "import types\nholder = types.SimpleNamespace(value=1)\nalias = holder\n"
+            "try:\n    del alias.value\n    holder.value\n"
+            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        namespace_alias_store_positive=r28_control(
+            "import types\nholder = types.SimpleNamespace()\nalias = holder\nalias.value = 1\n"
+            "try:\n    del holder.value\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        namespace_alias_branch_negative=not r28_control(
+            "import types\nholder = types.SimpleNamespace()\nalias = holder\n"
+            "try:\n    if repo:\n        alias.value = 1\n"
+            "    else:\n        del holder.value\n"
+            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
         helper_multikey_positive=r28_control(
             "def _r36_types():\n    return {'runtime': RuntimeError, 'value': ValueError}\n"
             "try:\n    M = _r36_types()\n    E = M['runtime']\n"
@@ -2025,6 +2038,10 @@ if mode == 'output_then_fail': sys.exit(17)
         r25_static_mutants_ok=(r25_static_mutants_ok
                                and namespace_branch_isolation_negative
                                and namespace_sibling_positive)
+        r25_static_mutants_ok=(r25_static_mutants_ok
+                               and namespace_alias_delete_negative
+                               and namespace_alias_store_positive
+                               and namespace_alias_branch_negative)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own

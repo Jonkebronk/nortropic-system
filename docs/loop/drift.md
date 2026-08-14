@@ -1225,3 +1225,8 @@ R41 makes abstract path environments persistent: nested namespace state is never
 through a shallow-copy alias. Attribute stores and deletes create replacement values and
 environments, so one branch cannot contaminate its sibling. The bounded pure local
 SimpleNamespace constructor remains admissible without granting reflection or process power.
+
+R42 separates stable abstract object identity from path-local heap versions. Same-path
+aliases share an object id, so mutation through either alias is visible through all of
+them; each branch receives a persistent copy-on-write heap. Only the audited pure
+`types.SimpleNamespace` constructor path is admitted, with dynamic/reflection routes closed.
