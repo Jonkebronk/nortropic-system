@@ -66,6 +66,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -317,9 +318,28 @@ canonical=pathlib.Path(os.environ['NORTROPIC_KUVERT']).parent/'result.json'
 mode=os.environ.get('H032_RESULT_MODE','valid')
 hostile=canonical.parent/'worker-hostile-result-write'
 hostile_error='NOT_ATTEMPTED'
+live_attacks={}
 if mode == 'hostile':
+    safe_root=pathlib.Path(os.environ['H032_SAFE_ATTACK_ROOT']).resolve()
+    cwd_resolved=pathlib.Path.cwd().resolve()
+    trust_resolved=pathlib.Path(os.environ['NORTROPIC_TRUST_ROOT']).resolve()
+    if safe_root not in cwd_resolved.parents or safe_root not in trust_resolved.parents:
+        raise RuntimeError('hostile fixture escaped disposable H032 root')
     try: hostile.write_text('worker-owned'); hostile_error='WRITE_SUCCEEDED'
     except Exception as exc: hostile_error=type(exc).__name__
+    git_root=canonical.parents[3]
+    targets={
+      'global_events':canonical.parents[2]/'events.jsonl',
+      'envelope':pathlib.Path(os.environ['NORTROPIC_KUVERT']),
+      'sibling_run':canonical.parent.parent/'attacker-sibling'/'result.json',
+      'refs':git_root/'refs'/'heads'/'h032-attacker',
+      'config':pathlib.Path.cwd()/'config'/'codex-provider-identity.json',
+      'hooks':git_root/'hooks'/'h032-attacker',
+      'source':pathlib.Path.cwd()/'scripts'/'nortropic-codex-autopilot.py',
+      'trust':pathlib.Path(os.environ['NORTROPIC_TRUST_ROOT'])/'h032-attacker',
+    }
+    for name,target in targets.items():
+        live_attacks[name]=op(['/bin/sh','-c','mkdir -p "$(dirname "$1")" 2>/dev/null; echo x >> "$1"','sh',str(target)])
 payload={'role':'TEST_AUTHOR','outcome':'READY','summary':'physical result anchor','changed_files':[],
  'blocking_findings':[],'tests':[],'allowed_write_violation':False,
  'frozen_artifacts_modified':False,'production_files_modified':False,
@@ -364,7 +384,8 @@ elif mode == 'partial_then_complete':
 elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'canonical_result':str(canonical),'mode':mode,'hostile_path':str(hostile),'hostile_error':hostile_error}))
+parent_stat=out.parent.lstat() if out.parent.exists() else None
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'canonical_result':str(canonical),'mode':mode,'hostile_path':str(hostile),'hostile_error':hostile_error,'live_attacks':live_attacks,'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,'is_symlink':out.parent.is_symlink(),'entries':sorted(p.name for p in out.parent.iterdir())} if parent_stat else None}))
 thread='h032'
 if mode == 'wrong_thread': thread='foreign-thread'
 if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
@@ -390,6 +411,7 @@ if mode == 'output_then_fail': sys.exit(17)
     old_path = os.environ.get("PATH", "")
     os.environ.update(PATH=str(path_shadow) + os.pathsep + old_path,
                       H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider),
+                      H032_SAFE_ATTACK_ROOT=str(work),
                       H032_HOST_DIRECT_MARKER=str(work / "HOST_DIRECT_EXECUTED"))
 
     counter = 0
@@ -433,7 +455,20 @@ if mode == 'output_then_fail': sys.exit(17)
     def starts(repo: Path) -> int:
         p = module.journal_root(repo) / "events.jsonl"
         if not p.exists(): return 0
-        return sum(json.loads(x).get("event") == "AGENT_START" for x in p.read_text().splitlines() if x.strip())
+        count = 0
+        for line in p.read_text(encoding="utf-8", errors="strict").splitlines():
+            if not line.strip(): continue
+            try: value = strict_json(line)
+            except Exception: continue
+            count += isinstance(value, dict) and value.get("event") == "AGENT_START"
+        return count
+
+    def safe_capture() -> dict[str, object]:
+        try:
+            value = strict_json(capture.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except Exception:
+            return {}
 
     # H-032 owns only provider launch selection. The actual production generic
     # dispatcher must continue to execute Git, GitHub and arbitrary fixed
@@ -460,12 +495,17 @@ if mode == 'output_then_fail': sys.exit(17)
 
     attempt_sequence = [0]
     audit_active: list[dict[str, object] | None] = [None]
+    last_attempt_observed: list[dict[str, object] | None] = [None]
     def audit_inventory(event: str, args: tuple[object, ...]) -> None:
         active = audit_active[0]
         if active is None or event not in {"os.mkdir", "open", "os.remove", "os.rename"}:
             return
         created = active["created"]
         assert isinstance(created, set)
+        if event == "open":
+            opened = active["opened"]
+            assert isinstance(opened, list)
+            opened.append(tuple(args))
         values = args[1:2] if event == "os.rename" else args[:1]
         for value in values:
             if isinstance(value, (str, bytes, os.PathLike)):
@@ -489,7 +529,7 @@ if mode == 'output_then_fail': sys.exit(17)
         subprocess.run([GIT, "--version"], env=dict(os.environ),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         arena_before = {str(path.absolute()) for path in arena.rglob("*")}
-        observed: dict[str, object] = {"created": set()}
+        observed: dict[str, object] = {"created": set(), "opened": []}
         audit_active[0] = observed
         try:
             try:
@@ -503,6 +543,7 @@ if mode == 'output_then_fail': sys.exit(17)
             if prior_tmpdir is None: os.environ.pop("TMPDIR", None)
             else: os.environ["TMPDIR"] = prior_tmpdir
         cap_after = capture.stat().st_mtime_ns if capture.exists() else -1
+        last_attempt_observed[0] = observed
         created = observed["created"]
         assert isinstance(created, set)
         residue_paths = {Path(value) for value in created if Path(value).exists()}
@@ -525,7 +566,7 @@ if mode == 'output_then_fail': sys.exit(17)
     valid = attempt(valid_repo)
     family_absent = (not valid[0]
                      and "provider identity authority has unexpected keys" in valid[1])
-    cap = json.loads(capture.read_text()) if capture.exists() else {}
+    cap = safe_capture()
     argv0 = Path(cap.get("argv0", ""))
     host_snapshot = Path(cap.get("host_path", "/private/tmp/h032-missing-host-snapshot"))
     family_effect_ok = (
@@ -551,7 +592,7 @@ if mode == 'output_then_fail': sys.exit(17)
         if capture.exists(): capture.unlink()
         os.environ["H032_RESULT_MODE"] = mode
         case_result = attempt(make_repo(str(provider)))
-        case_capture = json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else {}
+        case_capture = safe_capture()
         output = Path(case_capture.get("output_path", "/private/tmp/h032-missing-output"))
         canonical = Path(case_capture.get("canonical_result", "/private/tmp/h032-missing-canonical"))
         hostile = Path(case_capture.get("hostile_path", "/private/tmp/h032-missing-hostile"))
@@ -636,9 +677,15 @@ if mode == 'output_then_fail': sys.exit(17)
             if kind == "symlink": target.symlink_to(target_guard)
             elif kind == "directory": target.mkdir()
             elif kind == "hardlink": os.link(target_guard, target)
+            elif kind == "fifo": os.mkfifo(target, 0o600)
+            elif kind == "socket":
+                sock = socket.socket(socket.AF_UNIX); sock.bind(str(target)); sock.close()
+            elif kind == "parent_swap":
+                moved = target.parent.with_name(target.parent.name + "-moved")
+                target.parent.rename(moved); target.parent.mkdir()
             else: raise RuntimeError(kind)
             seeded.append(target)
-            return original(argv, *args, **kwargs)
+            return original(["1" if value == "86400" else value for value in flat], *args, **kwargs)
         module.subprocess.Popen = inject
         try:
             outcome = attempt(attack_repo)
@@ -646,10 +693,11 @@ if mode == 'output_then_fail': sys.exit(17)
             module.subprocess.Popen = original
         intact = target_guard.read_text(encoding="utf-8") == "guard"
         for path in seeded:
-            if path.is_symlink() or path.is_file(): path.unlink()
+            if path.is_symlink() or (path.exists() and not path.is_dir()): path.unlink()
             elif path.is_dir(): path.rmdir()
         return outcome, len(seeded) == 1, intact
-    object_attacks = {kind: object_attack(kind) for kind in ("symlink", "directory", "hardlink")}
+    object_attacks = {kind: object_attack(kind) for kind in
+                      ("symlink", "directory", "hardlink", "fifo", "socket", "parent_swap")}
     object_attacks_ok = all(not value[0][0] and value[0][2] == 0
                             and value[1] and value[2] for value in object_attacks.values())
 
@@ -697,6 +745,23 @@ if mode == 'output_then_fail': sys.exit(17)
 
     oversized_positive = result_case("exact_max")
     os.environ.pop("H032_RESULT_MODE", None)
+
+    consume_case = result_case("valid")
+    consume_capture = consume_case[1]
+    consume_path = Path(consume_capture.get("canonical_result", "/private/tmp/h032-missing-consume"))
+    consume_observed = last_attempt_observed[0] or {"opened": []}
+    consume_reads = 0
+    for opened in consume_observed.get("opened", []):
+        if not opened or not isinstance(opened[0], (str, bytes, os.PathLike)):
+            continue
+        if Path(opened[0]).absolute() != consume_path.absolute():
+            continue
+        mode = opened[1] if len(opened) > 1 else None
+        flags = opened[2] if len(opened) > 2 else None
+        if (isinstance(mode, str) and mode.startswith("r")) or (
+                isinstance(flags, int) and flags & os.O_ACCMODE == os.O_RDONLY):
+            consume_reads += 1
+    exactly_once_ok = consume_case[0][0] and consume_reads == 1
 
     atomic_repo = make_repo(str(provider))
     atomic_box: list[tuple[bool, str, int, int, list[str]]] = []
@@ -791,7 +856,7 @@ if mode == 'output_then_fail': sys.exit(17)
             physical_case = (True, "ADMITTED")
         except Exception as exc:
             physical_case = (False, f"{type(exc).__name__}:{exc}")
-        physical_capture = json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else {}
+        physical_capture = safe_capture()
     finally:
         os.environ.pop("H032_RESULT_MODE", None)
     physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
@@ -804,13 +869,22 @@ if mode == 'output_then_fail': sys.exit(17)
         and live_git in physical_canonical.parents
         and live_git not in physical_output.parents
         and not physical_output.exists())
+    staging = cap.get("output_parent") or {}
+    staging_ok = (
+        staging.get("uid") == os.getuid()
+        and staging.get("mode") == 0o700
+        and staging.get("is_symlink") is False
+        and staging.get("entries") == [valid_output.name]
+        and not valid_output.parent.exists())
     def rejected_clean(case) -> bool:
         result, _capture, output_exists, canonical_exists, hostile_exists = case
         return not result[0] and result[2] == 1 and not output_exists and not canonical_exists and not hostile_exists
     result_delivery_ok = (
-        valid[0] and valid_schema and physical_topology_ok and stale_rejects and replay_rejects
+        valid[0] and valid_schema and physical_topology_ok and staging_ok
+        and stale_rejects and replay_rejects
         and external_replay_ok
-        and oversized_positive[0][0] and atomic_ok and timeout_ok and object_attacks_ok
+        and oversized_positive[0][0] and exactly_once_ok
+        and atomic_ok and timeout_ok and object_attacks_ok
         and cleanup_error_ok and interruption_quiescent
         and valid_output.is_absolute()
         and valid_output != valid_canonical
@@ -818,9 +892,14 @@ if mode == 'output_then_fail': sys.exit(17)
         and module.journal_root(valid_repo) not in valid_output.parents
         and not valid_output.exists() and valid_canonical.is_file()
         and all(rejected_clean(case) for case in negative_cases.values())
-        and negative_cases["hostile"][1].get("hostile_error") != "WRITE_SUCCEEDED")
+        and negative_cases["hostile"][1].get("hostile_error") != "WRITE_SUCCEEDED"
+        and set(negative_cases["hostile"][1].get("live_attacks", {})) == {
+            "global_events", "envelope", "sibling_run", "refs",
+            "config", "hooks", "source", "trust"}
+        and all(value != 0 for value in
+                negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} consume={consume_case[0], consume_reads, exactly_once_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
