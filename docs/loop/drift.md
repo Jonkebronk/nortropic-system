@@ -859,3 +859,23 @@ Post-publication integration exposed three gate-only false negatives hidden by t
 Provider race mutation is now reset and digest-anchored before each host control. Cleanup admits the exact
 root `events.jsonl` journal leaf but no sibling or subtree. The R11 fd-reuse experiment now surrounds the
 actual live snapshot read for both file-handle and descriptor APIs, rather than requiring an os.open shape.
+
+## 2026-08-14 — H-032 code-mode execution family activated
+
+Production now consumes authority schema v2 as one coherent six-key document per launch. The main Codex
+Mach-O and its required `codex-code-mode-host` sibling are independently opened with no-follow semantics,
+checked as executable regular files on those descriptors, read under the 256 MiB per-member ceiling and
+hashed before any private execution root exists. Only bytes from those opened objects are materialized.
+
+The private root contains exact `provider` and `codex-code-mode-host` basenames alongside the already
+authority-bound controller Python snapshot. All members and the root are made non-writable first; fresh
+complete SHA-256 reads occur afterward and immediately before AGENT_START and the sole Popen boundary.
+The controller invokes only `provider`. Codex discovers and executes the verified same-root host as its
+descendant inside the existing G20 namespace, so the sidecar is neither a second controller-selected
+provider nor ambient PATH authority. Cleanup removes the complete root after success and every exception.
+
+The frozen H-032 gate is green at 130 PASS / 0 FAIL. Its matrix includes coherent schema rejection,
+same-opened-object source races for both members, live descriptor reuse and aliases, post-protection
+corruption, final-transition ordering, valid oversize effects, exact provider-to-host ancestry, G20
+namespace denials and residue-free success/failure cleanup. H-031 continues to bind the exact role route
+at this execution boundary; H-033 and the older H-034/H-035/invariant suites remain unchanged.
