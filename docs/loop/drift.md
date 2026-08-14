@@ -624,3 +624,10 @@ could recover subprocess. H-031 needs no new dependency to add a constant role p
 Design B envelope now freezes the product's exact existing import inventory. Bare or reflected `sys`
 is rejected; only direct non-registry attributes already used by production remain admissible. This
 composition makes the effect hook meaningful without claiming it observes arbitrary native code.
+
+Fourth review then recovered dynamic import through private state on modules already in the frozen
+inventory. The final reflection envelope is structural: all private attributes are rejected except the
+single exact `super().__init__()` call already present, and `getattr` is admitted only for the two exact
+read-only `os.O_*` fallback constants production uses. Module dictionaries, reflected builtins, Python
+frames and function globals are explicit mutants. This closes the path that dynamically recovered FFI
+and keeps the scoped audit hook within the source domain it can actually observe.

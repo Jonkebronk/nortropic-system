@@ -244,6 +244,15 @@ def process_shape(text: str) -> dict[str, object]:
                 parent = parents.get(node)
                 if not (isinstance(parent, ast.Call) and parent.func is node):
                     violations.append((owner, node.lineno, f"process-reference:{module}.{attr}"))
+        if isinstance(node, ast.Attribute) and node.attr.startswith("_"):
+            safe_super_init = (
+                node.attr == "__init__"
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name) and node.value.func.id == "super"
+                and not node.value.args and not node.value.keywords
+            )
+            if not safe_super_init:
+                violations.append((owner, node.lineno, f"private-reflection:{node.attr}"))
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile"}:
@@ -261,6 +270,16 @@ def process_shape(text: str) -> dict[str, object]:
             )
             if not safe_source_lookup:
                 violations.append((owner, node.lineno, f"dynamic-namespace:{node.func.id}"))
+        if isinstance(node.func, ast.Name) and node.func.id == "getattr":
+            safe_os_flag = (
+                len(node.args) == 3 and not node.keywords
+                and isinstance(node.args[0], ast.Name) and node.args[0].id == "os"
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in {"O_CLOEXEC", "O_NOFOLLOW"}
+                and isinstance(node.args[2], ast.Constant) and node.args[2].value == 0
+            )
+            if not safe_os_flag:
+                violations.append((owner, node.lineno, "dynamic-getattr"))
         if isinstance(node.func, ast.Name) and owner in calls and node.func.id in funcs:
             calls[owner].add(node.func.id)
         if isinstance(node.func, ast.Name) and node.func.id in {"getattr", "vars"} and node.args:
@@ -443,6 +462,10 @@ try:
         "SYS_DICTIONARY_MODULES": "\nsys.__dict__['modules']['subprocess'].Popen(['/bin/true'])\n",
         "SYS_ALIAS_MODULES": "\nh031_sys = sys\nh031_sys.modules['subprocess'].Popen(['/bin/true'])\n",
         "CTYPES_LIBC": "\nimport ctypes\nctypes.CDLL(None).system(b'/usr/bin/true')\n",
+        "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
+        "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
+        "SYS_FRAME_GLOBALS": "\nsys._getframe().f_globals['subprocess'].Popen(['/bin/true'])\n",
+        "FUNCTION_GLOBALS": "\nsha256_bytes.__globals__['subprocess'].Popen(['/bin/true'])\n",
         "PROCESS_DICTIONARY": "\nsubprocess.__dict__['Popen'](['/bin/true'])\n",
         "DYNAMIC_CODE": "\neval(\"__import__('subprocess').Popen(['/bin/true'])\")\n",
     }
