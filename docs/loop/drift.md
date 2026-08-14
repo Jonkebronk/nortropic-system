@@ -695,3 +695,13 @@ rejection; the first three audit events had merely been omitted and umask emitte
 access is now frozen to the exact current product attributes and its sole read-only environment form,
 with process-state APIs prohibited. The runtime oracle independently snapshots cwd/environment/umask,
 restores them after measurement, and aborts audited mutation operations after recording their attempt.
+
+Fifteenth review aliased the builtin `type`, hiding dynamic class creation from the direct-call rule,
+and moved already-admitted `os.write`/`os.close` capabilities before role validation. The latter mutate
+descriptor state without Python audit events, so cwd/environment/umask snapshots alone were incomplete.
+`type` may now be loaded only as the direct scalar schema call checked separately. Every current OS
+descriptor-effect call is frozen by exact owner and count, preventing reference capture or an added site.
+The invalid-role execution additionally replaces all available OS/process mutation functions and Popen
+with recording guards that raise before invocation; stdout and stderr are isolated and must stay empty.
+Those guards compose with, rather than replace, the audit hook, process-state snapshot and persistent
+artifact comparisons.
