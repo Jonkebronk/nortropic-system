@@ -778,3 +778,22 @@ was not identity authority and could not certify the later process: provider ide
 model/effort argv and the actual process effect remain bound at the sole H-032-protected `run_codex`
 boundary. Generic `run()` remains closed to Codex, and no subprocess site or alternate launch route was
 added. Physical file-backed `status` and `doctor` runs now proceed through dependency preflight.
+
+## 2026-08-14 — H-032 execution-family authority amendment after first launch
+
+The first real autonomous launch falsified the single-executable H-032 model. The verified Codex 0.147
+snapshot started and emitted `thread.started`, but stable `code_mode_host` resolves a required native
+sibling named `codex-code-mode-host`; the isolated snapshot root contained only `provider`, so no
+structured result was produced. This is a provider execution-family dependency, not a second provider
+selector or a caller-configured helper.
+
+Owner measurement binds the installed sibling at the exact native vendor path: arm64 Mach-O,
+49,991,616 bytes, SHA-256 `a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d`.
+The main provider digest remains `19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37`.
+Authority schema v2 binds both absolute paths and digests. The frozen H-032 amendment measures both
+from no-follow opened objects, requires exact private basenames `provider` and
+`codex-code-mode-host` in one root, final-rehashes both, directly executes only the provider, denies
+namespace mutation of either under G20 and requires whole-family cleanup on every path. H-031's role
+routing fixture is upgraded to the same family authority; its route and process-source controls are
+unchanged. The owner pre-builder state is RED only for
+`CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT`; no production implementation is included here.

@@ -1,5 +1,5 @@
 #!/bin/bash -p
-# h-032-exit — fresh owner-frozen Codex executable/provider identity boundary
+# h-032-exit — fresh owner-frozen Codex executable-family identity boundary
 #
 # Predicted controls before execution:
 #   valid locked bytes under an arbitrary basename -> admitted through a private snapshot
@@ -77,6 +77,8 @@ h033_gate = repo / "verify/bin/h-033-exit"
 checks: list[tuple[str, bool, str]] = []
 EXPECTED_PROVIDER_PATH = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex")
 EXPECTED_PROVIDER_SHA256 = "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37"
+EXPECTED_CODE_MODE_HOST_PATH = EXPECTED_PROVIDER_PATH.with_name("codex-code-mode-host")
+EXPECTED_CODE_MODE_HOST_SHA256 = "a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d"
 GIT = "/usr/bin/git"
 
 def check(key: str, ok: bool, detail: str) -> None:
@@ -107,17 +109,24 @@ def authority_shape(raw: str) -> tuple[bool, str]:
         value = strict_json(raw)
     except Exception as exc:
         return False, f"{type(exc).__name__}:{exc}"
-    keys = {"schema_version", "provider", "executable_path", "executable_sha256"}
+    keys = {"schema_version", "provider", "executable_path", "executable_sha256",
+            "code_mode_host_path", "code_mode_host_sha256"}
     if not isinstance(value, dict) or set(value) != keys:
         return False, "top-level/keys"
     path = value["executable_path"]
     digest = value["executable_sha256"]
+    host_path = value["code_mode_host_path"]
+    host_digest = value["code_mode_host_sha256"]
     ok = (
-        type(value["schema_version"]) is int and value["schema_version"] == 1
+        type(value["schema_version"]) is int and value["schema_version"] == 2
         and type(value["provider"]) is str and value["provider"] == "openai-codex"
         and type(path) is str and bool(path) and Path(path).is_absolute()
         and type(digest) is str and len(digest) == 64
         and digest == digest.lower() and all(c in "0123456789abcdef" for c in digest)
+        and type(host_path) is str and bool(host_path) and Path(host_path).is_absolute()
+        and type(host_digest) is str and len(host_digest) == 64
+        and host_digest == host_digest.lower()
+        and all(c in "0123456789abcdef" for c in host_digest)
     )
     return ok, "exact" if ok else "value/type"
 
@@ -179,22 +188,29 @@ try:
     authority_raw = authority_source.read_text(encoding="utf-8")
     shape_ok, shape_detail = authority_shape(authority_raw)
     authority = strict_json(authority_raw)
-    exact_keys = {"schema_version", "provider", "executable_path", "executable_sha256"}
+    exact_keys = {"schema_version", "provider", "executable_path", "executable_sha256",
+                  "code_mode_host_path", "code_mode_host_sha256"}
     apath = Path(authority.get("executable_path", ""))
     digest = authority.get("executable_sha256", "")
+    host_path = Path(authority.get("code_mode_host_path", ""))
+    host_digest = authority.get("code_mode_host_sha256", "")
     authority_ok = (
         shape_ok and set(authority) == exact_keys
-        and authority.get("schema_version") == 1
+        and authority.get("schema_version") == 2
         and authority.get("provider") == "openai-codex"
         and apath == EXPECTED_PROVIDER_PATH and digest == EXPECTED_PROVIDER_SHA256
+        and host_path == EXPECTED_CODE_MODE_HOST_PATH
+        and host_digest == EXPECTED_CODE_MODE_HOST_SHA256
         and stat.S_ISREG(authority_lstat.st_mode) and not authority_source.is_symlink()
         and apath.is_absolute()
         and isinstance(digest, str) and len(digest) == 64
         and digest == digest.lower() and all(c in "0123456789abcdef" for c in digest)
         and apath.exists() and not apath.is_symlink() and apath.is_file()
         and os.access(apath, os.X_OK) and sha256(apath) == digest
+        and host_path.exists() and not host_path.is_symlink() and host_path.is_file()
+        and os.access(host_path, os.X_OK) and sha256(host_path) == host_digest
     )
-    check("K0", authority_ok, f"shape={shape_detail} provider={authority.get('provider')} path={apath} hash_match={apath.is_file() and sha256(apath) == digest}")
+    check("K0", authority_ok, f"shape={shape_detail} provider={authority.get('provider')} path={apath} host={host_path} main_hash_match={apath.is_file() and sha256(apath) == digest} host_hash_match={host_path.is_file() and sha256(host_path) == host_digest}")
 
     base = work / "base"; base.mkdir()
     sh(GIT, "init", "-q", cwd=base)
@@ -211,7 +227,9 @@ try:
     provider.write_text("""#!/usr/bin/env python3
 import hashlib,json,os,pathlib,subprocess,sys
 self_path=pathlib.Path(sys.argv[0]); root=self_path.parent
+host_path=root/'codex-code-mode-host'
 before=hashlib.sha256(self_path.read_bytes()).hexdigest()
+host_before=hashlib.sha256(host_path.read_bytes()).hexdigest() if host_path.is_file() else None
 def op(argv):
     return subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
 attacks={
@@ -221,14 +239,23 @@ attacks={
  'rename':op(['/bin/mv',str(self_path),str(root/'moved-provider')]),
  'create':op(['/bin/sh','-c','echo x > "$1"','sh',str(root/'replacement-provider')]),
  'parent_rename':op(['/bin/mv',str(root),str(root)+'-moved']),
+ 'host_write':op(['/bin/sh','-c','echo x >> "$1"','sh',str(host_path)]),
+ 'host_chmod':op(['/bin/chmod','700',str(host_path)]),
+ 'host_unlink':op(['/bin/rm','-f',str(host_path)]),
+ 'host_rename':op(['/bin/mv',str(host_path),str(root/'moved-host')]),
 }
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'attacks':attacks}))
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks}))
 args=sys.argv[1:]; out=pathlib.Path(args[args.index('-o')+1])
 out.write_text(json.dumps({'role':'TEST_AUTHOR','outcome':'READY','owner_decision_required':False,'blocking_findings':[]}))
 print(json.dumps({'type':'thread.started','thread_id':'h032'}))
 """, encoding="utf-8")
     provider.chmod(0o700)
     good_bytes = provider.read_bytes(); good_hash = hashlib.sha256(good_bytes).hexdigest()
+    code_mode_host = provider_dir / "arbitrary-sidecar-source"
+    code_mode_host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    code_mode_host.chmod(0o700)
+    host_good_bytes = code_mode_host.read_bytes()
+    host_good_hash = hashlib.sha256(host_good_bytes).hexdigest()
 
     path_shadow = work / "path-shadow"; path_shadow.mkdir()
     shadow_marker = work / "PATH_SHADOW_RAN"
@@ -239,13 +266,23 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                       H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider))
 
     counter = 0
-    def make_repo(path_value: str, hash_value: str = good_hash) -> Path:
+    def authority_document(path_value: str, hash_value: str = good_hash,
+                           host_path_value: str = str(code_mode_host),
+                           host_hash_value: str = host_good_hash) -> dict[str, object]:
+        return {"schema_version":2,"provider":"openai-codex",
+                "executable_path":path_value,"executable_sha256":hash_value,
+                "code_mode_host_path":host_path_value,
+                "code_mode_host_sha256":host_hash_value}
+
+    def make_repo(path_value: str, hash_value: str = good_hash,
+                  host_path_value: str = str(code_mode_host),
+                  host_hash_value: str = host_good_hash) -> Path:
         nonlocal_counter[0] += 1
         repo = work / f"repo-{nonlocal_counter[0]}"
         shutil.copytree(base, repo)
         cfg = repo / "config/codex-provider-identity.json"; cfg.parent.mkdir(parents=True)
-        cfg.write_text(json.dumps({"schema_version":1,"provider":"openai-codex",
-                                   "executable_path":path_value,"executable_sha256":hash_value}), encoding="utf-8")
+        cfg.write_text(json.dumps(authority_document(path_value, hash_value,
+                                                     host_path_value, host_hash_value)), encoding="utf-8")
         return repo
     def make_raw_repo(raw: str) -> Path:
         repo = make_repo(str(provider))
@@ -303,16 +340,32 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
 
     valid_repo = make_repo(str(provider))
     valid = attempt(valid_repo)
+    family_absent = (not valid[0]
+                     and "provider identity authority has unexpected keys" in valid[1])
     cap = json.loads(capture.read_text()) if capture.exists() else {}
     argv0 = Path(cap.get("argv0", ""))
-    check("K1", valid[0] and valid[2] == 1, f"valid={valid}")
+    host_snapshot = Path(cap.get("host_path", "/private/tmp/h032-missing-host-snapshot"))
+    family_effect_ok = (
+        valid[0] and valid[2] == 1 and valid[3] == 1
+        and argv0.name == "provider" and host_snapshot.name == "codex-code-mode-host"
+        and argv0.parent == host_snapshot.parent
+        and cap.get("sha256") == good_hash
+        and cap.get("host_sha256") == host_good_hash
+        and cap.get("attacks") and all(v != 0 for v in cap["attacks"].values())
+        and not argv0.exists() and not host_snapshot.exists() and not argv0.parent.exists()
+    )
+    check("K_CODE_MODE_HOST_IDENTITY_BOUNDARY", family_effect_ok,
+          f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} cleanup={not argv0.parent.exists()}")
+    check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
-    check("K3", argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash,
+    check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
           f"source={provider} argv0={argv0} hash={cap.get('sha256')}")
     attacks = cap.get("attacks", {})
-    check("K4", cap.get("sha256") == good_hash and attacks and all(v != 0 for v in attacks.values()),
+    check("K4", family_absent or (cap.get("sha256") == good_hash and attacks and all(v != 0 for v in attacks.values())),
           f"executed_sha={cap.get('sha256')} namespace_attacks={attacks}")
-    check("K5", not argv0.exists(), f"snapshot_exists_after={argv0.exists()}")
+    check("K5", family_absent or (not argv0.exists() and not host_snapshot.exists()
+          and not argv0.parent.exists()),
+          f"snapshot_exists_after={argv0.exists()} host_exists_after={host_snapshot.exists()} root_exists_after={argv0.parent.exists()}")
 
     # Restore source fixture for independent negative controls.
     provider.write_bytes(good_bytes); provider.chmod(0o700)
@@ -325,25 +378,42 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     cases.append(("NONEXEC", make_repo(str(noexec))))
     drift = provider_dir / "drift"; drift.write_bytes(good_bytes + b"\n# drift\n"); drift.chmod(0o700)
     cases.append(("HASH_DRIFT", make_repo(str(drift))))
+    host_link = provider_dir / "linked-host"; host_link.symlink_to(code_mode_host)
+    cases.append(("HOST_RELATIVE", make_repo(str(provider), host_path_value="codex-code-mode-host")))
+    cases.append(("HOST_SYMLINK", make_repo(str(provider), host_path_value=str(host_link))))
+    cases.append(("HOST_DIRECTORY", make_repo(str(provider), host_path_value=str(provider_dir))))
+    host_noexec = provider_dir / "host-noexec"; host_noexec.write_bytes(host_good_bytes); host_noexec.chmod(0o600)
+    cases.append(("HOST_NONEXEC", make_repo(str(provider), host_path_value=str(host_noexec))))
+    host_drift = provider_dir / "host-drift"; host_drift.write_bytes(host_good_bytes + b"drift"); host_drift.chmod(0o700)
+    cases.append(("HOST_HASH_DRIFT", make_repo(str(provider), host_path_value=str(host_drift))))
     missing_repo = make_repo(str(provider)); (missing_repo / "config/codex-provider-identity.json").unlink()
     cases.append(("MISSING_AUTHORITY", missing_repo))
     malformed_repo = make_repo(str(provider)); (malformed_repo / "config/codex-provider-identity.json").write_text("{}")
     cases.append(("MALFORMED_AUTHORITY", malformed_repo))
 
     authority_negative = {
-        "MISSING_KEY": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider)}),
-        "UNEXPECTED_KEY": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":good_hash,"extra":1}),
+        "MISSING_KEY": json.dumps({key:value for key,value in authority_document(str(provider)).items()
+                                    if key != "code_mode_host_sha256"}),
+        "UNEXPECTED_KEY": json.dumps({**authority_document(str(provider)),"extra":1}),
         "TOPLEVEL_TYPE": "[]",
-        "SCHEMA_WRONG_TYPE": json.dumps({"schema_version":True,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":good_hash}),
-        "PROVIDER_WRONG_VALUE": json.dumps({"schema_version":1,"provider":"other","executable_path":str(provider),"executable_sha256":good_hash}),
-        "PATH_WRONG_TYPE": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":7,"executable_sha256":good_hash}),
-        "SHA_WRONG_TYPE": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":7}),
-        "EMPTY_PATH": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":"","executable_sha256":good_hash}),
-        "EMPTY_SHA": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":""}),
-        "SHA_WRONG_LENGTH": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":"a"*63}),
-        "SHA_NONHEX": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":"g"*64}),
-        "DUPLICATE_PATH": '{"schema_version":1,"provider":"openai-codex","executable_path":"/first","executable_path":'+json.dumps(str(provider))+',"executable_sha256":"'+good_hash+'"}',
-        "DUPLICATE_SHA": '{"schema_version":1,"provider":"openai-codex","executable_path":'+json.dumps(str(provider))+',"executable_sha256":"'+good_hash+'","executable_sha256":"'+good_hash+'"}',
+        "SCHEMA_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"schema_version":True}),
+        "PROVIDER_WRONG_VALUE": json.dumps({**authority_document(str(provider)),"provider":"other"}),
+        "PATH_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"executable_path":7}),
+        "SHA_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"executable_sha256":7}),
+        "EMPTY_PATH": json.dumps({**authority_document(str(provider)),"executable_path":""}),
+        "EMPTY_SHA": json.dumps({**authority_document(str(provider)),"executable_sha256":""}),
+        "SHA_WRONG_LENGTH": json.dumps({**authority_document(str(provider)),"executable_sha256":"a"*63}),
+        "SHA_NONHEX": json.dumps({**authority_document(str(provider)),"executable_sha256":"g"*64}),
+        "HOST_PATH_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"code_mode_host_path":7}),
+        "HOST_SHA_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":7}),
+        "HOST_EMPTY_PATH": json.dumps({**authority_document(str(provider)),"code_mode_host_path":""}),
+        "HOST_EMPTY_SHA": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":""}),
+        "HOST_SHA_WRONG_LENGTH": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":"a"*63}),
+        "HOST_SHA_NONHEX": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":"g"*64}),
+        "DUPLICATE_PATH": json.dumps(authority_document(str(provider))).replace('"executable_path":', '"executable_path":"/first","executable_path":', 1),
+        "DUPLICATE_SHA": json.dumps(authority_document(str(provider))).replace('"executable_sha256":', '"executable_sha256":"' + good_hash + '","executable_sha256":', 1),
+        "DUPLICATE_HOST_PATH": json.dumps(authority_document(str(provider))).replace('"code_mode_host_path":', '"code_mode_host_path":"/first","code_mode_host_path":', 1),
+        "DUPLICATE_HOST_SHA": json.dumps(authority_document(str(provider))).replace('"code_mode_host_sha256":', '"code_mode_host_sha256":"' + host_good_hash + '","code_mode_host_sha256":', 1),
         "BROKEN_JSON": "{",
     }
     for name, raw in authority_negative.items():
@@ -359,7 +429,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     provider.write_bytes(good_bytes); provider.chmod(0o700)
     hardlink = provider_dir / "hardlink-provider"; os.link(provider, hardlink)
     hardlink_result = attempt(make_repo(str(hardlink)))
-    check("K_HARDLINK_ALLOWED", hardlink_result[0], f"result={hardlink_result}")
+    check("K_HARDLINK_ALLOWED", family_absent or hardlink_result[0], f"result={hardlink_result}")
 
     # Fresh validation must occur at every launch in the same imported process.
     provider.write_bytes(good_bytes); provider.chmod(0o700)
@@ -367,18 +437,19 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     first = attempt(fresh_provider_repo)
     provider.write_bytes(good_bytes + b"\n# provider drift\n"); provider.chmod(0o700)
     second = attempt(fresh_provider_repo)
-    check("K_FRESH_PROVIDER", first[0] and not second[0] and second[2] == 0 and second[3] == 0,
+    check("K_FRESH_PROVIDER", family_absent or (first[0] and not second[0]
+          and second[2] == 0 and second[3] == 0),
           f"first={first} second_after_drift={second}")
 
     provider.write_bytes(good_bytes); provider.chmod(0o700)
     fresh_authority_repo = make_repo(str(provider))
     first_authority = attempt(fresh_authority_repo)
     (fresh_authority_repo / "config/codex-provider-identity.json").write_text(
-        json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),
+        json.dumps({**authority_document(str(provider)),
                     "executable_sha256":"0"*64}), encoding="utf-8")
     second_authority = attempt(fresh_authority_repo)
-    check("K_FRESH_AUTHORITY", first_authority[0] and not second_authority[0]
-          and second_authority[2] == 0 and second_authority[3] == 0,
+    check("K_FRESH_AUTHORITY", family_absent or (first_authority[0] and not second_authority[0]
+          and second_authority[2] == 0 and second_authority[3] == 0),
           f"first={first_authority} second_after_authority_drift={second_authority}")
 
     # GR-01: replace the authority pathname immediately AFTER an opened source
@@ -422,9 +493,54 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     finally:
         builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
     race_cap = json.loads(capture.read_text()) if capture.exists() else {}
-    check("K_SOURCE_PATH_REOPEN_RACE", swapped[0] and race_result[0]
-          and race_cap.get("sha256") == good_hash and not b_marker.exists(),
+    check("K_SOURCE_PATH_REOPEN_RACE", family_absent or (swapped[0] and race_result[0]
+          and race_cap.get("sha256") == good_hash and not b_marker.exists()),
           f"path_replaced={swapped[0]} result={race_result} executed_sha={race_cap.get('sha256')} b={b_marker.exists()}")
+
+    # The required sibling is independently bound to the same opened object;
+    # replacing its source pathname after open must not change copied bytes.
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+    host_source_b = provider_dir / "host-source-b"
+    host_source_b.write_bytes(host_good_bytes + b"unverified-b")
+    host_source_b.chmod(0o700)
+    host_race_repo = make_repo(str(provider))
+    original_builtin_open, original_io_open, original_os_open = builtins.open, io.open, os.open
+    host_swapped = [False]
+    def host_swap_after_open(file, *args, **kwargs):
+        f = original_io_open(file, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        try: same = Path(file) == code_mode_host
+        except TypeError: same = False
+        if same and "r" in str(mode) and not host_swapped[0]:
+            os.replace(host_source_b, code_mode_host); host_swapped[0] = True
+        return f
+    def host_swap_after_builtin_open(file, *args, **kwargs):
+        f = original_builtin_open(file, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        try: same = Path(file) == code_mode_host
+        except TypeError: same = False
+        if same and "r" in str(mode) and not host_swapped[0]:
+            os.replace(host_source_b, code_mode_host); host_swapped[0] = True
+        return f
+    def host_swap_after_os_open(file, flags, *args, **kwargs):
+        fd = original_os_open(file, flags, *args, **kwargs)
+        try: same = Path(file) == code_mode_host
+        except TypeError: same = False
+        if (same and not (flags & os.O_WRONLY)
+                and not (flags & os.O_RDWR) and not host_swapped[0]):
+            os.replace(host_source_b, code_mode_host); host_swapped[0] = True
+        return fd
+    builtins.open, io.open, os.open = host_swap_after_builtin_open, host_swap_after_open, host_swap_after_os_open
+    try:
+        host_race_result = attempt(host_race_repo)
+    finally:
+        builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
+    host_race_cap = json.loads(capture.read_text()) if capture.exists() else {}
+    check("K_CODE_MODE_HOST_SOURCE_REOPEN_RACE", family_absent or (
+          host_swapped[0] and host_race_result[0]
+          and host_race_cap.get("host_sha256") == host_good_hash),
+          f"path_replaced={host_swapped[0]} result={host_race_result} host_sha={host_race_cap.get('host_sha256')}")
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
 
     # A regular-looking path swapped to a symlink after path-stat must not gain
     # trust. This requires the regular-file decision on the opened object plus
@@ -464,7 +580,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                           and ((stat_swapped[0] and not opened_identity_result[0]
                                 and opened_identity_result[2] == 0)
                                or (not stat_swapped[0] and opened_identity_result[0])))
-    check("K_OPENED_REGULAR_IDENTITY", opened_identity_ok,
+    check("K_OPENED_REGULAR_IDENTITY", family_absent or opened_identity_ok,
           f"opened_regular_checks={opened_object_regular_checks} path_swapped_to_symlink={stat_swapped[0]} result={opened_identity_result}")
     if provider.is_symlink(): provider.unlink()
 
@@ -484,7 +600,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
             if p == provider or not p.is_file() or not os.access(p, os.X_OK): return False
             h = hashlib.sha256()
             with original_io_open(p, "rb") as f: h.update(f.read())
-            return h.hexdigest() == good_hash
+            return p.name == "codex-code-mode-host" and h.hexdigest() == host_good_hash
         except Exception:
             return False
     def corrupt(p: Path) -> None:
@@ -519,10 +635,13 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     finally:
         builtins.open, io.open, os.open, subprocess.Popen = original_builtin_open, original_io_open, original_os_open, original_popen
     residue = [str(p) for p in snapshots if p.exists() or p.parent.exists()]
-    check("K_FINAL_SNAPSHOT_REHASH", mutated[0] and not rehash_result[0]
-          and rehash_result[2] == 0 and not bad_marker.exists(),
+    check("K_FINAL_SNAPSHOT_REHASH", family_absent or (mutated[0] and not rehash_result[0]
+          and rehash_result[2] == 0 and not bad_marker.exists()),
           f"mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
-    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", mutated[0] and not residue,
+    check("K_CODE_MODE_HOST_FINAL_REHASH", family_absent or (mutated[0]
+          and not rehash_result[0] and rehash_result[2] == 0 and not bad_marker.exists()),
+          f"sidecar_mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
+    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (mutated[0] and not residue),
           f"observed={[str(p) for p in snapshots]} residue={residue}")
 
     # Authority is one byte observation: replacing the document immediately
@@ -531,8 +650,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     coherent_repo = make_repo(str(provider))
     coherent_cfg = coherent_repo / "config/codex-provider-identity.json"
     replacement_cfg = coherent_repo / "config/replacement.json"
-    replacement_cfg.write_text(json.dumps({"schema_version":1,"provider":"openai-codex",
-        "executable_path":str(provider),"executable_sha256":"0"*64}), encoding="utf-8")
+    replacement_cfg.write_text(json.dumps({**authority_document(str(provider)),
+        "executable_sha256":"0"*64}), encoding="utf-8")
     original_builtin_open, original_io_open, original_os_open = builtins.open, io.open, os.open
     authority_swapped = [False]
     def authority_read_swap(file, *args, **kwargs):
@@ -563,15 +682,17 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         coherent_result = attempt(coherent_repo)
     finally:
         builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
-    check("K_COHERENT_AUTHORITY", authority_swapped[0] and coherent_result[0],
+    check("K_COHERENT_AUTHORITY", family_absent or (authority_swapped[0] and coherent_result[0]),
           f"document_replaced_after_open={authority_swapped[0]} result={coherent_result}")
 
     # GR-02/GR-06 owner-runner control. Evidence may be consumed only when
     # every immutable input equals THIS checked-out candidate.
     g20 = work / "g20"; trust = g20 / "trust"; ws = g20 / "ws"
     trust.mkdir(parents=True); ws.mkdir()
-    protected = trust / "snapshot"; protected.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    protected.chmod(0o500); trust.chmod(0o500)
+    protected = trust / "provider"; protected.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    protected_host = trust / "codex-code-mode-host"
+    protected_host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    protected.chmod(0o500); protected_host.chmod(0o500); trust.chmod(0o500)
     envelope = g20 / "envelope.json"; envelope.write_text('{"task_id":"h-032"}\n', encoding="utf-8")
     launcher = source.parents[1] / "controller/launch/cli"
     task_spec = source.parents[1] / "specs/tasks.spec.json"
@@ -580,10 +701,14 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     binding = {"schema_version": 1, "task": "h-032", "candidate_sha": candidate_sha,
                "task_spec_sha256": sha256(task_spec), "h032_gate_sha256": sha256(gate_path),
                "g20_probe_identity": "controller/launch/cli:" + sha256(launcher)}
-    attack = ('set +e; echo x >> "$1/snapshot"; echo WRITE=$?; '
-              'chmod 700 "$1/snapshot"; echo CHMOD=$?; '
-              'unlink "$1/snapshot"; echo UNLINK=$?; '
-              'mv "$1/snapshot" "$1/moved"; echo RENAME=$?; '
+    attack = ('set +e; echo x >> "$1/provider"; echo WRITE=$?; '
+              'chmod 700 "$1/provider"; echo CHMOD=$?; '
+              'unlink "$1/provider"; echo UNLINK=$?; '
+              'mv "$1/provider" "$1/moved"; echo RENAME=$?; '
+              'echo x >> "$1/codex-code-mode-host"; echo HOST_WRITE=$?; '
+              'chmod 700 "$1/codex-code-mode-host"; echo HOST_CHMOD=$?; '
+              'unlink "$1/codex-code-mode-host"; echo HOST_UNLINK=$?; '
+              'mv "$1/codex-code-mode-host" "$1/moved-host"; echo HOST_RENAME=$?; '
               'echo y > "$1/replacement"; echo CREATE=$?; '
               'mv "$1" "$1-moved"; echo PARENT_RENAME=$?')
     env = dict(os.environ, NORTROPIC_TRUST_ROOT=str(trust))
@@ -598,14 +723,18 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         check("K_G20_NAMESPACE", False, "ODÖMBART nested sandbox-exec förbjuden; owner-runner krävs")
     else:
         denial_lines = {f"{name}=1" for name in
-                        ("WRITE","CHMOD","UNLINK","RENAME","CREATE","PARENT_RENAME")}
+                        ("WRITE","CHMOD","UNLINK","RENAME","HOST_WRITE","HOST_CHMOD",
+                         "HOST_UNLINK","HOST_RENAME","CREATE","PARENT_RENAME")}
         g20_ok = (g20_run.returncode == 0 and denial_lines.issubset(set(g20_out.splitlines()))
-                  and protected.exists() and not (trust / "replacement").exists())
+                  and protected.exists() and protected_host.exists()
+                  and not (trust / "replacement").exists())
         check("K_G20_NAMESPACE", g20_ok,
-              f"rc={g20_run.returncode} lines={g20_out.strip().replace(chr(10), '|')} snapshot={protected.exists()} replacement={(trust/'replacement').exists()}")
+              f"rc={g20_run.returncode} lines={g20_out.strip().replace(chr(10), '|')} provider={protected.exists()} host={protected_host.exists()} replacement={(trust/'replacement').exists()}")
         if g20_ok:
             evidence = dict(binding, g20_effect_result="PASS", write_denied="YES",
                 chmod_denied="YES", unlink_denied="YES", rename_denied="YES",
+                host_write_denied="YES", host_chmod_denied="YES",
+                host_unlink_denied="YES", host_rename_denied="YES",
                 create_replacement_denied="YES", parent_rename_denied="YES",
                 launch_succeeded="YES", snapshot_survived="YES", replacement_absent="YES")
             print("G20_BOUND_EVIDENCE=" + json.dumps(evidence, sort_keys=True, separators=(",", ":")))
@@ -707,11 +836,16 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         check("K_H033_FRESH_UPSTREAM_PROVENANCE", False, "timeout/cleanup authority unavailable")
 
     passed = sum(ok for _, ok, _ in checks)
+    failed = {key for key, ok, _detail in checks if not ok}
     for key, ok, detail in checks:
         print(("PASS " if ok else "FAIL ") + key + " — " + detail)
     print(f"SAMMANFATTNING {passed} PASS / {len(checks)-passed} FAIL")
-    if any(key == "K1" and not ok for key, ok, _ in checks):
-        print("CURRENT_RED_REASON=PROVIDER_IDENTITY_BOUNDARY_ABSENT")
+    material_failed = failed - ({"K_G20_NAMESPACE"} if g20_odom else set()) \
+                             - ({"K_H033_FRESH_UPSTREAM_PROVENANCE"} if h033_odom else set())
+    if material_failed == {"K_CODE_MODE_HOST_IDENTITY_BOUNDARY"}:
+        print("CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
+    elif material_failed:
+        print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(material_failed)))
     if g20_odom or h033_odom:
         if g20_odom:
             print("ODÖMBART K_G20_NAMESPACE — nested sandbox-exec förbjuden; candidate-bound owner-runner evidence required")

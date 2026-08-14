@@ -793,7 +793,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "5bc7a5f13c5323c62c76c21d7ba328ab73c56b37c89448397ac60e55fa2928d0")
+                       == "3e4ab819579d1dcfb8e1b403ccfdb6f067800d122d16ab7d731ce566bf947c76")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
@@ -1004,11 +1004,17 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
 """, encoding="utf-8")
     provider.chmod(0o700)
     provider_hash = sha256_bytes(provider.read_bytes())
+    code_mode_host = provider_dir / "arbitrary-sidecar-source"
+    code_mode_host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    code_mode_host.chmod(0o700)
+    code_mode_host_hash = sha256_bytes(code_mode_host.read_bytes())
     config = repo / "config/codex-provider-identity.json"
     config.parent.mkdir(parents=True)
-    config.write_text(json.dumps({"schema_version": 1, "provider": "openai-codex",
+    config.write_text(json.dumps({"schema_version": 2, "provider": "openai-codex",
                                   "executable_path": str(provider),
-                                  "executable_sha256": provider_hash}), encoding="utf-8")
+                                  "executable_sha256": provider_hash,
+                                  "code_mode_host_path": str(code_mode_host),
+                                  "code_mode_host_sha256": code_mode_host_hash}), encoding="utf-8")
     hostile_home = work / "hostile-codex-home"
     hostile_home.mkdir()
     (hostile_home / "config.toml").write_text(
