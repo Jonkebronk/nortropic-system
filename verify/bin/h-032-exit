@@ -830,6 +830,76 @@ if mode == 'output_then_fail': sys.exit(17)
     external_replay_ok = (len(external_writes) == 1 and not external_replay_case[0]
                           and external_replay_case[2] == 1)
 
+    def connected_read_attack(kind: str):
+        attack_repo = make_repo(str(provider)); targets: list[Path] = []; fired = [0]
+        original_popen = module.subprocess.Popen
+        original_io_open = io.open
+        original_builtin_open = builtins.open
+        original_os_open = os.open
+        original_os_read = os.read
+        tracked_fds: set[int] = set(); moved: list[Path] = []
+        def observe(argv, *args, **kwargs):
+            flat = list(argv)
+            if "-o" in flat: targets.append(Path(flat[flat.index("-o") + 1]))
+            return original_popen(argv, *args, **kwargs)
+        def mutate(path: Path):
+            if fired[0]: return
+            fired[0] += 1
+            raw = path.read_bytes()
+            document = strict_json(raw.decode("utf-8")); document["summary"] = "R6-" + kind
+            replacement = json.dumps(document, separators=(",", ":")).encode()
+            if kind == "path_swap":
+                old = path.with_name(path.name + ".opened-object")
+                path.rename(old); moved.append(old); path.write_bytes(replacement)
+            elif kind == "growth":
+                with original_builtin_open(path, "ab") as stream: stream.write(b" " * 4096)
+            elif kind == "short":
+                with original_builtin_open(path, "wb") as stream: stream.write(replacement)
+            else:
+                with original_builtin_open(path, "r+b") as stream:
+                    stream.seek(0); stream.write(replacement); stream.truncate()
+        class WrappedReader:
+            def __init__(self, inner, path): self.inner, self.path = inner, path
+            def __enter__(self): self.inner.__enter__(); return self
+            def __exit__(self, *args): return self.inner.__exit__(*args)
+            def __getattr__(self, name): return getattr(self.inner, name)
+            def read(self, *args, **kwargs): mutate(self.path); return self.inner.read(*args, **kwargs)
+            def readinto(self, *args, **kwargs): mutate(self.path); return self.inner.readinto(*args, **kwargs)
+            def read1(self, *args, **kwargs): mutate(self.path); return self.inner.read1(*args, **kwargs)
+            def readinto1(self, *args, **kwargs): mutate(self.path); return self.inner.readinto1(*args, **kwargs)
+        def wrap_open(original, file, mode="r", *args, **kwargs):
+            inner = original(file, mode, *args, **kwargs)
+            try: path = Path(file).absolute()
+            except Exception: return inner
+            return WrappedReader(inner, path) if targets and path == targets[-1].absolute() and "r" in str(mode) else inner
+        def io_open(file, mode="r", *args, **kwargs): return wrap_open(original_io_open, file, mode, *args, **kwargs)
+        def builtin_open(file, mode="r", *args, **kwargs): return wrap_open(original_builtin_open, file, mode, *args, **kwargs)
+        def os_open(path, flags, *args, **kwargs):
+            fd = original_os_open(path, flags, *args, **kwargs)
+            try: candidate = Path(path).absolute()
+            except Exception: return fd
+            if targets and candidate == targets[-1].absolute() and flags & os.O_ACCMODE == os.O_RDONLY:
+                tracked_fds.add(fd)
+            return fd
+        def os_read(fd, count):
+            if fd in tracked_fds and targets: mutate(targets[-1])
+            return original_os_read(fd, count)
+        module.subprocess.Popen = observe
+        io.open = io_open; builtins.open = builtin_open; os.open = os_open; os.read = os_read
+        try:
+            outcome = attempt(attack_repo)
+        finally:
+            module.subprocess.Popen = original_popen
+            io.open = original_io_open; builtins.open = original_builtin_open
+            os.open = original_os_open; os.read = original_os_read
+        for path in moved:
+            if path.exists(): path.unlink()
+        return outcome, fired[0]
+    read_attacks = {kind: connected_read_attack(kind)
+                    for kind in ("path_swap", "mutation", "growth", "short")}
+    read_attacks_ok = all(not outcome[0] and fired == 1
+                          for outcome, fired in read_attacks.values())
+
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
     # its own .git/control plane, and imports its own controller/launcher ROT.
@@ -882,7 +952,7 @@ if mode == 'output_then_fail': sys.exit(17)
     result_delivery_ok = (
         valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
-        and external_replay_ok
+        and external_replay_ok and read_attacks_ok
         and oversized_positive[0][0] and exactly_once_ok
         and atomic_ok and timeout_ok and object_attacks_ok
         and cleanup_error_ok and interruption_quiescent
@@ -899,7 +969,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} consume={consume_case[0], consume_reads, exactly_once_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} consume={consume_case[0], consume_reads, exactly_once_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
