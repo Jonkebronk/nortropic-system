@@ -1,0 +1,470 @@
+#!/usr/bin/python3
+"""H-033 protected-origin handoff to the frozen H-034 native kernel."""
+import errno
+import hashlib
+import json
+import os
+import pwd
+import secrets
+import signal
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+KERNEL = ROOT / "verify/h034/kernel"
+H034_MANIFEST_SHA256 = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
+SERVICE_SHA256 = "da3b7900d6a24e6297db256186d490de50fee54f4c565710a225909f0638e686"
+SERVICE_GIT_PATH = "controller/provenance/dist/h033-service"
+AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
+PROTECTED_KERNEL = AUTHORITY / "bin/h034-kernel"
+PROTECTED_CONSUMER = AUTHORITY / "bin/request-consumer"
+EVIDENCE_ROOT = AUTHORITY / "evidence"
+RECEIPT_ROOT = AUTHORITY / "probe-receipts"
+ALLOWLIST = AUTHORITY / "probes.json"
+PRODUCER = "_nortropic_provenance"
+PROBES = {
+    "h033-auth-pass-v1": "PASS",
+    "h033-auth-fail-v1": "FAIL",
+    "h033-auth-odombart-v1": "ODÖMBART",
+}
+DOC_MAX = 1024 * 1024
+
+
+def fail(code=1):
+    raise SystemExit(code)
+
+
+def strict_options(argv, required, optional=()):
+    allowed = set(required) | set(optional)
+    if len(argv) % 2:
+        fail()
+    values = {}
+    for index in range(0, len(argv), 2):
+        key, value = argv[index:index + 2]
+        if not key.startswith("--") or key[2:] not in allowed or key[2:] in values:
+            fail()
+        values[key[2:]] = value
+    if any(key not in values for key in required):
+        fail()
+    return values
+
+
+def lower_hex(value, size):
+    return len(value) == size and all(ch in "0123456789abcdef" for ch in value)
+
+
+def validate_bindings(v, include_result=True):
+    if v.get("task") != "h-033" or not lower_hex(v.get("candidate", ""), 40):
+        fail()
+    if not lower_hex(v.get("task-spec-sha256", ""), 64) or not lower_hex(v.get("gate-sha256", ""), 64):
+        fail()
+    if not v.get("probe") or len(v["probe"].encode()) >= 4096:
+        fail()
+    if include_result and v.get("require-result") not in ("PASS", "FAIL", "ODÖMBART"):
+        fail()
+
+
+def protected_mode(s):
+    return not (s.st_mode & 0o022)
+
+
+def object_identity(s):
+    return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid,
+            s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+
+
+def root_protected(s, kind, executable=False):
+    expected = stat.S_ISDIR if kind == "dir" else stat.S_ISREG
+    return (expected(s.st_mode) and s.st_uid == 0 and protected_mode(s)
+            and (not executable or bool(s.st_mode & 0o111)))
+
+
+def open_dir_at(parent, name):
+    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    s = os.fstat(fd)
+    if not stat.S_ISDIR(s.st_mode) or not protected_mode(s):
+        os.close(fd); fail()
+    return fd
+
+
+def open_protected_executable(name, exact_bytes=None, require_setuid=False):
+    opened = []
+    try:
+        parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        opened.append(parent)
+        if not root_protected(os.fstat(parent), "dir"):
+            fail(2)
+        for component in ("Library", "Application Support", "Nortropic", "provenance", "bin"):
+            parent = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            opened.append(parent)
+            if not root_protected(os.fstat(parent), "dir"):
+                fail(2)
+        executable_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        opened.append(executable_fd)
+        protected = os.fstat(executable_fd)
+        if (not root_protected(protected, "file", True)
+                or (require_setuid and not (protected.st_mode & stat.S_ISUID))):
+            fail(2)
+        if exact_bytes is not None:
+            raw = os.pread(executable_fd, protected.st_size, 0)
+            middle = os.fstat(executable_fd)
+            if (len(raw) != protected.st_size or raw != exact_bytes
+                    or object_identity(protected) != object_identity(middle)):
+                fail(2)
+        return opened, executable_fd
+    except BaseException:
+        for fd in reversed(opened):
+            try: os.close(fd)
+            except OSError: pass
+        raise
+
+
+def open_protected_kernel():
+    return open_protected_executable("h034-kernel")
+
+
+def exact_git_object(path, digest):
+    try:
+        raw = subprocess.run(["/usr/bin/git", "-C", str(ROOT), "show", "HEAD:" + path],
+                             check=True, capture_output=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        fail(2)
+    if hashlib.sha256(raw).hexdigest() != digest:
+        fail(2)
+    return raw
+
+
+def close_all(fds):
+    for fd in reversed(fds):
+        try: os.close(fd)
+        except OSError: pass
+
+
+def process_group_gone(pgid):
+    try:
+        os.killpg(pgid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+
+
+def consume_request(v):
+    try:
+        service_object = exact_git_object(SERVICE_GIT_PATH, SERVICE_SHA256)
+        protected_fds, service_fd = open_protected_executable("request-consumer", service_object, True)
+        before = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    except SystemExit:
+        raise
+    except (OSError, ValueError):
+        fail(2)
+    argv = [str(PROTECTED_CONSUMER), "consume",
+            "--request-id", v["request-id"], "--task", "h-033",
+            "--candidate", v["candidate"], "--task-spec-sha256", v["task-spec-sha256"],
+            "--gate-sha256", v["gate-sha256"], "--probe", v["probe"],
+            "--require-result", v["require-result"]]
+    try:
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   start_new_session=True,
+                                   env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                                        "HOME": "/var/empty", "TMPDIR": "/tmp"})
+        try: out, err = process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            process.communicate()
+            clean = process.poll() is not None and process_group_gone(process.pid)
+            close_all(protected_fds)
+            if not clean: fail(2)
+            fail(2)
+        clean = process.poll() is not None and process_group_gone(process.pid)
+        after = [object_identity(os.fstat(fd)) for fd in protected_fds]
+        current = os.stat("request-consumer", dir_fd=protected_fds[-2], follow_symlinks=False)
+    except (OSError, subprocess.SubprocessError):
+        close_all(protected_fds); fail(2)
+    stable = (before == after
+              and (current.st_dev, current.st_ino) == (os.fstat(service_fd).st_dev, os.fstat(service_fd).st_ino))
+    close_all(protected_fds)
+    if not clean or not stable or out or err:
+        fail(2)
+    if process.returncode == 0:
+        return
+    fail(1 if process.returncode == 1 else 2)
+
+
+def call_request_service(name, argv, service_object):
+    try:
+        protected_fds, service_fd = open_protected_executable(name, service_object, True)
+        before = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    except SystemExit:
+        raise
+    except (OSError, ValueError):
+        fail(2)
+    executable = AUTHORITY / "bin" / name
+    try:
+        process = subprocess.Popen([str(executable)] + argv, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, start_new_session=True,
+                                   env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                                        "HOME": "/var/empty", "TMPDIR": "/tmp"})
+        try: out, err = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            process.communicate()
+            clean = process.poll() is not None and process_group_gone(process.pid)
+            close_all(protected_fds)
+            if not clean: fail(2)
+            fail(2)
+        clean = process.poll() is not None and process_group_gone(process.pid)
+        after = [object_identity(os.fstat(fd)) for fd in protected_fds]
+        current = os.stat(name, dir_fd=protected_fds[-2], follow_symlinks=False)
+        stable = (before == after
+                  and (current.st_dev, current.st_ino) ==
+                      (os.fstat(service_fd).st_dev, os.fstat(service_fd).st_ino))
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        close_all(protected_fds); fail(2)
+    close_all(protected_fds)
+    if not clean or not stable:
+        fail(2)
+    return process.returncode, out, err
+
+
+def stable_regular_at(parent, name):
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or not protected_mode(before) or before.st_nlink != 1:
+            fail()
+        if before.st_size <= 0 or before.st_size > DOC_MAX:
+            fail()
+        first = os.pread(fd, before.st_size, 0)
+        middle = os.fstat(fd)
+        second = os.pread(fd, before.st_size, 0)
+        after = os.fstat(fd)
+        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_gid,
+                              s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if len(first) != before.st_size or first != second or identity(before) != identity(middle) or identity(middle) != identity(after):
+            fail()
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def open_authority(root, request_id, fixture):
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    opened = [root_fd]
+    try:
+        rs = os.fstat(root_fd)
+        if not stat.S_ISDIR(rs.st_mode) or not protected_mode(rs):
+            fail()
+        evidence_dir = open_dir_at(root_fd, "evidence"); opened.append(evidence_dir)
+        receipt_dir = open_dir_at(root_fd, "probe-receipts"); opened.append(receipt_dir)
+        evidence = stable_regular_at(evidence_dir, request_id + ".json"); opened.append(evidence)
+        receipt = stable_regular_at(receipt_dir, request_id + ".json"); opened.append(receipt)
+        allowlist = stable_regular_at(root_fd, "probes.json"); opened.append(allowlist)
+        stats = [os.fstat(fd) for fd in (evidence, receipt, allowlist)]
+        if len({(s.st_dev, s.st_ino) for s in stats}) != 3:
+            fail()
+        if not fixture:
+            producer = pwd.getpwnam(PRODUCER)
+            if producer.pw_uid in (0, os.getuid()) or stats[0].st_uid != producer.pw_uid:
+                fail(2)
+            if stats[1].st_uid != 0 or stats[2].st_uid != 0:
+                fail(2)
+        return opened, (evidence, receipt, allowlist)
+    except BaseException:
+        for fd in reversed(opened):
+            try: os.close(fd)
+            except OSError: pass
+        raise
+
+
+def kernel_handoff(fds, v, fixture):
+    try:
+        git = "/usr/bin/git"
+        manifest_raw = subprocess.run([git, "-C", str(ROOT), "show", "HEAD:verify/h034/identity-manifest.json"],
+                                      check=True, capture_output=True).stdout
+        kernel_object = subprocess.run([git, "-C", str(ROOT), "show", "HEAD:verify/h034/kernel"],
+                                       check=True, capture_output=True).stdout
+        if hashlib.sha256(manifest_raw).hexdigest() != H034_MANIFEST_SHA256: fail(2)
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+        expected_keys = ("schema_version", "language", "artifact_path", "artifact_sha256",
+                         "build_recipe_sha256", "source_sha256", "architecture", "file_type",
+                         "code_signature", "cdhash", "dylinker", "uuid", "dependencies",
+                         "macho_build_version")
+        if tuple(manifest) != expected_keys or manifest["schema_version"] != 1 or manifest["language"] != "C":
+            fail(2)
+        if manifest["artifact_path"] != "verify/h034/kernel" or manifest["architecture"] != "arm64":
+            fail(2)
+        if manifest["code_signature"] != "adhoc" or not manifest["cdhash"] or not manifest["uuid"]:
+            fail(2)
+        kernel_fd = os.open(KERNEL, os.O_RDONLY | os.O_NOFOLLOW)
+        before = os.fstat(kernel_fd)
+        if not stat.S_ISREG(before.st_mode) or not (before.st_mode & 0o111) or before.st_nlink < 1:
+            fail(2)
+        kernel_bytes = os.pread(kernel_fd, before.st_size, 0)
+        middle = os.fstat(kernel_fd)
+        if kernel_bytes != kernel_object or len(kernel_bytes) != before.st_size or hashlib.sha256(kernel_bytes).hexdigest() != manifest["artifact_sha256"]:
+            fail(2)
+        if (before.st_dev, before.st_ino, before.st_mode, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != \
+           (middle.st_dev, middle.st_ino, middle.st_mode, middle.st_size, middle.st_mtime_ns, middle.st_ctime_ns):
+            fail(2)
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        fail(2)
+    protected_fds = []
+    try:
+        if fixture:
+            executable = KERNEL
+            handoff_fd = kernel_fd
+        else:
+            protected_fds, handoff_fd = open_protected_kernel()
+            executable = PROTECTED_KERNEL
+        handoff = os.fstat(handoff_fd)
+        if not fixture:
+            protected_bytes = os.pread(handoff_fd, handoff.st_size, 0)
+            protected_middle = os.fstat(handoff_fd)
+            if (len(protected_bytes) != handoff.st_size or protected_bytes != kernel_object
+                    or hashlib.sha256(protected_bytes).hexdigest() != manifest["artifact_sha256"]
+                    or object_identity(handoff) != object_identity(protected_middle)):
+                fail(2)
+        protected_before = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    except SystemExit:
+        os.close(kernel_fd)
+        raise
+    except (OSError, ValueError):
+        os.close(kernel_fd)
+        fail(2)
+    argv = [str(executable), "h033-verify",
+            "--evidence-fd", str(fds[0]), "--receipt-fd", str(fds[1]),
+            "--allowlist-fd", str(fds[2]), "--task", "h-033",
+            "--candidate", v["candidate"], "--task-spec-sha256", v["task-spec-sha256"],
+            "--gate-sha256", v["gate-sha256"], "--probe", v["probe"],
+            "--request-id", v["request-id"], "--require-result", v["require-result"]]
+    try:
+        process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   pass_fds=fds, start_new_session=True,
+                                   env={"PATH":"/usr/bin:/bin","LANG":"C","LC_ALL":"C"})
+    except OSError:
+        for fd in reversed(protected_fds): os.close(fd)
+        os.close(kernel_fd); fail(2)
+    try: out, _ = process.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        process.communicate()
+        for fd in reversed(protected_fds): os.close(fd)
+        os.close(kernel_fd); fail(2)
+    returncode = process.returncode
+    after = os.fstat(kernel_fd)
+    handoff_after = os.fstat(handoff_fd)
+    protected_after = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    if (object_identity(before) != object_identity(after)
+            or object_identity(handoff) != object_identity(handoff_after)
+            or protected_before != protected_after):
+        for fd in reversed(protected_fds): os.close(fd)
+        os.close(kernel_fd)
+        fail(2)
+    if not fixture:
+        try:
+            current = os.stat("h034-kernel", dir_fd=protected_fds[-2], follow_symlinks=False)
+        except OSError:
+            for fd in reversed(protected_fds): os.close(fd)
+            os.close(kernel_fd); fail(2)
+        if (current.st_dev, current.st_ino) != (handoff_after.st_dev, handoff_after.st_ino):
+            for fd in reversed(protected_fds): os.close(fd)
+            os.close(kernel_fd); fail(2)
+    for fd in reversed(protected_fds): os.close(fd)
+    os.close(kernel_fd)
+    if returncode == 0:
+        sys.stdout.write(out)
+        return
+    fail(1 if returncode == 1 else 2)
+
+
+def gate_verify(argv):
+    required = ("fixture-root", "task", "candidate", "task-spec-sha256", "gate-sha256",
+                "probe", "request-id", "require-result")
+    v = strict_options(argv, required, ("gate-race-sync",))
+    validate_bindings(v)
+    if not lower_hex(v["request-id"], 64):
+        fail()
+    opened, fds = open_authority(Path(v["fixture-root"]), v["request-id"], True)
+    try:
+        if "gate-race-sync" in v:
+            sync = Path(v["gate-race-sync"])
+            (sync / "opened").write_text("opened\n")
+            deadline = time.monotonic() + 3
+            while not (sync / "release").is_file():
+                if time.monotonic() >= deadline: fail(2)
+                time.sleep(.01)
+        kernel_handoff(fds, v, True)
+    finally:
+        for fd in reversed(opened):
+            try: os.close(fd)
+            except OSError: pass
+
+
+def verify(argv):
+    required = ("request-id", "task", "candidate", "task-spec-sha256", "gate-sha256", "probe", "require-result")
+    v = strict_options(argv, required)
+    validate_bindings(v)
+    if not lower_hex(v["request-id"], 64): fail()
+    try:
+        opened, fds = open_authority(AUTHORITY, v["request-id"], False)
+    except (OSError, KeyError):
+        fail(2)
+    try:
+        consume_request(v)
+        kernel_handoff(fds, v, False)
+    finally:
+        for fd in reversed(opened):
+            try: os.close(fd)
+            except OSError: pass
+
+
+def request(argv):
+    required = ("task", "candidate", "task-spec-sha256", "gate-sha256", "probe")
+    v = strict_options(argv, required)
+    validate_bindings(v, False)
+    if v["probe"] not in PROBES:
+        fail()
+    # Creation is deliberately delegated to fixed, independently provisioned
+    # OS services. Repository code never fabricates producer/root authority.
+    try:
+        account = pwd.getpwnam(PRODUCER)
+    except KeyError:
+        fail(2)
+    if account.pw_uid in (0, os.getuid()):
+        fail(2)
+    service_object = exact_git_object(SERVICE_GIT_PATH, SERVICE_SHA256)
+    common = ["--task", "h-033", "--candidate", v["candidate"],
+              "--task-spec-sha256", v["task-spec-sha256"], "--gate-sha256", v["gate-sha256"], "--probe", v["probe"]]
+    returncode, out, err = call_request_service("request-producer", common, service_object)
+    if returncode or err or not out.startswith("REQUEST_ID=") or out.count("\n") != 1:
+        fail(2)
+    request_id = out.removeprefix("REQUEST_ID=").rstrip("\n")
+    if not lower_hex(request_id, 64): fail(2)
+    observer_args = ["--request-id", request_id] + common
+    returncode, out, err = call_request_service("request-observer", observer_args, service_object)
+    if returncode or out or err: fail(2)
+    print("REQUEST_ID=" + request_id)
+    print("EVIDENCE=" + str(EVIDENCE_ROOT / (request_id + ".json")))
+    print("RECEIPT=" + str(RECEIPT_ROOT / (request_id + ".json")))
+
+
+def main():
+    if len(sys.argv) < 2: fail()
+    command, argv = sys.argv[1], sys.argv[2:]
+    if command == "gate-verify": gate_verify(argv)
+    elif command == "verify": verify(argv)
+    elif command == "request": request(argv)
+    else: fail()
+
+
+if __name__ == "__main__":
+    main()

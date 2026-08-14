@@ -418,9 +418,73 @@ dependency and canonical-gate checks, with absence/duplicate/wrong-dependency/wr
 both downstream tasks and an exact four-file H-034 artifact set. H-035's owner routing, publication,
 identity, atomicity and provider-observation mechanism controls are otherwise byte-for-byte unchanged.
 
+The H-033 builder candidate adds one closed provenance CLI. Its fixture-only gate operation performs
+protected no-follow opens, stable bounded reads and exact descriptor handoff to the repository H-034
+kernel; normal verification never accepts a caller-selected authority root or kernel. Production
+request creation is delegated only to fixed protected OS helpers and fails closed when the canonical
+producer identity or authority installation is unavailable. On an unprovisioned host this boundary is
+ODÖMBART by the frozen contract, while all disposable product controls remain judgeable.
+
 Independent review of the first H-033 contract found that live owner acceptance required an evidence
 leaf owned by merely any non-requester UID. The additive remediation applies one shared live-`lstat`
 predicate to judge controls and canonical owner acceptance: evidence UID must equal the exact
 OS-resolved non-root `_nortropic_provenance` UID, receipt UID must equal root, the two inodes and UIDs
 must differ, and neither leaf may be group/other writable or a symlink. A live separated-ownership
 positive and root-writes-both, requester-owned and symlink negatives run before the component RED.
+
+H-033's normal H-034 execution boundary additionally requires an externally provisioned canonical
+`provenance/bin/h034-kernel` hard link. Every fixed parent and the leaf are opened no-follow and must
+be root-owned and non-group/other-writable; the leaf must be executable and the same device/inode as
+the repository H-034 kernel whose bytes are bound to the frozen Git-object manifest and artifact
+digest. Opened parent, repository and protected-link identities remain stable through execution, and
+the protected pathname must still name the same inode afterward. The disposable `gate-verify` path
+continues to exercise the repository kernel without claiming normal authority. No repository code
+provisions this root-owned link; its absence or mismatch is an external-owner ODÖMBART boundary.
+
+Single consumption is delegated to the fixed root-owned protected
+`provenance/bin/request-consumer` authority before the normal H-034 handoff. The exact operation is
+`consume` with only the request ID and frozen task/candidate/spec/gate/probe/result bindings; no
+command, path or authority selector is forwarded. Exit 0 is the one atomic authorization, exit 1 is
+denial or replay, and service/identity/timeout/cleanup failure is ODÖMBART. The observer-owned
+external authority validates the token against its request state and never exposes its state store to
+repository code. Consumption is deliberately not rolled back after any later kernel failure, so a
+failed first handoff cannot revive the request. Fixture-only differential verification does not
+consume external owner state.
+
+The previously external H-033 authority is now versioned under its frozen production surface without
+claiming that repository ownership supplies root authority. A root-run fixed-destination installer
+copies only reviewed digest-bound native service/probe bytes and the exact H-034 Git object into
+`/Library/Application Support/Nortropic/provenance`; it requires a pre-existing, distinct
+`_nortropic_provenance` OS account and creates root/protected bin, probe, receipt and one-time state
+directories plus a producer-owned evidence directory. The installed service has only three basename
+interfaces. Producer generates the request ID and executes one fixed digest-bound probe after UID/GID
+drop; observer independently verifies the protected allowlist and exact effect before writing its
+receipt/pending token; consumer performs the irreversible pending-to-used atomic rename. Repository
+runtime code cannot select an install root, service, probe, result, destination or command and never
+copies an executable at handoff. The installed H-034 kernel and service bytes must stay identical to
+their exact candidate Git objects across execution. On this unprovisioned owner host, normal H-033
+remains ODÖMBART until the external root ceremony is deliberately executed; no sudo or `/Library`
+mutation occurred during this builder slice.
+
+Independent review found a native failure-path hazard that the successful-probe tests could not
+exercise: after `fork()` returned `-1`, the old loop could interpret that value as the wildcard
+`waitpid`/`kill` target. With another child remaining live, the timeout path could reach
+`kill(-1, SIGKILL)`. H-033 now treats every nonpositive fork result as a terminal closed error before
+any wait/signal operation. The only signal helper requires a positive PID; waits use monotonic elapsed
+time without deadline addition, retry `EINTR`, and never equate an error return with the requested
+child. A deterministic linked syscall shim reproduces the exact failed-fork/live-wildcard condition
+and proves immediate exit, no `kill(-1)`/`kill(0)`, and no evidence write. The same audit bounds the
+producer writer child, verifies the complete post-setuid identity, checks exec-environment setup, and
+makes installer subprocess/write failures explicit. Signed native bytes and their candidate bindings
+were regenerated; the external root ceremony remains unexecuted.
+
+The first provisioned owner-environment run exposed a Darwin group-list failure before any producer
+evidence was created. A compile-time-only diagnostic build of the same service path proved that
+setgroups/GID/UID transitions all succeeded. A second numeric diagnostic then proved Darwin returned
+the eight Directory Services memberships of the resolved `_nortropic_provenance` account after UID
+transition: `309,12,61,701,703,702,100,704`, exactly matching the OS account record. Both the zero-entry
+and one-entry candidate postconditions were therefore invalid machine-local assumptions. The drop now
+requires successful clearing before GID-before-UID transition and exact real/effective dedicated UID/GID;
+it does not reinterpret the OS-resolved account's membership list. A linked Darwin-semantics control
+reproduces the eight-entry result, while independent mutants prove setgroups failure and wrong IDs still
+reject before evidence. Diagnostic logging is absent from production, and live authority is unchanged.
