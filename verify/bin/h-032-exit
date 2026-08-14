@@ -476,6 +476,41 @@ if mode == 'output_then_fail': sys.exit(17)
     spec = importlib.util.spec_from_file_location("h032_subject", source)
     if spec is None or spec.loader is None: raise RuntimeError("cannot import subject")
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
+    candidate_tree = ast.parse(source.read_text(encoding="utf-8"))
+    consume_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "_consume_private_result"]
+    exact_consumer_args = ["sink_fd", "canonical_destination", "invocation_id", "run_id", "role"]
+    consumer_calls = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Name)
+                      and node.func.id == "_consume_private_result"]
+    run_codex_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
+                       and node.name == "run_codex"]
+    timeout_assignments = [node for node in candidate_tree.body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "CODEX_RUN_TIMEOUT_SECONDS"
+                for target in node.targets)]
+    timeout_loads = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Name)
+                     and isinstance(node.ctx, ast.Load)
+                     and node.id == "CODEX_RUN_TIMEOUT_SECONDS"]
+    consumer_architecture_ok = False
+    if len(consume_nodes) == 1 and len(run_codex_nodes) == 1:
+        consumer = consume_nodes[0]
+        loaded_globals = {node.id for node in ast.walk(consumer)
+                          if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+        tainted = {name for name in loaded_globals
+                   if any(token in name.casefold() for token in
+                          ("provider", "host", "authority", "fixture"))}
+        run_calls = [node for node in ast.walk(run_codex_nodes[0]) if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Name)
+                     and node.func.id == "_consume_private_result"]
+        consumer_architecture_ok = (
+            [arg.arg for arg in consumer.args.args] == exact_consumer_args
+            and consumer.args.vararg is None and consumer.args.kwarg is None
+            and not consumer.args.kwonlyargs and not consumer.decorator_list
+            and len(consumer_calls) == len(run_calls) == 1 and not tainted
+            and len(timeout_assignments) == 1
+            and isinstance(timeout_assignments[0].value, ast.Constant)
+            and timeout_assignments[0].value.value == 86400
+            and len(timeout_loads) == 1)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -1273,8 +1308,11 @@ if mode == 'output_then_fail': sys.exit(17)
 "source,repo=map(pathlib.Path,sys.argv[1:3])\n"
 "spec=importlib.util.spec_from_file_location('r12_exact_subject',source)\n"
 "mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)\n"
+"if len(sys.argv)==4: mod.CODEX_RUN_TIMEOUT_SECONDS=int(sys.argv[3])\n"
 "import subprocess\n"
 "def audit(event,args):\n"
+" if event=='os.rename' and len(args)>=2 and str(args[1]).endswith('/result.json'):\n"
+"  print('R14_CANONICAL_TRANSITION '+str(args[1]),flush=True)\n"
 " if event=='subprocess.Popen':\n"
 "  for value in args:\n"
 "   if isinstance(value,(list,tuple)) and '-o' in value:\n"
@@ -1344,6 +1382,7 @@ if mode == 'output_then_fail': sys.exit(17)
         assert proc.stdout is not None
         selector = selectors.DefaultSelector(); selector.register(proc.stdout, selectors.EVENT_READ)
         identities=[]; outcome="NO_OUTCOME"; popen_type=""; canonical_absent=False
+        canonical_transitions=[]
         sink=None; canonical=None
         deadline=time.monotonic()+25
         while time.monotonic()<deadline and proc.poll() is None:
@@ -1351,6 +1390,8 @@ if mode == 'output_then_fail': sys.exit(17)
             for key,_mask in events:
                 line=key.fileobj.readline().strip()
                 if line.startswith("R12_POPEN_TYPE="): popen_type=line.split("=",1)[1]
+                elif line.startswith("R14_CANONICAL_TRANSITION "):
+                    canonical_transitions.append(line.split(" ",1)[1])
                 elif line.startswith("R12_SINK_CLOSED "):
                     _,_,number,path_text=line.split(" ",3); sink=Path(path_text)
                     fd=os.open(sink,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
@@ -1367,8 +1408,10 @@ if mode == 'output_then_fail': sys.exit(17)
                         os.write(writer,b"X");os.fsync(writer);os.close(writer)
                     after=os.fstat(fd);os.close(fd)
                     value=strict_json(raw.decode("utf-8"))
-                    identities.append((before.st_dev,before.st_ino,before.st_size,
-                                       after.st_dev,after.st_ino,after.st_size,
+                    identities.append((before.st_dev,before.st_ino,before.st_mode,before.st_size,
+                                       before.st_mtime_ns,before.st_ctime_ns,
+                                       after.st_dev,after.st_ino,after.st_mode,after.st_size,
+                                       after.st_mtime_ns,after.st_ctime_ns,
                                        hashlib.sha256(raw).hexdigest(),
                                        complete_schema_valid(value,schema_document)))
                     runs=sorted((module.journal_root(case_repo)/"runs").iterdir())
@@ -1384,6 +1427,8 @@ if mode == 'output_then_fail': sys.exit(17)
         for line in proc.stdout:
             line=line.strip()
             if line.startswith("R12_OUTCOME="): outcome=line.split("=",1)[1]
+            elif line.startswith("R14_CANONICAL_TRANSITION "):
+                canonical_transitions.append(line.split(" ",1)[1])
         post_canonical=None; staging_absent=(sink is None or not sink.parent.exists())
         if canonical is not None and canonical.is_file():
             try:
@@ -1399,7 +1444,8 @@ if mode == 'output_then_fail': sys.exit(17)
                                 complete_schema_valid(strict_json(raw.decode("utf-8")),schema_document))
             except Exception: post_canonical=None
         selector.close(); shutil.rmtree(release)
-        return outcome,popen_type,identities,canonical_absent,post_canonical,staging_absent
+        return (outcome,popen_type,identities,canonical_absent,post_canonical,
+                staging_absent,canonical_transitions)
     r12_once = r12_real_case("one")
     r12_two = r12_real_case("two")
     r12_promote = r12_real_case("one", True)
@@ -1409,7 +1455,7 @@ if mode == 'output_then_fail': sys.exit(17)
     # conforming candidate exposes a positive finite integer timeout value;
     # absence is part of the intended prebuilder RED, never a rig error.
     timeout_seam = getattr(module, "CODEX_RUN_TIMEOUT_SECONDS", None)
-    timeout_variant_ok = (type(timeout_seam) is int and 1 <= timeout_seam <= 3600)
+    timeout_variant_ok = (timeout_seam == 86400 and consumer_architecture_ok)
     read_variants_actual_ok = True
     def r12_escape_case():
         fixture=r12_provider("escape",work/"r12-unused-release")
@@ -1417,7 +1463,7 @@ if mode == 'output_then_fail': sys.exit(17)
         case_repo=make_repo(str(fixture),sha256(fixture),str(host),sha256(host))
         env={key:value for key,value in os.environ.items() if not key.startswith("H032_")}
         proc=system_popen(["/usr/bin/python3","-I","-S","-u",str(r12_runner),
-                           str(source),str(case_repo)],stdout=subprocess.PIPE,
+                           str(source),str(case_repo),"1"],stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT,text=True,env=env)
         assert proc.stdout is not None
         selector=selectors.DefaultSelector();selector.register(proc.stdout,selectors.EVENT_READ)
@@ -1448,15 +1494,17 @@ if mode == 'output_then_fail': sys.exit(17)
     r12_escape=r12_escape_case()
     r12_real_boundary_ok = (
         r12_once[0] == "ADMITTED" and r12_once[1] == "subprocess.Popen"
-        and len(r12_once[2]) == 1 and r12_once[2][0][7] and r12_once[3]
+        and len(r12_once[2]) == 1 and r12_once[2][0][13]
+        and r12_once[2][0][:6] == r12_once[2][0][6:12] and r12_once[3]
         and r12_once[4] is not None and r12_once[4][7]
-        and r12_once[4][6] == r12_once[2][0][6] and r12_once[5]
+        and r12_once[4][6] == r12_once[2][0][12] and r12_once[5]
+        and len(r12_once[6]) == 1
         and r12_two[0].startswith("REJECTED:") and len(r12_two[2]) == 2
-        and len({item[6] for item in r12_two[2]}) == 2
+        and len({item[12] for item in r12_two[2]}) == 2
         and r12_promote[0].startswith("REJECTED:") and len(r12_promote[2]) == 1
-        and r12_promote[3] and r12_promote[4] is None and r12_promote[5]
-        and r12_mutate[0].startswith("REJECTED:") and r12_mutate[4] is None and r12_mutate[5]
-        and r12_swap[0].startswith("REJECTED:") and r12_swap[4] is None and r12_swap[5]
+        and r12_promote[3] and r12_promote[4] is None and r12_promote[5] and not r12_promote[6]
+        and r12_mutate[0].startswith("REJECTED:") and r12_mutate[4] is None and r12_mutate[5] and not r12_mutate[6]
+        and r12_swap[0].startswith("REJECTED:") and r12_swap[4] is None and r12_swap[5] and not r12_swap[6]
         and timeout_variant_ok and read_variants_actual_ok
         and r12_escape[0] and r12_escape[1].startswith("REJECTED:")
         and r12_escape[2] and r12_escape[3])
@@ -1485,10 +1533,13 @@ if mode == 'output_then_fail': sys.exit(17)
     exact_owner_live_ok = False
     exact_owner_live_detail = "SKIPPED_DETERMINISTIC_RED"
     if deterministic_result_ok:
-        live_repo = make_repo(str(apath), digest, str(host_path), host_digest)
+        live_repo = work / "r14-exact-owner-live-clone"
+        sh(GIT,"clone","-q","--no-hardlinks",str(repo),str(live_repo))
+        sh(GIT,"checkout","-q",sha(repo),cwd=live_repo)
+        live_source=live_repo/"scripts/nortropic-codex-autopilot.py"
         live_env = {key:value for key,value in os.environ.items() if not key.startswith("H032_")}
         live_proc = system_popen(["/usr/bin/python3","-I","-S","-u",str(r12_runner),
-                                  str(source),str(live_repo)],stdout=subprocess.PIPE,
+                                  str(live_source),str(live_repo)],stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT,text=True,env=live_env)
         try:
             live_stdout,_ = live_proc.communicate(timeout=3600)
@@ -1501,6 +1552,8 @@ if mode == 'output_then_fail': sys.exit(17)
             raise RuntimeError("R13 exact owner provider unavailable: auth/network/runtime")
         output_lines=[line.split(" ",1)[1] for line in live_stdout.splitlines()
                       if line.startswith("R13_OUTPUT_PATH ")]
+        live_transitions=[line.split(" ",1)[1] for line in live_stdout.splitlines()
+                          if line.startswith("R14_CANONICAL_TRANSITION ")]
         live_runs=sorted((module.journal_root(live_repo)/"runs").iterdir())
         if len(output_lines)!=1 or len(live_runs)!=1:
             raise RuntimeError("R13 exact owner provider observation incomplete")
@@ -1517,10 +1570,15 @@ if mode == 'output_then_fail': sys.exit(17)
             and before.st_size==after.st_size==len(raw) and len(raw)<=MAX_RESULT_BYTES
             and complete_schema_valid(document,schema_document)
             and document.get("role")=="TEST_AUTHOR"
+            and len(live_transitions)==1 and Path(live_transitions[0])==live_canonical
             and not live_sink.exists() and not live_sink.parent.exists()
             and sha256(apath)==digest and sha256(host_path)==host_digest
-            and sha256(source)==sha256(repo/"scripts/nortropic-codex-autopilot.py")
-            and sha256(task_spec)==sha256(repo/"specs/tasks.spec.json")
+            and sha(live_repo)==sha(repo)
+            and sh(GIT,"rev-parse","HEAD^{tree}",cwd=live_repo).strip()
+                == sh(GIT,"rev-parse","HEAD^{tree}",cwd=repo).strip()
+            and sha256(live_source)==sha256(source)
+            and sha256(live_repo/"specs/tasks.spec.json")==sha256(task_spec)
+            and sha256(live_repo/"verify/bin/h-032-exit")==sha256(h032_gate)
             and h032_gate.is_file())
         exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
