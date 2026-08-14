@@ -55,6 +55,14 @@ PYTHON_IDENTITY_KEYS = {
 }
 MAX_PROVIDER_AUTHORITY_BYTES = 16 * 1024
 MAX_PROVIDER_EXECUTABLE_BYTES = 256 * 1024 * 1024
+AUTOPILOT_ROLE_POLICY = {
+    "ARCHITECT": ("gpt-5.6-sol", "max"),
+    "TEST_AUTHOR": ("gpt-5.6-sol", "max"),
+    "GATE_REVIEWER": ("gpt-5.6-sol", "max"),
+    "BUILDER": ("gpt-5.6-sol", "high"),
+    "REVIEWER": ("gpt-5.6-sol", "max"),
+    "EMPIRICAL": ("gpt-5.6-sol", "max"),
+}
 REJECTED_S3 = "1e21a7fe150f25626301f3656893d1798ae46c3d"
 FULL_ROADMAP_OWNER_PATH = "docs/loop/codex-autopilot-v3-full-roadmap.md"
 SUBSTITUTION_OWNER_PATH = "docs/loop/harness-substitution-contract-v1.md"
@@ -220,6 +228,8 @@ def run(argv: list[str], cwd: Path | None = None, *, check: bool = True,
         timeout: int | None = None, env: dict[str, str] | None = None) -> Cmd:
     if not argv or not all(isinstance(x, str) and x for x in argv):
         raise Stop(f"invalid argv: {argv!r}")
+    if argv[0].rsplit(os.sep, 1)[-1].casefold() == "codex":
+        raise Stop("generic process boundary cannot launch Codex")
     if argv[0] == "git":
         joined = " ".join(argv)
         if any(tok in joined for tok in FORBIDDEN_GIT_TOKENS):
@@ -750,6 +760,10 @@ def _python_snapshot(root: Path) -> tuple[Path, str]:
 
 
 def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
+    route = AUTOPILOT_ROLE_POLICY.get(role)
+    if route is None:
+        raise Stop(f"unknown autopilot role: {role!r}")
+    model, reasoning_effort = route
     jr = journal_root(repo) / "runs" / f"{now_id()}-{role.lower()}"
     jr.mkdir(parents=True, exist_ok=False)
     events = jr / "events.jsonl"
@@ -771,6 +785,9 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
         "-a", "never",
         "--sandbox", "danger-full-access",
         "exec",
+        "--ignore-user-config",
+        "-m", model,
+        "-c", f'model_reasoning_effort="{reasoning_effort}"',
         "--json",
         "--output-schema", str(schema),
         "-o", str(result),
@@ -798,7 +815,10 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
         os.chmod(snapshot, 0o500)
         os.chmod(python_snapshot, 0o500)
         os.chmod(snapshot_root, 0o500)
-        journal(repo, "AGENT_START", role=role, worktree=str(wt), head=sha(wt))
+        journal(repo, "AGENT_START", role=role, model=model,
+                reasoning_effort=reasoning_effort,
+                model_routing_source="AUTOPILOT_ROLE_POLICY",
+                worktree=str(wt), head=sha(wt))
         with events.open("w", encoding="utf-8") as log:
             p = subprocess.Popen(argv, cwd=str(wt), stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
