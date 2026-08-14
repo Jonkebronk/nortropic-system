@@ -930,3 +930,9 @@ a one-second fail-safe. A fresh admitted invocation has an API-neutral audit cou
 exactly one canonical result read before causal external-writer replay, and hostile
 provider attempts now cover global events, envelope, sibling run, refs, config, hooks,
 source and trust paths, all mechanically confined beneath the gate's disposable root.
+
+The R6 closure also drives mutation through the product's actual result consumption:
+Path/io/builtin-handle reads and os.open/os.read descriptors are instrumented by live
+result identity. Path replacement after open, same-inode rewrite, growth and valid
+shortening occur immediately before the real read. Each must reject; the exact-bound
+positive and +1 negative remain connected through the same provider/run_codex route.
