@@ -845,17 +845,22 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
                     thread_id = obj["thread_id"]
             rc = p.wait()
     finally:
-        try:
-            os.chmod(snapshot_root, 0o700)
-        except OSError:
-            pass
-        def restore_cleanup_permissions(func, path, _error):
-            snapshot_root.chmod(0o700)
-            Path(path).chmod(0o700)
-            func(path)
-        shutil.rmtree(snapshot_root, onerror=restore_cleanup_permissions)
+        cleanup_error: OSError | None = None
+        for _cleanup_attempt in range(3):
+            if not snapshot_root.exists():
+                break
+            try:
+                os.chmod(snapshot_root, 0o700)
+            except OSError as exc:
+                cleanup_error = exc
+            try:
+                shutil.rmtree(snapshot_root)
+            except OSError as exc:
+                cleanup_error = exc
+            else:
+                break
         if snapshot_root.exists():
-            raise Stop("private provider execution family cleanup incomplete")
+            raise Stop("private provider execution family cleanup incomplete") from cleanup_error
     if rc != 0:
         raise Stop(f"Codex role {role} failed rc={rc}; events={events}")
     try:
