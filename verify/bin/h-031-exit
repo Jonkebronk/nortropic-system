@@ -80,7 +80,7 @@ EXPECTED_PREBUILDER_RED = {
 }
 PROCESS_ATTRS = {
     "subprocess": {"Popen", "run", "call", "check_call", "check_output", "getoutput", "getstatusoutput"},
-    "os": {"system", "popen", "fork", "forkpty", "register_at_fork", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
+    "os": {"system", "popen", "fork", "forkpty", "register_at_fork", "kill", "killpg", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
     "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
     "pty": {"spawn"},
 }
@@ -204,6 +204,11 @@ def process_shape(text: str) -> dict[str, object]:
             violations.append((owner, node.lineno, f"deferred-async-function:{node.name}"))
         if isinstance(node, ast.FunctionDef) and node.name == "__del__":
             violations.append((owner, node.lineno, "deferred-finalizer:__del__"))
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(item, ast.Name) and item.id == "__del__"
+                   for target in targets for item in ast.walk(target)):
+                violations.append((owner, node.lineno, "deferred-finalizer-assignment:__del__"))
         if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Await)):
             violations.append((owner, node.lineno, f"deferred-language-node:{type(node).__name__}"))
         if isinstance(node, ast.Import):
@@ -249,6 +254,7 @@ def process_shape(text: str) -> dict[str, object]:
             if node.id in {
                 "__import__", "__builtins__", "__loader__", "__spec__", "__package__",
                 "__cached__", "vars", "locals", "eval", "exec", "compile", "breakpoint", "help",
+                "setattr", "delattr",
             }:
                 violations.append((owner, node.lineno, f"sensitive-builtin:{node.id}"))
             elif node.id in {"getattr", "globals"} and not direct_call:
@@ -285,6 +291,19 @@ def process_shape(text: str) -> dict[str, object]:
             continue
         if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile"}:
             violations.append((owner, node.lineno, f"dynamic-code:{node.func.id}"))
+        if isinstance(node.func, ast.Name) and node.func.id == "type":
+            parent = parents.get(node)
+            compared = ([parent.left] + list(parent.comparators)
+                        if isinstance(parent, ast.Compare) else [])
+            safe_type_check = (
+                len(node.args) == 1 and not node.keywords
+                and isinstance(parent, ast.Compare)
+                and all(isinstance(op, (ast.Is, ast.IsNot)) for op in parent.ops)
+                and any(isinstance(item, ast.Name) and item.id in {"int", "str"}
+                        for item in compared if item is not node)
+            )
+            if not safe_type_check:
+                violations.append((owner, node.lineno, "dynamic-type-construction"))
         if isinstance(node.func, ast.Name) and node.func.id in {"globals", "locals", "vars"}:
             parent = parents.get(node)
             grandparent = parents.get(parent) if parent is not None else None
@@ -517,6 +536,11 @@ try:
         "OS_ATFORK_CALLBACK": "\nos.register_at_fork(before=run_codex)\n",
         "LANGUAGE_FINALIZER": "\nclass H031Finalizer:\n    def __del__(self):\n        run_codex(None, None, 'BUILDER', 'late')\n",
         "GENERATOR_FINALIZER": "\ndef h031_deferred():\n    try:\n        yield 1\n    finally:\n        run_codex(None, None, 'BUILDER', 'late')\n",
+        "FINALIZER_ASSIGNMENT": "\ndef h031_later(self):\n    run_codex(None, None, 'BUILDER', 'late')\nclass H031AliasFinalizer:\n    __del__ = h031_later\n",
+        "FINALIZER_SETATTR": "\nsetattr(H031Finalizer, '__del__', run_codex)\n",
+        "FINALIZER_DYNAMIC_TYPE": "\nH031Dynamic = type('H031Dynamic', (), {'__del__': run_codex})\n",
+        "OS_KILL": "\nos.kill(1, 0)\n",
+        "OS_KILLPG": "\nos.killpg(1, 0)\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
@@ -676,6 +700,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
             "os.link", "os.symlink", "os.truncate", "os.chmod",
             "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp", "os.system",
             "os.register_at_fork",
+            "os.kill", "os.killpg",
             "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "subprocess.Popen",
         }
         def audit_hook(event, args):

@@ -673,3 +673,9 @@ to GC. Atfork is now a prohibited process callback; admitted process sites rejec
 executable substitution and expanded keyword dictionaries. Since production contains no asynchronous
 function, yield or await, those language forms and `__del__` are also excluded from the bounded source
 envelope. In-place Popen mutants prove the one legitimate site itself remains constrained.
+
+Twelfth review separated a lifecycle method's name from its installation: assigning an ordinary helper
+to class key `__del__` creates the same delayed finalizer. Finalizer assignment, setattr/delattr and
+dynamic three-argument type construction now reject; only current scalar schema `type(x) is/is not`
+checks remain. The review also found direct process signaling outside both inventories. `os.kill` and
+`os.killpg` are now prohibited source/effect APIs with independent mutants and audit-event binding.
