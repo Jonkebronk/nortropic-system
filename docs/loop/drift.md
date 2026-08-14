@@ -1066,3 +1066,12 @@ missing bindings fail-closed. Attribute/subscript stores join into their owning 
 object, so container and helper laundering cannot erase process or identity tags. The
 same complete tree-analysis entry point is invoked for the exact candidate and every
 generated exact-body reader variant before connected runtime evidence is considered.
+
+R21 first mechanically extracts the complete inline consumer/interprocedural/identity/
+process/CFG analyzer into `analyze_candidate_tree`; the exact candidate and every
+generated reader variant now receive that identical full analysis and context. Distinct
+zero-argument `_new_run_id()` and `_new_invocation_id()` origins make exact singleton
+provenance satisfiable without name-based tag splitting. Formal environments include
+positional-only, positional, keyword-only, vararg tuple and kwarg mapping categories;
+literal star and double-star expansion follows Python duplicate/missing/default rules,
+while unresolved dynamic expansions reject.
