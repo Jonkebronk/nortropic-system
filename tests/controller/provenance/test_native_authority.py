@@ -7,6 +7,7 @@ import stat
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -56,6 +57,20 @@ class NativeAuthorityTests(unittest.TestCase):
         for name in ("request-producer", "request-observer", "request-consumer"):
             shutil.copyfile(cls.fixture_service, cls.authority / "bin" / name)
             os.chmod(cls.authority / "bin" / name, 0o755)
+        cls.signal_marker = Path(cls.temp.name) / "invalid-signal"
+        fault_bin = Path(cls.temp.name) / "fault-bin"
+        fault_bin.mkdir()
+        cls.fault_producer = fault_bin / "request-producer"
+        fault = run(["/usr/bin/clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                     "-arch", "arm64", "-DNORTROPIC_FIXTURE",
+                     '-DPROBE_SHA256="' + PROBE_SHA + '"',
+                     '-DALLOWLIST_SHA256="' + allowlist_sha + '"',
+                     '-DAUTHORITY_ROOT="' + str(cls.authority) + '"',
+                     '-DFAULT_MARKER="' + str(cls.signal_marker) + '"',
+                     source, ROOT / "tests/controller/provenance/fork_fault.c",
+                     "-o", cls.fault_producer], timeout=30)
+        if fault.returncode:
+            raise RuntimeError((fault.returncode, fault.stdout, fault.stderr))
         cls.candidate = "1" * 40
         cls.spec = "2" * 64
         cls.gate = "3" * 64
@@ -183,6 +198,19 @@ class NativeAuthorityTests(unittest.TestCase):
         q = run([ROOT / "controller/provenance/install", "install"])
         self.assertEqual(q.returncode, 2)
         self.assertIn("root-required", q.stderr)
+
+    def test_fork_failure_never_signals_nonpositive_pid(self):
+        before = set((self.authority / "evidence").iterdir())
+        argv = self.producer_args(PROBES[0][0])
+        argv[0] = self.fault_producer
+        started = time.monotonic()
+        q = run(argv)
+        elapsed = time.monotonic() - started
+        self.assertEqual((q.returncode, q.stdout, q.stderr), (2, "", ""))
+        self.assertLess(elapsed, 1.0)
+        self.assertFalse(self.signal_marker.exists(),
+                         self.signal_marker.read_text() if self.signal_marker.exists() else "")
+        self.assertEqual(set((self.authority / "evidence").iterdir()), before)
 
     def test_committed_artifact_identity_and_no_fixture_override(self):
         service = ROOT / "controller/provenance/dist/h033-service"

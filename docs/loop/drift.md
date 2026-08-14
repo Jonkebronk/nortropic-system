@@ -465,3 +465,15 @@ copies an executable at handoff. The installed H-034 kernel and service bytes mu
 their exact candidate Git objects across execution. On this unprovisioned owner host, normal H-033
 remains ODÖMBART until the external root ceremony is deliberately executed; no sudo or `/Library`
 mutation occurred during this builder slice.
+
+Independent review found a native failure-path hazard that the successful-probe tests could not
+exercise: after `fork()` returned `-1`, the old loop could interpret that value as the wildcard
+`waitpid`/`kill` target. With another child remaining live, the timeout path could reach
+`kill(-1, SIGKILL)`. H-033 now treats every nonpositive fork result as a terminal closed error before
+any wait/signal operation. The only signal helper requires a positive PID; waits use monotonic elapsed
+time without deadline addition, retry `EINTR`, and never equate an error return with the requested
+child. A deterministic linked syscall shim reproduces the exact failed-fork/live-wildcard condition
+and proves immediate exit, no `kill(-1)`/`kill(0)`, and no evidence write. The same audit bounds the
+producer writer child, verifies the complete post-setuid identity, checks exec-environment setup, and
+makes installer subprocess/write failures explicit. Signed native bytes and their candidate bindings
+were regenerated; the external root ceremony remains unexecuted.

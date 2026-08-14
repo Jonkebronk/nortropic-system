@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "verify/h034/kernel"
 H034_MANIFEST_SHA256 = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
-SERVICE_SHA256 = "3814cbad8671d835328d6674cf19f82392ab3e3a27868a12329545e6356db44f"
+SERVICE_SHA256 = "bd8d88526bf2927f84d8c422d1ec9069f52b5a036c492bb8cb037cacec812ab8"
 SERVICE_GIT_PATH = "controller/provenance/dist/h033-service"
 AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
 PROTECTED_KERNEL = AUTHORITY / "bin/h034-kernel"

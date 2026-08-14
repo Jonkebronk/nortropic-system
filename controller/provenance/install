@@ -17,12 +17,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
 PRODUCER = "_nortropic_provenance"
-SERVICE_SHA = "3814cbad8671d835328d6674cf19f82392ab3e3a27868a12329545e6356db44f"
+SERVICE_SHA = "bd8d88526bf2927f84d8c422d1ec9069f52b5a036c492bb8cb037cacec812ab8"
 PROBE_SHA = "d17aecd9c4c2df98b945f6c53c5573e71a30e7b242657aeaffa56762d86902ef"
 ALLOWLIST_SHA = "3e29e923ffe3904506c5c68d7e6b9250899d9b550f8a8efa7fb8b6ca7338cff7"
 H034_SHA = "405ced0cb549f1b14b50b3f6fa88dab54083a74e291d563dbc32a63021fff5f3"
 H034_MANIFEST_SHA = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
-ARTIFACT_MANIFEST_SHA = "d976216112d0a075cafd39ae75733759743195fa6308da27721eb35261795b4a"
+ARTIFACT_MANIFEST_SHA = "93230a344406975b941f4d7a74fc52feda8c5425278f3dc8d63a0036c77be2c8"
 SERVICES = ("request-producer", "request-observer", "request-consumer")
 PROBES = ("h033-auth-pass-v1", "h033-auth-fail-v1", "h033-auth-odombart-v1")
 
@@ -60,8 +60,16 @@ def stable_file(path, expected):
 
 
 def git_object(path, expected):
-    q = subprocess.run(["/usr/bin/git", "-C", str(REPO), "show", "HEAD:" + path],
-                       stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+    try:
+        q = subprocess.run(["/usr/bin/git", "--no-replace-objects", "-c", "core.fsmonitor=false",
+                            "-C", str(REPO), "show", "HEAD:" + path],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=5,
+                           env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                                "HOME": "/var/empty", "GIT_CONFIG_NOSYSTEM": "1",
+                                "GIT_CONFIG_GLOBAL": "/dev/null", "TMPDIR": "/tmp",
+                                "DARWIN_USER_TEMP_DIR": "/tmp"})
+    except (OSError, subprocess.SubprocessError):
+        stop("git-object-read-failed")
     if q.returncode or q.stderr or sha(q.stdout) != expected:
         stop("git-object-identity-mismatch")
     return q.stdout
@@ -130,7 +138,10 @@ def install_leaf(path, raw, owner, group, mode):
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         done = 0
-        while done < len(raw): done += os.write(fd, raw[done:])
+        while done < len(raw):
+            written = os.write(fd, raw[done:])
+            if written <= 0: raise OSError("zero-length write")
+            done += written
         os.fsync(fd); os.fchown(fd, owner, group); os.fchmod(fd, mode); os.close(fd)
         os.rename(temporary, path)
     except OSError:
@@ -142,10 +153,11 @@ def install_leaf(path, raw, owner, group, mode):
 
 
 def install(root, fixture):
-    sources = exact_sources()
     if fixture:
+        if os.geteuid() == 0: stop("fixture-must-be-unprivileged")
         owner = producer_uid = os.getuid(); group = os.getgid()
         if root == AUTHORITY or root == Path("/") or root.exists(): stop("fixture-root-must-be-new")
+        sources = exact_sources()
         root.mkdir(mode=0o755)
     else:
         if os.geteuid() != 0 or root != AUTHORITY: stop("root-required")
@@ -153,6 +165,7 @@ def install(root, fixture):
         except KeyError: stop("dedicated-account-missing")
         if account.pw_uid in (0, os.getuid()): stop("dedicated-account-not-separated")
         owner = 0; group = 0; producer_uid = account.pw_uid
+        sources = exact_sources()
         safe_dir(Path("/Library"), 0, 0o755, False, False)
         safe_dir(Path("/Library/Application Support"), 0, 0o755, False, False)
         nortropic = root.parent
@@ -200,10 +213,13 @@ def uninstall():
 
 
 def main():
-    if sys.argv[1:] == ["install"]: install(AUTHORITY, False)
-    elif sys.argv[1:] == ["uninstall"]: uninstall()
-    elif len(sys.argv) == 3 and sys.argv[1] == "fixture-install": install(Path(sys.argv[2]).resolve(), True)
-    else: stop("usage")
+    try:
+        if sys.argv[1:] == ["install"]: install(AUTHORITY, False)
+        elif sys.argv[1:] == ["uninstall"]: uninstall()
+        elif len(sys.argv) == 3 and sys.argv[1] == "fixture-install": install(Path(sys.argv[2]).resolve(), True)
+        else: stop("usage")
+    except OSError:
+        stop("filesystem-operation-failed")
 
 
 if __name__ == "__main__":

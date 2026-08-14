@@ -100,7 +100,10 @@ static int drop_identity(uid_t uid,gid_t gid){
 #ifdef NORTROPIC_FIXTURE
   return uid==getuid()&&gid==getgid();
 #else
-  return setgroups(1,&gid)==0&&setgid(gid)==0&&setuid(uid)==0;
+  if(setgroups(1,&gid)||setgid(gid)||setuid(uid))return 0;
+  gid_t only_group=0;
+  return getuid()==uid&&geteuid()==uid&&getgid()==gid&&getegid()==gid&&
+    getgroups(1,&only_group)==1&&only_group==gid;
 #endif
 }
 static int root_fd(void){
@@ -129,7 +132,32 @@ static int exact_allowlist(void){
 static int write_exact(int dir,const char *name,const unsigned char *raw,size_t n,mode_t mode){
   int fd=openat(dir,name,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,mode);if(fd<0)return 0;
   size_t done=0;while(done<n){ssize_t q=write(fd,raw+done,n-done);if(q<=0){close(fd);unlinkat(dir,name,0);return 0;}done+=(size_t)q;}
-  int ok=fsync(fd)==0&&fchmod(fd,mode)==0;close(fd);if(!ok)unlinkat(dir,name,0);return ok;
+  int ok=fsync(fd)==0&&fchmod(fd,mode)==0;if(close(fd))ok=0;if(!ok)unlinkat(dir,name,0);return ok;
+}
+
+static int elapsed_state(const struct timespec *start,const struct timespec *now,time_t seconds){
+  if(now->tv_sec<start->tv_sec||(now->tv_sec==start->tv_sec&&now->tv_nsec<start->tv_nsec))return -1;
+  time_t whole=now->tv_sec-start->tv_sec;
+  return whole>seconds||(whole==seconds&&now->tv_nsec>=start->tv_nsec);
+}
+static void tick(void){struct timespec delay={0,10000000};while(nanosleep(&delay,&delay)&&errno==EINTR){} }
+static int reap_blocking(pid_t pid,int *status){
+  if(pid<=0)return 0;pid_t found;do{found=waitpid(pid,status,0);}while(found<0&&errno==EINTR);return found==pid;
+}
+static int terminate_and_reap(pid_t pid,int *status){
+  if(pid<=0)return 0;int signaled;do{signaled=kill(pid,SIGKILL);}while(signaled<0&&errno==EINTR);
+  if(signaled<0&&errno!=ESRCH)return 0;return reap_blocking(pid,status);
+}
+static int wait_bounded(pid_t pid,int *status,time_t seconds){
+  if(pid<=0||seconds<=0)return 0;struct timespec start,now;if(clock_gettime(CLOCK_MONOTONIC,&start)){terminate_and_reap(pid,status);return 0;}
+  for(;;){
+    pid_t found;do{found=waitpid(pid,status,WNOHANG);}while(found<0&&errno==EINTR);
+    if(found==pid)return 1;
+    if(found<0)return 0;
+    if(clock_gettime(CLOCK_MONOTONIC,&now)){terminate_and_reap(pid,status);return 0;}
+    int elapsed=elapsed_state(&start,&now,seconds);if(elapsed){terminate_and_reap(pid,status);return 0;}
+    tick();
+  }
 }
 
 static int request_args(int argc,char **argv,int kind,Request *r,char generated[65]){
@@ -167,17 +195,18 @@ static int run_probe(const Request*r,uid_t uid,gid_t gid){
   ssize_t n=pread(fd,raw,(size_t)before.st_size,0);digest(raw,n>0?(size_t)n:0,sum);
   if(n!=before.st_size||strcmp(sum,PROBE_SHA256)||snprintf(path,sizeof path,"%s/probes/%s",AUTHORITY_ROOT,r->probe)>=(int)sizeof path){close(fd);close(probes);return 0;}
   int pipefd[2];if(pipe(pipefd)){close(fd);close(probes);return 0;}pid_t pid=fork();
+  if(pid<0){close(pipefd[0]);close(pipefd[1]);close(fd);close(probes);return 0;}
   if(pid==0){close(pipefd[0]);if(dup2(pipefd[1],STDOUT_FILENO)<0)_exit(125);close(pipefd[1]);
-    if(!drop_identity(uid,gid))_exit(125);static char *empty[]={NULL};environ=empty;setenv("PATH","/usr/bin:/bin",1);setenv("LANG","C",1);setenv("LC_ALL","C",1);setenv("HOME","/var/empty",1);execl(path,r->probe,(char*)NULL);_exit(125);}
-  close(pipefd[1]);char output[256];size_t used=0;time_t deadline=time(NULL)+3;int status=0,done=0;
-  fcntl(pipefd[0],F_SETFL,O_NONBLOCK);while(!done&&time(NULL)<=deadline){ssize_t q=read(pipefd[0],output+used,sizeof output-used-1);if(q>0)used+=(size_t)q;if(used>=sizeof output-1)break;pid_t w=waitpid(pid,&status,WNOHANG);if(w==pid)done=1;else usleep(10000);}
-  if(!done){kill(pid,SIGKILL);waitpid(pid,&status,0);}for(;;){ssize_t q=read(pipefd[0],output+used,sizeof output-used-1);if(q<=0)break;used+=(size_t)q;if(used>=sizeof output-1)break;}close(pipefd[0]);output[used]=0;
+    if(!drop_identity(uid,gid))_exit(125);static char *empty[]={NULL};environ=empty;if(setenv("PATH","/usr/bin:/bin",1)||setenv("LANG","C",1)||setenv("LC_ALL","C",1)||setenv("HOME","/var/empty",1))_exit(125);execl(path,r->probe,(char*)NULL);_exit(125);}
+  close(pipefd[1]);char output[256];size_t used=0;int status=0;int reaped=wait_bounded(pid,&status,3),read_ok=reaped;
+  if(reaped)for(;;){if(used==sizeof output-1){read_ok=0;break;}ssize_t q=read(pipefd[0],output+used,sizeof output-used-1);if(q>0){used+=(size_t)q;continue;}if(q==0)break;if(errno==EINTR)continue;read_ok=0;break;}
+  close(pipefd[0]);output[used]=0;
   int stable=!fstat(fd,&after)&&same_stat(&before,&after)&&!fstatat(probes,r->probe,&current,AT_SYMLINK_NOFOLLOW)&&current.st_dev==after.st_dev&&current.st_ino==after.st_ino;close(fd);close(probes);
   char expected[256];int want=snprintf(expected,sizeof expected,"RESULT=%s\nEFFECT_MARKER=%s\n",r->result,r->marker);
-  return done&&WIFEXITED(status)&&WEXITSTATUS(status)==0&&stable&&want>=0&&(size_t)want==used&&!memcmp(expected,output,used);
+  return reaped&&read_ok&&WIFEXITED(status)&&WEXITSTATUS(status)==0&&stable&&want>=0&&(size_t)want==used&&!memcmp(expected,output,used);
 }
 static int write_producer_evidence(const Request*r,uid_t uid,gid_t gid,const char *raw,size_t n){
-  int root=root_fd(),dir=root<0?-1:child_dir(root,"evidence",uid);if(root>=0)close(root);if(dir<0)return 0;char name[80];snprintf(name,sizeof name,"%s.json",r->request_id);pid_t pid=fork();if(pid==0){if(!drop_identity(uid,gid))_exit(125);_exit(write_exact(dir,name,(const unsigned char*)raw,n,0444)?0:1);}int status;int ok=pid>0&&waitpid(pid,&status,0)==pid&&WIFEXITED(status)&&WEXITSTATUS(status)==0;close(dir);return ok;
+  int root=root_fd(),dir=root<0?-1:child_dir(root,"evidence",uid);if(root>=0)close(root);if(dir<0)return 0;char name[80];snprintf(name,sizeof name,"%s.json",r->request_id);pid_t pid=fork();if(pid<0){close(dir);return 0;}if(pid==0){if(!drop_identity(uid,gid))_exit(125);_exit(write_exact(dir,name,(const unsigned char*)raw,n,0444)?0:1);}int status;int ok=wait_bounded(pid,&status,3)&&WIFEXITED(status)&&WEXITSTATUS(status)==0;close(dir);return ok;
 }
 static int producer(const Request*r){uid_t uid;gid_t gid;if(!producer_ids(&uid,&gid)||!run_probe(r,uid,gid))return 2;char receipt[DOC_MAX],evidence[DOC_MAX],effect[65];int rn=receipt_json(r,receipt,sizeof receipt);if(rn<=0||rn>=DOC_MAX)return 2;digest((unsigned char*)receipt,(size_t)rn,effect);int en=evidence_json(r,effect,evidence,sizeof evidence);if(en<=0||en>=DOC_MAX)return 2;if(!write_producer_evidence(r,uid,gid,evidence,(size_t)en))return 2;return printf("REQUEST_ID=%s\n",r->request_id)>0?0:2;}
 static int observer(const Request*r){
