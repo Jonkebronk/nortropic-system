@@ -60,6 +60,17 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import ast
+AST_MATCH=getattr(ast,"Match",())
+AST_MATCH_AS=getattr(ast,"MatchAs",())
+AST_MATCH_SINGLETON=getattr(ast,"MatchSingleton",())
+AST_MATCH_VALUE=getattr(ast,"MatchValue",())
+AST_MATCH_OR=getattr(ast,"MatchOr",())
+AST_MATCH_SEQUENCE=getattr(ast,"MatchSequence",())
+AST_MATCH_STAR=getattr(ast,"MatchStar",())
+AST_MATCH_CLASS=getattr(ast,"MatchClass",())
+AST_MATCH_MAPPING=getattr(ast,"MatchMapping",())
+AST_TRY_STAR=getattr(ast,"TryStar",())
+AST_TRY_TYPES=(ast.Try,)+( (AST_TRY_STAR,) if isinstance(AST_TRY_STAR,type) else () )
 import copy
 import builtins
 import fcntl
@@ -503,20 +514,20 @@ if mode == 'output_then_fail': sys.exit(17)
             try: return True,ast.literal_eval(node)
             except Exception: return False,None
         def r29_pattern_match(pattern,known,value):
-            if isinstance(pattern,ast.MatchAs):
+            if isinstance(pattern,AST_MATCH_AS):
                 return r29_pattern_match(pattern.pattern,known,value) if pattern.pattern else True
-            if isinstance(pattern,ast.MatchSingleton): return known and value is pattern.value
-            if isinstance(pattern,ast.MatchValue):
+            if isinstance(pattern,AST_MATCH_SINGLETON): return known and value is pattern.value
+            if isinstance(pattern,AST_MATCH_VALUE):
                 pknown,pvalue=r29_literal(pattern.value)
                 return (value==pvalue) if known and pknown else None
-            if isinstance(pattern,ast.MatchOr):
+            if isinstance(pattern,AST_MATCH_OR):
                 outcomes=[r29_pattern_match(part,known,value) for part in pattern.patterns]
                 if True in outcomes: return True
                 return None if None in outcomes else False
-            if isinstance(pattern,ast.MatchSequence):
+            if isinstance(pattern,AST_MATCH_SEQUENCE):
                 if not known or not isinstance(value,(list,tuple)): return None
                 stars=[index for index,part in enumerate(pattern.patterns)
-                       if isinstance(part,ast.MatchStar)]
+                       if isinstance(part,AST_MATCH_STAR)]
                 if len(stars)>1: return None
                 if not stars:
                     if len(value)!=len(pattern.patterns): return False
@@ -531,10 +542,10 @@ if mode == 'output_then_fail': sys.exit(17)
                     pairs=prefix+suffix
                 outcomes=[r29_pattern_match(part,True,item) for part,item in pairs]
                 return False if False in outcomes else None if None in outcomes else True
-            if isinstance(pattern,ast.MatchClass): return None
-            if isinstance(pattern,ast.MatchMapping):
+            if isinstance(pattern,AST_MATCH_CLASS): return None
+            if isinstance(pattern,AST_MATCH_MAPPING):
                 return None if not known or isinstance(value,dict) else False
-            if isinstance(pattern,ast.MatchStar): return True
+            if isinstance(pattern,AST_MATCH_STAR): return True
             return None
         def r29_cases(node):
             known,value=r29_literal(node.subject);reachable=[]
@@ -655,7 +666,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 test_normal,test_raise=r31_expr_flow(statement.test)
                 return (test_normal and any(x[0] for x in flows),
                         test_raise|frozenset().union(*(x[1] for x in flows)))
-            if isinstance(statement,(ast.Try,ast.TryStar)):
+            if isinstance(statement,AST_TRY_TYPES):
                 body_env=dict(env);body_normal,body_raises=r30_block_flow(statement.body,body_env)
                 normal=False;raises=frozenset()
                 if body_normal:
@@ -688,7 +699,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 return all(flow[0] for flow in flows),frozenset().union(
                     *(flow[1] for flow in flows))
             if isinstance(statement,ast.ClassDef): return True,frozenset({"UNKNOWN"})
-            if isinstance(statement,(ast.For,ast.AsyncFor,ast.While,ast.With,ast.AsyncWith,ast.Match)):
+            if isinstance(statement,(ast.For,ast.AsyncFor,ast.While,ast.With,ast.AsyncWith)+( (AST_MATCH,) if isinstance(AST_MATCH,type) else () )):
                 return True,frozenset({"UNKNOWN"})
             if isinstance(statement,(ast.Pass,ast.Global,ast.Nonlocal,ast.Import,ast.ImportFrom)):
                 return True,frozenset()
@@ -882,7 +893,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             branch_normals,branch_exceptions=r35_block_states(branch,[dict(env)])
                             next_normals.extend(branch_normals);exceptions.extend(branch_exceptions)
                         exceptions.extend((exc,dict(env)) for exc in r31_expr_flow(statement.test)[1])
-                    elif isinstance(statement,(ast.Try,ast.TryStar)):
+                    elif isinstance(statement,AST_TRY_TYPES):
                         body_normals,body_exceptions=r35_block_states(statement.body,[dict(env)])
                         try_normals=[];try_exceptions=[]
                         for body_env in body_normals:
@@ -944,7 +955,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             kw.value for kw in node.keywords]: yield from walk(value)
                     for statement in node.body: yield from walk(statement)
                     return
-                if isinstance(node,ast.Match):
+                if isinstance(node,AST_MATCH):
                     yield from walk(node.subject)
                     for case,may_match in r29_cases(node):
                         yield from walk(case.pattern)
@@ -953,7 +964,7 @@ if mode == 'output_then_fail': sys.exit(17)
                         if may_match and not (guard_known and guard_value is False):
                             for statement in case.body: yield from walk(statement)
                     return
-                if isinstance(node,(ast.Try,ast.TryStar)):
+                if isinstance(node,AST_TRY_TYPES):
                     for statement in node.body: yield from walk(statement)
                     point_env=r34_initial_env()
                     for prior in fn.body:
@@ -1148,6 +1159,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 and graph_ok and not rebound
                 and len(timeout_assignments) == 1
                 and isinstance(timeout_assignments[0].value, ast.Constant)
+                and type(timeout_assignments[0].value.value) is int
                 and timeout_assignments[0].value.value == 86400
                 and len(timeout_loads) == 1 and len(all_popen_sites)==1
                 and len(popen_assignments)==1 and len(popen_reassign)==1
@@ -1427,22 +1439,22 @@ if mode == 'output_then_fail': sys.exit(17)
                         return r17_join(r17_expr(target.value,env),r17_expr(target.slice,env))
                     return frozenset()
                 def pattern_effect(pattern,env):
-                    if isinstance(pattern,ast.MatchValue): return r17_expr(pattern.value,env)
-                    if isinstance(pattern,ast.MatchSingleton): return frozenset()
-                    if isinstance(pattern,ast.MatchSequence):
+                    if isinstance(pattern,AST_MATCH_VALUE): return r17_expr(pattern.value,env)
+                    if isinstance(pattern,AST_MATCH_SINGLETON): return frozenset()
+                    if isinstance(pattern,AST_MATCH_SEQUENCE):
                         return r17_join(*(pattern_effect(value,env) for value in pattern.patterns))
-                    if isinstance(pattern,ast.MatchMapping):
+                    if isinstance(pattern,AST_MATCH_MAPPING):
                         return r17_join(*(r17_expr(key,env) for key in pattern.keys),
                             *(pattern_effect(value,env) for value in pattern.patterns))
-                    if isinstance(pattern,ast.MatchClass):
+                    if isinstance(pattern,AST_MATCH_CLASS):
                         return r17_join(r17_expr(pattern.cls,env),
                             *(pattern_effect(value,env) for value in pattern.patterns),
                             *(pattern_effect(value,env) for value in pattern.kwd_patterns))
-                    if isinstance(pattern,ast.MatchAs):
+                    if isinstance(pattern,AST_MATCH_AS):
                         return pattern_effect(pattern.pattern,env) if pattern.pattern else frozenset()
-                    if isinstance(pattern,ast.MatchOr):
+                    if isinstance(pattern,AST_MATCH_OR):
                         return r17_join(*(pattern_effect(value,env) for value in pattern.patterns))
-                    if isinstance(pattern,ast.MatchStar): return frozenset()
+                    if isinstance(pattern,AST_MATCH_STAR): return frozenset()
                     semantic_unhandled.append(type(pattern).__name__);return frozenset({UNKNOWN})
                 for _ in range(max(2,len(list(runtime_walk_function(fn))))):
                     changed=False;returns=[]
@@ -1484,7 +1496,7 @@ if mode == 'output_then_fail': sys.exit(17)
                                 r17_expr(context.context_expr,env)
                         elif isinstance(item,ast.Raise):
                             r17_expr(item.exc,env);r17_expr(item.cause,env)
-                        elif isinstance(item,ast.Match):
+                        elif isinstance(item,AST_MATCH):
                             flow=r17_expr(item.subject,env)
                             for case,may_match in r29_cases(item):
                                 flow=r17_join(flow,pattern_effect(case.pattern,env))
@@ -1516,7 +1528,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             for value in list(item.decorator_list)+list(item.bases)+[
                                     keyword.value for keyword in item.keywords]:
                                 r17_expr(value,env)
-                        elif isinstance(item,(ast.Try,ast.TryStar,ast.Pass,ast.Break,
+                        elif isinstance(item,AST_TRY_TYPES+(ast.Pass,ast.Break,
                                               ast.Continue,ast.Global,ast.Nonlocal)):
                             pass
                         elif isinstance(item,ast.stmt):
@@ -1691,8 +1703,8 @@ if mode == 'output_then_fail': sys.exit(17)
             if len(timeout_calls)==1 and len(resolved_popen)==1:
                 call=timeout_calls[0];ancestor=parent_map.get(call);guarded=False
                 while ancestor is not None and ancestor is not run_codex_nodes[0]:
-                    if isinstance(ancestor,(ast.If,ast.For,ast.AsyncFor,ast.While,ast.Try,
-                                            ast.TryStar,ast.ExceptHandler,ast.With,ast.AsyncWith)):
+                    if isinstance(ancestor,(ast.If,ast.For,ast.AsyncFor,ast.While,
+                                            ast.ExceptHandler,ast.With,ast.AsyncWith)+AST_TRY_TYPES):
                         guarded=True
                     ancestor=parent_map.get(ancestor)
                 top={node:index for index,node in enumerate(run_codex_nodes[0].body)}
@@ -1721,6 +1733,14 @@ if mode == 'output_then_fail': sys.exit(17)
                 "receiver_ok": receiver_ok if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "non_receiver_verdict": non_receiver_verdict if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "tree_shape": r20_complete_tree_analysis}
+    r44b_totality_results=[]
+    for r44b_source in ("pass\n", "def run_codex(role):\n    return role\n",
+                        "def _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):\n    return role\n"):
+        r44b_result=analyze_candidate_tree(ast.parse(r44b_source))
+        if not isinstance(r44b_result,dict) or set(r44b_result)!={"verdict","exact_consumer_args","receiver_ok","non_receiver_verdict","tree_shape"}:
+            raise RuntimeError("R44B_TOTALITY_BAD_RESULT")
+        r44b_totality_results.append(r44b_result["verdict"] is False)
+    r44b_totality_ok=all(r44b_totality_results)
     candidate_analysis = analyze_candidate_tree(candidate_tree)
     consumer_architecture_ok = candidate_analysis["verdict"]
     exact_consumer_args = candidate_analysis["exact_consumer_args"]
@@ -3235,6 +3255,8 @@ if mode == 'output_then_fail': sys.exit(17)
         exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
+    check("J_R44B_ANALYZER_TOTALITY_COMPAT", r44b_totality_ok,
+          "same analyzer returned structured false verdicts for unconditional Python-3.9 minimal trees")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
