@@ -1161,3 +1161,11 @@ attributes, subscripts, operators and dynamic calls remain both-path conservativ
 `assert` uses the same constant proof, and finally return/raise can override prior
 normal/raise flow while its effects are always inventoried. Controls bind `1/0`,
 `assert False`, safe `1+1`, and an unknown attribute to actual handler reachability.
+
+R32 replaces the boolean raise flag with a bounded exception set: known builtin
+types from explicit raise, folded failures and AssertionError, plus UNKNOWN. Try
+handlers are processed in order; bare/BaseException catch all, Exception catches
+known Exception subclasses, and specific/tuple handlers remove only definitely
+caught types. UNKNOWN remains conservative unless caught by a true catch-all.
+Handler-body exceptions, normal handler paths, orelse and finally override are joined.
+Nested definite-catch, uncaught-type, ordered, tuple and bare controls bind the model.
