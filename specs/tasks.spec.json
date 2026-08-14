@@ -435,6 +435,7 @@
     },
     {
       "id": "h-032",
+      "r35_exception_semantics": "Exception abstract execution carries a separate environment on every normal and exceptional exit path. A Raise or intrinsic exception captures its exact program-point environment. Each handler type is resolved separately against each exceptional state; matching states enter the handler with that state and nonmatching states escape. Branch joins retain alternatives without converting them into one tuple catch-set, orelse receives only normal-exit environments, and finally transforms every path. Bounded merging must preserve every alternative and may never hide a possible nonmatch.",
       "slice": "H032_EXACT_CODEX_PROVIDER_IDENTITY",
       "authority_class": "ordinary",
       "title": "Exact Codex provider identity at the process boundary",
