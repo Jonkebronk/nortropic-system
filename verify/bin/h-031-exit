@@ -368,6 +368,8 @@ def process_shape(text: str) -> dict[str, object]:
             direct_path_class_call = (
                 isinstance(parent, ast.Attribute) and parent.value is node
                 and isinstance(grandparent, ast.Call) and grandparent.func is parent
+                and parent.attr == "home"
+                and not grandparent.args and not grandparent.keywords
             )
             if node not in annotation_nodes and not direct_path_call and not direct_path_class_call:
                 violations.append((owner, node.lineno, "capturable-path-class"))
@@ -910,6 +912,12 @@ try:
             "\nh031_resolve = Path.resolve\n"
             "Path.resolve = lambda self: Path('/private/tmp/a/b/c')\n"
             "Path.resolve = h031_resolve\n"
+        ),
+        "PATH_CLASS_CONTAINER_MONKEYPATCH": (
+            "\nh031_path_mro = Path.mro()\n"
+            "h031_saved_resolve = h031_path_mro[0].resolve\n"
+            "h031_path_mro[0].resolve = lambda self: Path('/private/tmp/a/b/c')\n"
+            "h031_path_mro[0].resolve = h031_saved_resolve\n"
         ),
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",

@@ -741,3 +741,9 @@ non-capturable capability: it may appear in annotations or as the direct constru
 but not as an alias, container value or class-attribute mutation target. The gate deliberately targets
 the owner Python AST version; newer pattern syntax cannot compile there and therefore cannot reach
 subject import. Exact exception-binding and public-monkeypatch mutants bind the closure.
+
+Twentieth review showed that admitting every direct `Path` class-method call still leaked the class
+through `Path.mro()`: the returned list exposed `Path` at index zero, where `resolve` could be replaced
+and restored around the otherwise exact authority assignment. The product uses only `Path.home()` as a
+class method. That exact zero-argument form is now the sole admitted class-method root; constructor calls
+remain admitted. A class-container monkeypatch mutant permanently binds the reviewed bypass.
