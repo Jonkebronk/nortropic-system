@@ -1210,3 +1210,8 @@ R38 makes expression outcomes environment-aware and gives unpacking structural s
 A proven bound safe Name is normal while an unbound Name raises or remains conservative.
 Known tuple/list structure binds nested and starred targets positionally; definite arity
 mismatch raises ValueError before impossible stores, and unknown iterables retain both paths.
+
+R39 treats target resolution and the resulting STORE/DELETE as separate stages, and
+AugAssign as target load, RHS, operator, then store. Known tuple/list/dict and bounded
+literal arithmetic outcomes carry precise exceptions; unknown attribute setters/deleters
+retain both normal and exceptional paths rather than being silently treated as safe.

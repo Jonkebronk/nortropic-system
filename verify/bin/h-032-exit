@@ -706,8 +706,30 @@ if mode == 'output_then_fail': sys.exit(17)
             return r31_expr_flow(node)
         def r38_assignment_value(node,env):
             if isinstance(node,(ast.Tuple,ast.List)):
-                return {"__sequence__":[r38_assignment_value(item,env) for item in node.elts]}
+                return {"__sequence__":[r38_assignment_value(item,env) for item in node.elts],
+                        "__kind__":"tuple" if isinstance(node,ast.Tuple) else "list"}
+            if isinstance(node,ast.Constant): return {"__literal__":node.value}
             return r34_value(node,env)
+        def r39_store_flow(target,env,delete=False):
+            if isinstance(target,ast.Name): return True,frozenset()
+            if isinstance(target,ast.Attribute):
+                return True,frozenset({"UNKNOWN"})
+            if isinstance(target,ast.Subscript):
+                base=r34_value(target.value,env);known,key=r29_literal(target.slice)
+                if isinstance(base,dict) and base.get("__kind__")=="tuple":
+                    return False,frozenset({"TypeError"})
+                if isinstance(base,dict) and base.get("__kind__")=="list" and known:
+                    size=len(base["__sequence__"])
+                    if isinstance(key,int) and -size<=key<size: return True,frozenset()
+                    return False,frozenset({"IndexError"})
+                if isinstance(base,dict) and "__kind__" not in base and known:
+                    try: hash(key)
+                    except TypeError: return False,frozenset({"TypeError"})
+                    if delete and key not in base: return False,frozenset({"KeyError"})
+                    return True,frozenset()
+                return True,frozenset({"UNKNOWN"})
+            if isinstance(target,(ast.Tuple,ast.List,ast.Starred)): return True,frozenset()
+            return True,frozenset({"UNKNOWN"})
         def r36_target_flow(target,env):
             if isinstance(target,ast.Name): return True,frozenset()
             if isinstance(target,ast.Starred): return r36_target_flow(target.value,env)
@@ -748,6 +770,9 @@ if mode == 'output_then_fail': sys.exit(17)
                         updated,item_normal,item_raises=r37_store_target(item,item_value,updated)
                         raises=raises|item_raises
                         if not item_normal: return updated,False,raises
+            if normal:
+                store_normal,store_raises=r39_store_flow(target,updated)
+                normal=normal and store_normal;raises=raises|store_raises
             return updated,normal,raises
         def r35_block_states(statements,normal_envs):
             normals=[dict(env) for env in normal_envs];exceptions=[]
@@ -776,6 +801,18 @@ if mode == 'output_then_fail': sys.exit(17)
                         if target_normal:
                             exceptions.extend((exc,dict(env)) for exc in value_raises)
                         if target_normal and value_normal:
+                            op_normal=True;op_raises=frozenset({"UNKNOWN"})
+                            old=r34_value(statement.target,env)
+                            rhs=r38_assignment_value(statement.value,env)
+                            if isinstance(old,dict) and "__literal__" in old and isinstance(rhs,dict) and "__literal__" in rhs:
+                                try:
+                                    expression=ast.Expression(ast.BinOp(ast.Constant(old["__literal__"]),statement.op,ast.Constant(rhs["__literal__"])))
+                                    eval(compile(ast.fix_missing_locations(expression),"<r39-op>","eval"),{"__builtins__":{}},{})
+                                    op_raises=frozenset()
+                                except Exception as error:
+                                    op_normal=False;op_raises=frozenset({type(error).__name__})
+                            exceptions.extend((exc,dict(env)) for exc in op_raises)
+                            if not op_normal: continue
                             updated,store_normal,store_raises=r37_store_target(
                                 statement.target,(frozenset({"UNKNOWN"}),),dict(env))
                             exceptions.extend((exc,dict(env)) for exc in store_raises)
@@ -784,6 +821,9 @@ if mode == 'output_then_fail': sys.exit(17)
                         target_normal=True
                         for target in statement.targets:
                             one_normal,one_raises=r36_target_flow(target,env)
+                            if one_normal:
+                                store_normal,store_raises=r39_store_flow(target,env,delete=True)
+                                one_normal=one_normal and store_normal;one_raises=one_raises|store_raises
                             exceptions.extend((exc,dict(env)) for exc in one_raises)
                             target_normal=target_normal and one_normal
                         if target_normal: next_normals.append(dict(env))
@@ -1859,6 +1899,22 @@ if mode == 'output_then_fail': sys.exit(17)
         augassign_target_first_negative=not r28_control(
             "holder = {}\ntry:\n    holder[1 / 0] += repo.r37_rhs\n"
             "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        tuple_store_negative=not r28_control(
+            "holder = (1,)\ntry:\n    holder[0] = 2\n"
+            "except TypeError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        augassign_zero_negative=not r28_control(
+            "x = 1\ntry:\n    x /= 0\n"
+            "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        attribute_store_negative=not r28_control(
+            "holder = repo\ntry:\n    holder.value = 1\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        attribute_delete_negative=not r28_control(
+            "holder = repo\ntry:\n    del holder.value\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        safe_store_delete_positive=all(r28_control(source,True) for source in (
+            "holder = [1]\ntry:\n    holder[0] = 2\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n",
+            "holder = {'x': 1}\ntry:\n    del holder['x']\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n",
+            "x = 1\ntry:\n    x += 1\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n"))
         helper_multikey_positive=r28_control(
             "def _r36_types():\n    return {'runtime': RuntimeError, 'value': ValueError}\n"
             "try:\n    M = _r36_types()\n    E = M['runtime']\n"
@@ -1900,7 +1956,10 @@ if mode == 'output_then_fail': sys.exit(17)
                                and nested_unpack_positive
                                and unpack_mismatch_negative
                                and starred_unpack_positive
-                               and augassign_target_first_negative)
+                               and augassign_target_first_negative
+                               and tuple_store_negative and augassign_zero_negative
+                               and attribute_store_negative and attribute_delete_negative
+                               and safe_store_delete_positive)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
