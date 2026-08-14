@@ -65,6 +65,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import shutil
 import socket
 import stat
@@ -292,7 +293,7 @@ try:
     provider = provider_dir / "totally-renamed-agent"
     capture = work / "capture.json"
     provider.write_text("""#!/usr/bin/env python3
-import hashlib,json,os,pathlib,subprocess,sys
+import hashlib,json,os,pathlib,signal,subprocess,sys,time
 self_path=pathlib.Path(sys.argv[0]); root=self_path.parent
 host_path=root/'codex-code-mode-host'
 before=hashlib.sha256(self_path.read_bytes()).hexdigest()
@@ -365,6 +366,15 @@ if mode in {'exact_max','over_max'}:
     target=4*1024*1024+(1 if mode == 'over_max' else 0)
     payload['summary']='x'*(target-len(base))
 encoded=json.dumps(payload,separators=(',',':'))
+def gate_pause(sequence):
+    pause_root=os.environ.get('H032_SINK_PAUSE_ROOT')
+    if not pause_root: return
+    root=pathlib.Path(pause_root); root.mkdir(parents=True,exist_ok=True)
+    (root/f'closed-{sequence}').write_text('closed')
+    deadline=time.monotonic()+10
+    while not (root/f'release-{sequence}').exists():
+        if time.monotonic() >= deadline: raise RuntimeError('gate pause release timeout')
+        time.sleep(.005)
 if mode == 'fork_descendant':
     marker=out.parent/'late-descendant-residue'
     subprocess.Popen([sys.executable,'-c','import pathlib,sys,time; time.sleep(.5); p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_text("late")',str(marker)])
@@ -385,11 +395,28 @@ elif mode == 'partial_then_complete':
         import time; time.sleep(0.5)
         stream.write(encoded[midpoint:].encode()); stream.flush(); os.fsync(stream.fileno())
 elif mode == 'two_values':
-    out.write_text(encoded)
-    import time; time.sleep(0.3)
+    out.write_text(encoded); gate_pause(1)
     payload['summary']='second accepted value'
-    out.write_text(json.dumps(payload,separators=(',',':')))
-    time.sleep(0.3)
+    out.write_text(json.dumps(payload,separators=(',',':'))); gate_pause(2)
+elif mode == 'paused_valid':
+    out.write_text(encoded); gate_pause(1)
+elif mode in {'double_fork_setsid','double_fork_setsid_signal'}:
+    import time
+    first=os.fork()
+    if first == 0:
+        second=os.fork()
+        if second == 0:
+            os.setsid()
+            ledger=pathlib.Path(os.environ['H032_DESCENDANT_LEDGER'])
+            marker=pathlib.Path(os.environ['H032_DESCENDANT_MARKER'])
+            ledger.write_text(f'{os.getpid()} {os.getppid()}\\n')
+            time.sleep(2.0)
+            marker.parent.mkdir(parents=True,exist_ok=True); marker.write_text('late')
+            os._exit(0)
+        os._exit(0)
+    os.waitpid(first,0)
+    if mode == 'double_fork_setsid_signal': os.kill(os.getppid(),signal.SIGTERM)
+    time.sleep(3.0)
 elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
@@ -697,6 +724,7 @@ if mode == 'output_then_fail': sys.exit(17)
         not timeout_case[0][0] and not timeout_case[2] and not timeout_case[3] and not timeout_case[4])
 
     tracked_identities: set[tuple[int, int, str]] = set()
+    tracked_groups: set[int] = set()
     monitor_stop = threading.Event(); monitor_threads: list[threading.Thread] = []
     original_tracked_popen = module.subprocess.Popen
     def process_table():
@@ -721,8 +749,16 @@ if mode == 'output_then_fail': sys.exit(17)
                 if pid in rows: tracked_identities.add((pid, rows[pid][0], rows[pid][1]))
             time.sleep(0.01)
     def tracked_popen(argv, *args, **kwargs):
+        # Assign containment synchronously at the spawn boundary; discovery of
+        # the root must not depend on a later ps poll.
+        kwargs = dict(kwargs)
+        kwargs.setdefault("start_new_session", True)
         process = original_tracked_popen(argv, *args, **kwargs)
         if "-o" in list(argv):
+            tracked_groups.add(os.getpgid(process.pid))
+            rows = process_table()
+            if process.pid in rows:
+                tracked_identities.add((process.pid, rows[process.pid][0], rows[process.pid][1]))
             thread = threading.Thread(target=monitor_family, args=(process.pid,), daemon=True)
             monitor_threads.append(thread); thread.start()
         return process
@@ -736,12 +772,31 @@ if mode == 'output_then_fail': sys.exit(17)
         tracked_timeout = result_case("timeout")
         module.subprocess.Popen = tracked_popen
         tracked_fork = result_case("fork_descendant")
+        descendant_ledger = work / "double-fork-ledger"
+        descendant_marker = work / "double-fork-staging" / "late"
+        os.environ.update(H032_DESCENDANT_LEDGER=str(descendant_ledger),
+                          H032_DESCENDANT_MARKER=str(descendant_marker))
+        module.subprocess.Popen = tracked_timeout_popen
+        tracked_double_fork_timeout = result_case("double_fork_setsid")
+        module.subprocess.Popen = tracked_popen
+        tracked_double_fork_signal = result_case("double_fork_setsid_signal")
     finally:
         module.subprocess.Popen = original_tracked_popen
         monitor_stop.set()
         for thread in monitor_threads: thread.join(timeout=1)
         os.environ.pop("H032_RESULT_MODE", None)
-    time.sleep(1.0)
+        os.environ.pop("H032_DESCENDANT_LEDGER", None)
+        os.environ.pop("H032_DESCENDANT_MARKER", None)
+    escaped_identities = []
+    if descendant_ledger.exists():
+        for line in descendant_ledger.read_text(encoding="utf-8").splitlines():
+            try:
+                pid = int(line.split()[0]); rows = process_table()
+                if pid in rows:
+                    identity = (pid, rows[pid][0], rows[pid][1])
+                    escaped_identities.append(identity); tracked_identities.add(identity)
+            except (ValueError, IndexError): pass
+    time.sleep(2.5)
     remaining_identities = []
     rows_after = process_table()
     for identity in tracked_identities:
@@ -752,12 +807,30 @@ if mode == 'output_then_fail': sys.exit(17)
                             if tracked_timeout_paths else work)
     tracked_fork_paths = tracked_fork[1].get("_gate_output_paths", [])
     tracked_fork_root = Path(tracked_fork_paths[-1]).parent if tracked_fork_paths else work
+    live_groups = []
+    for pgid in tracked_groups:
+        try: os.killpg(pgid, 0); live_groups.append(pgid)
+        except ProcessLookupError: pass
+        except PermissionError: live_groups.append(pgid)
     tracked_quiescent = (not tracked_interruption[0][0] and not tracked_timeout[0][0]
                          and not tracked_fork[0][0]
+                         and not tracked_double_fork_timeout[0][0]
+                         and not tracked_double_fork_signal[0][0]
                          and bool(tracked_identities)
                          and not tracked_timeout_root.exists()
                          and not tracked_fork_root.exists()
-                         and not remaining_identities)
+                         and not descendant_marker.exists()
+                         and not remaining_identities and not live_groups)
+    # A broken candidate may leave the deliberately escaped mutant alive.
+    # Remove only identities emitted by this exact fixture after recording the
+    # failed verdict; this cleanup is not part of the passing oracle.
+    for pid, _ppid, started in remaining_identities:
+        current = process_table().get(pid)
+        if current and current[1] == started:
+            try: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+    if descendant_ledger.exists(): descendant_ledger.unlink()
+    if descendant_marker.parent.exists(): shutil.rmtree(descendant_marker.parent)
 
     def object_attack(kind: str):
         attack_repo = make_repo(str(provider))
@@ -848,21 +921,6 @@ if mode == 'output_then_fail': sys.exit(17)
 
     oversized_positive = result_case("exact_max")
     os.environ.pop("H032_RESULT_MODE", None)
-
-    transport_consume_reads = 0
-    canonical_observer_reads = 0
-    for opened in valid_observed.get("opened", []):
-        if not opened or not isinstance(opened[0], (str, bytes, os.PathLike)):
-            continue
-        opened_path = Path(opened[0]).absolute()
-        mode = opened[1] if len(opened) > 1 else None
-        flags = opened[2] if len(opened) > 2 else None
-        is_read = ((isinstance(mode, str) and mode.startswith("r")) or
-                   (isinstance(flags, int) and flags & os.O_ACCMODE == os.O_RDONLY))
-        if is_read and opened_path == valid_output.absolute(): transport_consume_reads += 1
-        if is_read and opened_path == valid_canonical.absolute(): canonical_observer_reads += 1
-    exactly_once_ok = (valid[0] and transport_consume_reads == 1
-                       and (valid_output == valid_canonical or canonical_observer_reads == 0))
 
     atomic_repo = make_repo(str(provider))
     atomic_box: list[tuple[bool, str, int, int, list[str]]] = []
@@ -1023,62 +1081,90 @@ if mode == 'output_then_fail': sys.exit(17)
             if original_os_preadv is not None: os.preadv = original_os_preadv
         for path in moved:
             if path.exists(): path.unlink()
-        return outcome, fired[0]
+        return outcome, bool(targets)
     read_attacks = {kind: connected_read_attack(kind)
                     for kind in ("path_swap", "mutation", "growth", "short")}
-    read_attacks_ok = all(not outcome[0] and fired == 1
-                          for outcome, fired in read_attacks.values())
+    read_attacks_ok = all(not outcome[0] and connected
+                          for outcome, connected in read_attacks.values())
 
-    def value_promotion_effect_case(mode: str, inject_second_promotion: bool):
-        effect_repo = make_repo(str(provider)); accepted = set(); promoted = set()
-        injected = [False]; stop = threading.Event(); observers = []
+    # The provider announces only the effect boundary (its sink has been
+    # closed), then blocks.  At that causal point the gate opens the exact sink
+    # nofollow, binds its dev+ino+digest and proves the canonical destination is
+    # still absent.  Correctness never depends on parser/open/rename API names
+    # or on catching a value during a polling interval.
+    def causal_result_case(mode: str, second_promotion: bool = False):
+        effect_repo = make_repo(str(provider)); pause = work / f"sink-pause-{nonlocal_counter[0]}-{mode}"
+        pause.mkdir(); launched = threading.Event(); paths: dict[str, Path] = {}
         original = module.subprocess.Popen
-        def observe_path(path: Path, bucket: set, allow_inject: bool):
-            while not stop.is_set():
-                try:
-                    st = path.stat()
-                    raw = bounded_stable_result(path)
-                    doc = strict_json(raw.decode("utf-8", errors="strict"))
-                    if complete_schema_valid(doc, schema_document):
-                        bucket.add((st.st_dev, st.st_ino, hashlib.sha256(raw).hexdigest()))
-                        if allow_inject and inject_second_promotion and not injected[0]:
-                            injected[0] = True
-                            old = path.with_name(path.name + ".first-promotion")
-                            path.rename(old)
-                            path.write_bytes(raw)
-                except Exception:
-                    pass
-                time.sleep(0.002)
         def popen(argv, *args, **kwargs):
-            flat = list(argv); process = original(argv, *args, **kwargs)
+            flat = list(argv)
             if "-o" in flat:
-                output = Path(flat[flat.index("-o") + 1])
+                paths["sink"] = Path(flat[flat.index("-o") + 1])
                 envelopes = [Path(value) for value in flat if isinstance(value, str)
                              and Path(value).name == "provider-envelope.json"]
-                canonical = envelopes[-1].parent / "result.json" if envelopes else output
-                for path, bucket, allow in ((output, accepted, False),
-                                            (canonical, promoted, True)):
-                    thread = threading.Thread(target=observe_path,
-                                              args=(path, bucket, allow), daemon=True)
-                    observers.append(thread); thread.start()
-            return process
-        module.subprocess.Popen = popen; os.environ["H032_RESULT_MODE"] = mode
+                paths["canonical"] = envelopes[-1].parent / "result.json"
+                launched.set()
+            return original(argv, *args, **kwargs)
+        box = []
+        module.subprocess.Popen = popen
+        os.environ.update(H032_RESULT_MODE=mode, H032_SINK_PAUSE_ROOT=str(pause))
+        thread = threading.Thread(target=lambda: box.append(attempt(effect_repo)), daemon=True)
+        thread.start()
+        def await_path(path: Path, timeout: float = 10.0):
+            deadline = time.monotonic() + timeout
+            while not path.exists() and time.monotonic() < deadline: time.sleep(.01)
+            return path.exists()
+        identities = []
+        injected = False
         try:
-            outcome = attempt(effect_repo)
-            time.sleep(0.1)
+            if not launched.wait(10) or not await_path(pause / "closed-1"):
+                raise RuntimeError("provider did not reach first closed-sink boundary")
+            sink = paths["sink"]; canonical = paths["canonical"]
+            fd = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                before = os.fstat(fd); raw = bytearray()
+                while len(raw) <= MAX_RESULT_BYTES:
+                    chunk = os.read(fd, min(65536, MAX_RESULT_BYTES + 1 - len(raw)))
+                    if not chunk: break
+                    raw.extend(chunk)
+                after = os.fstat(fd)
+            finally: os.close(fd)
+            document = strict_json(bytes(raw).decode("utf-8", errors="strict"))
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != \
+                    (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                raise RuntimeError("sink changed during causal observation")
+            if len(raw) > MAX_RESULT_BYTES or not complete_schema_valid(document, schema_document):
+                raise RuntimeError("closed sink did not contain one complete accepted value")
+            identities.append((before.st_dev, before.st_ino, hashlib.sha256(raw).hexdigest()))
+            canonical_was_absent = not canonical.exists()
+            if second_promotion:
+                canonical.write_bytes(bytes(raw)); injected = True
+            (pause / "release-1").write_text("release")
+            if mode == "two_values":
+                if not await_path(pause / "closed-2"):
+                    raise RuntimeError("provider did not reach second closed-sink boundary")
+                second = bounded_stable_result(sink); st = sink.stat()
+                identities.append((st.st_dev, st.st_ino, hashlib.sha256(second).hexdigest()))
+                (pause / "release-2").write_text("release")
+            thread.join(timeout=15)
         finally:
-            module.subprocess.Popen = original; os.environ.pop("H032_RESULT_MODE", None)
-            stop.set()
-            for thread in observers: thread.join(timeout=1)
-        return outcome, len(accepted), len(promoted), injected[0]
-    effect_once = value_promotion_effect_case("valid", False)
-    effect_two_values = value_promotion_effect_case("two_values", False)
-    effect_two_promotions = value_promotion_effect_case("valid", True)
-    effect_once_ok = effect_once[0][0] and effect_once[1:3] == (1, 1)
-    effect_two_values_caught = effect_two_values[1] >= 2 and effect_two_values[1] != 1
-    effect_two_promotions_caught = (effect_two_promotions[3]
-                                    and effect_two_promotions[2] >= 2
-                                    and effect_two_promotions[2] != 1)
+            module.subprocess.Popen = original
+            os.environ.pop("H032_RESULT_MODE", None); os.environ.pop("H032_SINK_PAUSE_ROOT", None)
+            if thread.is_alive():
+                (pause / "release-1").touch(); (pause / "release-2").touch(); thread.join(timeout=5)
+        outcome = box[0] if len(box) == 1 else (False, "gate causal run incomplete", 0, 0, [])
+        if second_promotion and paths.get("canonical", work).exists(): paths["canonical"].unlink()
+        shutil.rmtree(pause)
+        return outcome, identities, canonical_was_absent, injected
+    effect_once = causal_result_case("paused_valid")
+    effect_two_values = causal_result_case("two_values")
+    effect_two_promotions = causal_result_case("paused_valid", True)
+    effect_once_ok = effect_once[0][0] and len(effect_once[1]) == 1 and effect_once[2]
+    effect_two_values_caught = (not effect_two_values[0][0] and len(effect_two_values[1]) == 2
+                                and len({item[2] for item in effect_two_values[1]}) == 2)
+    effect_two_promotions_caught = (not effect_two_promotions[0][0]
+                                    and len(effect_two_promotions[1]) == 1
+                                    and effect_two_promotions[2] and effect_two_promotions[3])
 
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
@@ -1134,7 +1220,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok
         and effect_once_ok and effect_two_values_caught and effect_two_promotions_caught
-        and oversized_positive[0][0] and exactly_once_ok
+        and oversized_positive[0][0]
         and atomic_ok and timeout_ok and object_attacks_ok
         and cleanup_error_ok and interruption_quiescent and tracked_quiescent
         and valid_output.is_absolute()
@@ -1150,7 +1236,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} transport_reads={transport_consume_reads} canonical_observer_reads={canonical_observer_reads} exactly_once={exactly_once_ok} effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),

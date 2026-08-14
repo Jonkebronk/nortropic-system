@@ -962,3 +962,13 @@ complete object-identity transition independent of helper API; an injected secon
 transition is caught. Both timeout and SIGTERM are sampled from spawn, staging roots
 must be absent (not empty), and a fast provider fork/exec descendant that writes late
 residue must be discovered by pid/ppid/start ancestry and rejected after delay.
+
+R10 replaces that asynchronous effect observer with a causal controller-boundary
+handshake. The provider pauses after closing each private sink; the gate opens the exact
+sink no-follow, binds dev/inode/digest and proves canonical absence before release. A
+second accepted close or an injected prior/second canonical promotion must cause the
+actual invocation to reject, rather than merely incrementing an observer count. This is
+independent of parser, mmap/FileIO/raw/fd helper, or atomic-publication API choice. The
+process oracle assigns a session at Popen return and exercises timeout and SIGTERM with
+a rapid double-fork+setsid+exec late writer; delayed success requires absent staging root,
+no live recorded identity or process group, and no late filesystem effect.
