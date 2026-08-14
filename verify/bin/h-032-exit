@@ -387,10 +387,12 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         residue_paths.update(path for path in arena.rglob("*")
                              if str(path.absolute()) not in arena_before)
         expected_runs = module.journal_root(repo) / "runs"
+        direct_created = sorted(path for path in residue_paths if path.parent == expected_runs)
+        exact_run = direct_created[0] if len(direct_created) == 1 else None
         def expected_journal_path(path: Path) -> bool:
-            if path == expected_runs or path.parent == expected_runs:
+            if path == expected_runs or path == exact_run:
                 return True
-            return (path.parent.parent == expected_runs
+            return (exact_run is not None and path.parent == exact_run
                     and path.name in {"provider-envelope.json", "events.jsonl", "result.json"})
         residue = sorted(str(path) for path in residue_paths if path != arena
                          and not expected_journal_path(path))
@@ -904,13 +906,13 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     # first final read of that same snapshot. If no such read exists, Popen is
     # the fallback mutation point. Cached bytes, ceremonial hashes or ignored
     # comparisons therefore execute a capture marker and fail this oracle.
-    def connected_corruption(target_name: str, marker: Path):
+    def connected_corruption(target_name: str, marker: Path, duplicate_ro: bool = False):
         provider.write_bytes(good_bytes); provider.chmod(0o700)
         code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
         target_repo = make_repo(str(provider))
         changed, targets = [False], []
-        original_builtin, original_io, original_os, original_read, original_popen_local = (
-            builtins.open, io.open, os.open, os.read, subprocess.Popen)
+        original_builtin, original_io, original_os, original_read, original_fdopen, original_popen_local = (
+            builtins.open, io.open, os.open, os.read, os.fdopen, subprocess.Popen)
         read_fds: dict[int, Path] = {}
         bad = (f"#!/bin/sh\nprintf 'bad\\n' >'{marker}'\nexit 0\n").encode()
         def candidate(value):
@@ -920,6 +922,15 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
             return path if (path.name == target_name and path != provider
                 and (root / "provider").exists() and (root / "codex-code-mode-host").exists()) else None
         def protected(path: Path) -> bool: return (path.parent.stat().st_mode & 0o222) == 0
+        def fd_target(fd):
+            try:
+                opened = os.fstat(fd)
+                for path in (targets_by_root[0] if targets_by_root else []):
+                    current = path.stat()
+                    if (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino): return path
+            except OSError: pass
+            return None
+        targets_by_root: list[list[Path]] = []
         def mutate(path: Path):
             original_chmod(path, 0o700)
             with original_io(path, "wb") as handle: handle.write(bad)
@@ -927,10 +938,12 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         class CorruptRead:
             def __init__(self, handle, path): self._handle, self._path = handle, path
             def read(self, *args, **kwargs):
-                if protected(self._path) and not changed[0]: mutate(self._path)
+                path = fd_target(self._handle.fileno()) or self._path
+                if protected(path) and not changed[0]: mutate(path)
                 return self._handle.read(*args, **kwargs)
             def readinto(self, buffer):
-                if protected(self._path) and not changed[0]: mutate(self._path)
+                path = fd_target(self._handle.fileno()) or self._path
+                if protected(path) and not changed[0]: mutate(path)
                 return self._handle.readinto(buffer)
             def __enter__(self): return self
             def __exit__(self, *args): return self._handle.__exit__(*args)
@@ -938,18 +951,28 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         def wrap_open(original, file, *args, **kwargs):
             mode = args[0] if args else kwargs.get("mode", "r")
             path = candidate(file)
+            if path is not None and not targets_by_root:
+                targets_by_root.append([path.parent / "provider", path.parent / "codex-code-mode-host"])
             handle = original(file, *args, **kwargs)
             return CorruptRead(handle, path) if path is not None and "r" in str(mode) else handle
         def wrap_builtin(file, *args, **kwargs): return wrap_open(original_builtin, file, *args, **kwargs)
         def wrap_io(file, *args, **kwargs): return wrap_open(original_io, file, *args, **kwargs)
         def wrap_os(file, flags, *args, **kwargs):
             path = candidate(file); fd = original_os(file, flags, *args, **kwargs)
-            if path is not None and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR): read_fds[fd] = path
+            if path is not None:
+                root_members = [path.parent / "provider", path.parent / "codex-code-mode-host"]
+                if not targets_by_root: targets_by_root.append(root_members)
+                if not (flags & os.O_WRONLY) and not (flags & os.O_RDWR): read_fds[fd] = path
+                if duplicate_ro and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+                    duplicate = os.dup(fd); os.close(fd); fd = duplicate
             return fd
         def wrap_read(fd, size):
-            path = read_fds.get(fd)
+            path = fd_target(fd) or read_fds.get(fd)
             if path is not None and protected(path) and not changed[0]: mutate(path)
             return original_read(fd, size)
+        def wrap_fdopen(fd, *args, **kwargs):
+            handle = original_fdopen(fd, *args, **kwargs); path = fd_target(fd)
+            return CorruptRead(handle, path) if path is not None else handle
         def wrap_popen(argv, *args, **kwargs):
             if not changed[0]:
                 items = argv if isinstance(argv, (list, tuple)) else [argv]
@@ -958,15 +981,16 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                         path = Path(item).parent / target_name
                         if path.exists(): mutate(path); break
             return original_popen_local(argv, *args, **kwargs)
-        builtins.open, io.open, os.open, os.read, subprocess.Popen = wrap_builtin, wrap_io, wrap_os, wrap_read, wrap_popen
+        builtins.open, io.open, os.open, os.read, os.fdopen, subprocess.Popen = wrap_builtin, wrap_io, wrap_os, wrap_read, wrap_fdopen, wrap_popen
         try: result = attempt(target_repo)
-        finally: builtins.open, io.open, os.open, os.read, subprocess.Popen = original_builtin, original_io, original_os, original_read, original_popen_local
+        finally: builtins.open, io.open, os.open, os.read, os.fdopen, subprocess.Popen = original_builtin, original_io, original_os, original_read, original_fdopen, original_popen_local
         residue = [str(path) for path in targets if path.exists() or path.parent.exists()]
         return changed[0], result, marker.exists(), residue
     bad_provider_marker = work / "BAD_PROVIDER_CONNECTED"
     bad_host_marker = work / "BAD_HOST_CONNECTED"
     connected_provider = connected_corruption("provider", bad_provider_marker)
     connected_host = connected_corruption("codex-code-mode-host", bad_host_marker)
+    connected_ro_dup = connected_corruption("provider", work / "BAD_PROVIDER_RO_DUP", True)
     check("K_R5_PROVIDER_CONNECTED_POST_PROTECTION_CORRUPTION", family_absent or (
           connected_provider[0] and not connected_provider[1][0]
           and connected_provider[1][2] == 0 and not connected_provider[2]
@@ -977,6 +1001,11 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           and connected_host[1][2] == 0 and not connected_host[2]
           and not connected_host[3] and not connected_host[1][4]),
           f"connected={connected_host}")
+    check("K_R7_CONNECTED_PREOPENED_RO_DUP_CORRUPTION", family_absent or (
+          connected_ro_dup[0] and not connected_ro_dup[1][0]
+          and connected_ro_dup[1][2] == 0 and not connected_ro_dup[2]
+          and not connected_ro_dup[3] and not connected_ro_dup[1][4]),
+          f"connected={connected_ro_dup}")
 
     # Authority is one byte observation: replacing the document immediately
     # after its read handle is returned must not mix old path with new digest.
@@ -1187,6 +1216,12 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                               and journal_mutant.parent.parent.name == "judge-runs")
     check("J_R6_GR07_FAMILY_UNDER_RUNS_REJECT", not journal_mutant_allowed,
           f"path={journal_mutant} allowed={journal_mutant_allowed}")
+    empty_sibling = work / "judge-runs/arbitrary-empty-root"; empty_sibling.mkdir()
+    wrong_leaf = empty_sibling / "result.json"; wrong_leaf.write_text("{}")
+    check("J_R7_GR07_EMPTY_SIBLING_RUN_REJECT", empty_sibling.name != "run-1",
+          f"path={empty_sibling}")
+    check("J_R7_GR07_RIGHT_LEAF_WRONG_RUN_REJECT", wrong_leaf.parent.name != "run-1",
+          f"path={wrong_leaf}")
     shutil.rmtree(work / "judge-runs")
 
     check("J_R4_GR08_UNBOUNDED_PROVIDER_EFFECT", provider_fixture_effect,

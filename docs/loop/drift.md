@@ -830,3 +830,8 @@ R6 binds connected corruption to the first actual post-protection read of the sn
 pre-opened handles and descriptors. Actual process fd enumeration plus fstat/F_GETFL replaces API-level
 writer bookkeeping at Popen. The journal cleanup exemption is now an exact finite shape, and a family
 subtree beneath runs is an explicit rejection mutant. Production remains unchanged.
+
+R7 removes original-fd history from connected corruption: every actual read fstats its live descriptor
+against current snapshot dev/inode, including a connected duplicated-RO subject control. Cleanup now
+binds the exact single run directory created by the invocation and rejects empty sibling roots or valid
+leaf names beneath any other child. Production remains unchanged.
