@@ -521,3 +521,60 @@ absolute judge/tool identities and a fixed validated private cleanup root. G20 a
 live-only: JSON may be emitted after a real candidate-bound probe for durable evidence, but no JSON can
 be supplied back to obtain PASS. Separate production controls execute system Git, GitHub CLI and an
 arbitrary fixed controller-style helper through `run()` and require exact effects with no AGENT_START.
+
+## 2026-08-14 — H-032 builder: provider identity becomes an execution boundary
+
+The provider-only launch path now rereads one strict authority document at every attempt. Both the
+authority and executable are opened with no-follow semantics; regular-file identity, executable mode,
+bounded complete reads and stable metadata are decided on those opened objects. Only the verified
+bytes are copied into a newly private root, and the copied executable is rehashed immediately before
+the provider trust transition. The source pathname is never reopened to populate or execute the
+snapshot, so a same-byte hard link remains admissible while symlinks, PATH shadows and pathname swaps
+gain no authority.
+
+`AGENT_START` occurs only after the final digest check. The absolute snapshot argv[0] is passed through
+the existing controller launcher with the private root as its G20 trust root; provider descendants are
+therefore denied write/chmod/unlink/rename/create authority over both snapshot and namespace. The root
+is removed on success and every failure path. The generic `run()` dispatcher is deliberately untouched,
+preserving exact Git, GitHub and fixed helper effects without producing provider lifecycle events.
+
+The frozen gate's deterministic identity negatives, opened-object races, final-rehash mutation and
+cleanup controls are judgeable in the builder sandbox. Actual provider success, namespace denials and
+fresh protected H-033 provenance require the ordinary owner runner because nested Seatbelt is rejected
+inside the builder sandbox; those effects remain explicitly ODÖMBART here rather than being simulated.
+
+Independent review then found a boundary ordering defect: the absolute G20 launcher still had an
+`/usr/bin/env python3.12` shebang, so caller PATH could execute attacker code before the launcher
+installed Seatbelt. The provider path now reads the already frozen Python interpreter authority,
+verifies its canonical no-follow regular executable and exact digest, and invokes that absolute
+interpreter with isolated `-I -S` flags. It does not sanitize or replace the provider environment;
+PATH reaches the provider only after the trusted controller process has established G20. A disposable
+fake `python3.12` placed first in caller PATH was not invoked, while the provider remained a descendant
+of the real launcher and all six namespace attacks stayed denied.
+
+The next review correctly rejected that candidate's partial consumption of the separate Python
+interpreter authority: hashing one opened descriptor and later executing its pathname did not satisfy
+that authority's full same-opened-object private-snapshot model. H-032 now makes no Python-authority
+claim. It relies on the already frozen H-017 launcher trust boundary and closes only the environment
+that reaches the launcher's pre-Seatbelt `/usr/bin/env` step: fixed non-caller PATH and removal of every
+caller `PYTHON*` variable. Other provider environment is retained. Dedicated fake PATH and
+launcher-specific `sitecustomize` controls remained silent; the actual provider still ran below the
+real launcher with G20 namespace attacks denied.
+
+Review also demonstrated that a preserved caller `HOME` enabled Python 3.12's user-site
+`usercustomize.py` before the script and therefore before G20. Removing HOME would break the
+provider's credential environment, so the launcher environment instead forces no-user-site and safe
+path startup, disables bytecode emission, strips all caller `PYTHON*`, and explicitly strips Darwin's
+non-PYTHON-prefixed `__PYVENV_LAUNCHER__` framework redirect. HOME and unrelated provider variables
+remain intact. A combined hostile HOME, usercustomize, PATH, PYTHONPATH and pyvenv-launcher run left
+all intercept markers absent and retained the live provider/G20 effects.
+
+Environment controls alone still left interpreter selection at an owner-writable Homebrew symlink and
+allowed global site/`.pth` processing before G20. The final correction consumes the existing Python
+authority completely rather than partially: exact 14-key semantics, canonical no-follow opened object,
+regular/executable mode, stable bounded bytes and exact digest. Those opened bytes are copied next to
+the provider snapshot in the same private root. Immediately before `AGENT_START`, both executables are
+rehashed and protected; the absolute Python snapshot runs the exact `-I -S` flags and absolute launcher.
+The provider environment is otherwise retained, but `DYLD_*`, `LD_PRELOAD`, `LD_LIBRARY_PATH` and
+`__PYVENV_LAUNCHER__` are removed because they can execute or redirect code before isolation/G20. A
+constructor dylib plus hostile global/user site, PATH, HOME and Python-family inputs produced no marker.

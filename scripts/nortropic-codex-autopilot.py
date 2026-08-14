@@ -41,6 +41,20 @@ from core import (AuthorityError, canonical_path, permits,
 EXPECTED_REPO = "Nortropic/nortropic-system"
 OWNER_DECISION_PATH = "docs/loop/owner-h003-attestation-authority-v1.md"
 REPORT_SCHEMA_PATH = "docs/loop/codex-autopilot-report.schema.json"
+PROVIDER_IDENTITY_PATH = "config/codex-provider-identity.json"
+PYTHON_IDENTITY_PATH = "config/python-interpreter-authority-v1.json"
+PROVIDER_IDENTITY_KEYS = {
+    "schema_version", "provider", "executable_path", "executable_sha256",
+}
+PYTHON_IDENTITY_KEYS = {
+    "schema_version", "authority_version", "canonical_path", "python_version",
+    "executable_sha256", "required_regular_file", "required_executable",
+    "symlink_allowed", "path_lookup_allowed", "usr_bin_env_allowed",
+    "requester_override_allowed", "isolated_flags", "environment_authority",
+    "runtime_binding_model",
+}
+MAX_PROVIDER_AUTHORITY_BYTES = 16 * 1024
+MAX_PROVIDER_EXECUTABLE_BYTES = 256 * 1024 * 1024
 REJECTED_S3 = "1e21a7fe150f25626301f3656893d1798ae46c3d"
 FULL_ROADMAP_OWNER_PATH = "docs/loop/codex-autopilot-v3-full-roadmap.md"
 SUBSTITUTION_OWNER_PATH = "docs/loop/harness-substitution-contract-v1.md"
@@ -564,6 +578,177 @@ Your final response MUST conform exactly to docs/loop/codex-autopilot-report.sch
 """.strip()
 
 
+def _read_stable_opened(fd: int, limit: int, label: str) -> bytes:
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode) or before.st_size < 0 or before.st_size > limit:
+        raise Stop(f"{label} is not a bounded regular file")
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(fd, min(1024 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            raise Stop(f"{label} exceeds {limit} bytes")
+    after = os.fstat(fd)
+    stable = (before.st_dev, before.st_ino, before.st_mode, before.st_size,
+              before.st_mtime_ns, before.st_ctime_ns) == (
+              after.st_dev, after.st_ino, after.st_mode, after.st_size,
+              after.st_mtime_ns, after.st_ctime_ns)
+    if not stable or total != before.st_size:
+        raise Stop(f"{label} changed while being read")
+    return b"".join(chunks)
+
+
+def _strict_provider_authority(repo: Path) -> tuple[Path, str]:
+    authority_path = repo / PROVIDER_IDENTITY_PATH
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(authority_path, flags)
+    except OSError as e:
+        raise Stop(f"provider identity authority unavailable: {e}") from e
+    try:
+        raw = _read_stable_opened(fd, MAX_PROVIDER_AUTHORITY_BYTES,
+                                  "provider identity authority")
+    finally:
+        os.close(fd)
+    try:
+        value = strict_json_bytes(raw)
+    except (AuthorityError, UnicodeError, ValueError) as e:
+        raise Stop(f"provider identity authority is not strict JSON: {e}") from e
+    if not isinstance(value, dict) or set(value) != PROVIDER_IDENTITY_KEYS:
+        raise Stop("provider identity authority has unexpected keys")
+    schema, provider = value["schema_version"], value["provider"]
+    executable, digest = value["executable_path"], value["executable_sha256"]
+    if (type(schema) is not int or schema != 1 or type(provider) is not str
+            or provider != "openai-codex" or type(executable) is not str
+            or not executable or type(digest) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)):
+        raise Stop("provider identity authority has invalid values")
+    path = Path(executable)
+    if not path.is_absolute():
+        raise Stop("provider executable path must be absolute")
+    return path, digest
+
+
+def _provider_snapshot(repo: Path) -> tuple[Path, Path, str]:
+    source, expected = _strict_provider_authority(repo)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(source, flags)
+    except OSError as e:
+        raise Stop(f"provider executable unavailable: {e}") from e
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or not (opened.st_mode & 0o111):
+            raise Stop("provider executable is not a regular executable file")
+        payload = _read_stable_opened(fd, MAX_PROVIDER_EXECUTABLE_BYTES,
+                                      "provider executable")
+    finally:
+        os.close(fd)
+    if hashlib.sha256(payload).hexdigest() != expected:
+        raise Stop("provider executable digest does not match authority")
+
+    root = Path(tempfile.mkdtemp(prefix="nortropic-provider-"))
+    snapshot = root / "provider"
+    try:
+        out = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                      | getattr(os, "O_CLOEXEC", 0), 0o700)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(out, view)
+                if written <= 0:
+                    raise OSError("short provider snapshot write")
+                view = view[written:]
+            os.fsync(out)
+        finally:
+            os.close(out)
+        with snapshot.open("rb") as final:
+            final_digest = hashlib.sha256(final.read()).hexdigest()
+        if final_digest != expected:
+            raise Stop("private provider snapshot changed before launch")
+        return root, snapshot, expected
+    except BaseException:
+        os.chmod(root, 0o700)
+        shutil.rmtree(root)
+        raise
+
+
+def _python_snapshot(root: Path) -> tuple[Path, str]:
+    authority_path = Path(__file__).resolve().parents[1] / PYTHON_IDENTITY_PATH
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(authority_path, flags)
+    except OSError as e:
+        raise Stop(f"controller Python authority unavailable: {e}") from e
+    try:
+        raw = _read_stable_opened(fd, MAX_PROVIDER_AUTHORITY_BYTES,
+                                  "controller Python authority")
+    finally:
+        os.close(fd)
+    try:
+        value = strict_json_bytes(raw)
+    except (AuthorityError, UnicodeError, ValueError) as e:
+        raise Stop(f"controller Python authority is not strict JSON: {e}") from e
+    if not isinstance(value, dict) or set(value) != PYTHON_IDENTITY_KEYS:
+        raise Stop("controller Python authority has unexpected keys")
+    digest = value["executable_sha256"]
+    exact = (
+        type(value["schema_version"]) is int and value["schema_version"] == 1
+        and value["authority_version"] == "python3.12-v1"
+        and type(value["canonical_path"]) is str and bool(value["canonical_path"])
+        and value["python_version"] == "3.12.13"
+        and type(digest) is str and bool(re.fullmatch(r"[0-9a-f]{64}", digest))
+        and value["required_regular_file"] is True
+        and value["required_executable"] is True
+        and value["symlink_allowed"] is False
+        and value["path_lookup_allowed"] is False
+        and value["usr_bin_env_allowed"] is False
+        and value["requester_override_allowed"] is False
+        and value["isolated_flags"] == ["-I", "-S"]
+        and value["environment_authority"] is False
+        and value["runtime_binding_model"]
+            == "same-opened-source-private-protected-snapshot-final-rehash"
+    )
+    source = Path(value["canonical_path"])
+    if not exact or not source.is_absolute():
+        raise Stop("controller Python authority has invalid values")
+    try:
+        fd = os.open(source, flags)
+    except OSError as e:
+        raise Stop(f"controller Python executable unavailable: {e}") from e
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or not (opened.st_mode & 0o111):
+            raise Stop("controller Python is not a regular executable file")
+        payload = _read_stable_opened(fd, MAX_PROVIDER_EXECUTABLE_BYTES,
+                                      "controller Python executable")
+    finally:
+        os.close(fd)
+    if hashlib.sha256(payload).hexdigest() != digest:
+        raise Stop("controller Python digest does not match authority")
+    snapshot = root / "python3.12"
+    out = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                  | getattr(os, "O_CLOEXEC", 0), 0o700)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(out, view)
+            if written <= 0:
+                raise OSError("short controller Python snapshot write")
+            view = view[written:]
+        os.fsync(out)
+    finally:
+        os.close(out)
+    with snapshot.open("rb") as final:
+        if hashlib.sha256(final.read()).hexdigest() != digest:
+            raise Stop("private controller Python snapshot changed before launch")
+    return snapshot, digest
+
+
 def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
     jr = journal_root(repo) / "runs" / f"{now_id()}-{role.lower()}"
     jr.mkdir(parents=True, exist_ok=False)
@@ -573,8 +758,15 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
     if not schema.exists():
         raise Stop(f"report schema missing in worktree: {schema}")
     full_prompt = prompt.rstrip() + "\n\n" + agent_prompt_common()
-    argv = [
-        "codex",
+    snapshot_root, snapshot, snapshot_digest = _provider_snapshot(repo)
+    try:
+        python_snapshot, python_digest = _python_snapshot(snapshot_root)
+    except BaseException:
+        os.chmod(snapshot_root, 0o700)
+        shutil.rmtree(snapshot_root)
+        raise
+    provider_argv = [
+        str(snapshot),
         "-C", str(wt),
         "-a", "never",
         "--sandbox", "danger-full-access",
@@ -584,22 +776,47 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
         "-o", str(result),
         full_prompt,
     ]
-    journal(repo, "AGENT_START", role=role, worktree=str(wt), head=sha(wt))
+    envelope = jr / "provider-envelope.json"
+    envelope.write_text(json.dumps({"task_id": prompt, "role": role}), encoding="utf-8")
+    launcher = Path(__file__).resolve().parents[1] / "controller/launch/cli"
+    argv = [str(python_snapshot), "-I", "-S", str(launcher),
+            "run", str(wt), str(envelope), "86400", "--", *provider_argv]
+    env = {key: value for key, value in os.environ.items()
+           if not key.startswith("DYLD_")
+           and key not in {"LD_PRELOAD", "LD_LIBRARY_PATH", "__PYVENV_LAUNCHER__"}}
+    env["NORTROPIC_TRUST_ROOT"] = str(snapshot_root)
     thread_id: str | None = None
-    with events.open("w", encoding="utf-8") as log:
-        p = subprocess.Popen(argv, cwd=str(wt), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        assert p.stdout is not None
-        for line in p.stdout:
-            sys.stdout.write(line)
-            log.write(line)
-            log.flush()
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-            if obj.get("type") == "thread.started" and isinstance(obj.get("thread_id"), str):
-                thread_id = obj["thread_id"]
-        rc = p.wait()
+    try:
+        # The final read is deliberately adjacent to the trust transition.
+        # No AGENT_START is emitted if the private object has changed.
+        with snapshot.open("rb") as final:
+            if hashlib.sha256(final.read()).hexdigest() != snapshot_digest:
+                raise Stop("private provider snapshot changed at launch boundary")
+        with python_snapshot.open("rb") as final:
+            if hashlib.sha256(final.read()).hexdigest() != python_digest:
+                raise Stop("private controller Python changed at launch boundary")
+        os.chmod(snapshot, 0o500)
+        os.chmod(python_snapshot, 0o500)
+        os.chmod(snapshot_root, 0o500)
+        journal(repo, "AGENT_START", role=role, worktree=str(wt), head=sha(wt))
+        with events.open("w", encoding="utf-8") as log:
+            p = subprocess.Popen(argv, cwd=str(wt), stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+            assert p.stdout is not None
+            for line in p.stdout:
+                sys.stdout.write(line)
+                log.write(line)
+                log.flush()
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                if obj.get("type") == "thread.started" and isinstance(obj.get("thread_id"), str):
+                    thread_id = obj["thread_id"]
+            rc = p.wait()
+    finally:
+        os.chmod(snapshot_root, 0o700)
+        shutil.rmtree(snapshot_root)
     if rc != 0:
         raise Stop(f"Codex role {role} failed rc={rc}; events={events}")
     try:
