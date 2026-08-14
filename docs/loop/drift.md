@@ -521,3 +521,24 @@ absolute judge/tool identities and a fixed validated private cleanup root. G20 a
 live-only: JSON may be emitted after a real candidate-bound probe for durable evidence, but no JSON can
 be supplied back to obtain PASS. Separate production controls execute system Git, GitHub CLI and an
 arbitrary fixed controller-style helper through `run()` and require exact effects with no AGENT_START.
+
+## 2026-08-14 — H-032 builder: provider identity becomes an execution boundary
+
+The provider-only launch path now rereads one strict authority document at every attempt. Both the
+authority and executable are opened with no-follow semantics; regular-file identity, executable mode,
+bounded complete reads and stable metadata are decided on those opened objects. Only the verified
+bytes are copied into a newly private root, and the copied executable is rehashed immediately before
+the provider trust transition. The source pathname is never reopened to populate or execute the
+snapshot, so a same-byte hard link remains admissible while symlinks, PATH shadows and pathname swaps
+gain no authority.
+
+`AGENT_START` occurs only after the final digest check. The absolute snapshot argv[0] is passed through
+the existing controller launcher with the private root as its G20 trust root; provider descendants are
+therefore denied write/chmod/unlink/rename/create authority over both snapshot and namespace. The root
+is removed on success and every failure path. The generic `run()` dispatcher is deliberately untouched,
+preserving exact Git, GitHub and fixed helper effects without producing provider lifecycle events.
+
+The frozen gate's deterministic identity negatives, opened-object races, final-rehash mutation and
+cleanup controls are judgeable in the builder sandbox. Actual provider success, namespace denials and
+fresh protected H-033 provenance require the ordinary owner runner because nested Seatbelt is rejected
+inside the builder sandbox; those effects remain explicitly ODÖMBART here rather than being simulated.
