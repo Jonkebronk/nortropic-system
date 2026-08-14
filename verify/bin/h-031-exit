@@ -1,0 +1,607 @@
+#!/bin/bash -p
+# h-031-exit — explicit model routing at the H-032 provider boundary
+
+set -u
+umask 077
+unset CDPATH ENV BASH_ENV GLOBIGNORE PYTHONHOME PYTHONPATH
+export PATH="/usr/bin:/bin:/opt/homebrew/bin"
+
+SOURCE_PATH="${BASH_SOURCE[0]}"
+case "$SOURCE_PATH" in
+  /*) ;;
+  *) SOURCE_PATH="$(/bin/pwd -P)/$SOURCE_PATH" ;;
+esac
+if [[ -L "$SOURCE_PATH" ]]; then
+  echo "ODÖMBART K0 — grindens entry är en symlink"
+  exit 2
+fi
+SCRIPT_DIR="$(cd -P -- "$(/usr/bin/dirname -- "$SOURCE_PATH")" 2>/dev/null && /bin/pwd -P)" || exit 2
+ROOT="$(cd -P -- "$SCRIPT_DIR/../.." 2>/dev/null && /bin/pwd -P)" || exit 2
+if [[ ! "$SOURCE_PATH" -ef "$ROOT/verify/bin/h-031-exit" ]]; then
+  echo "ODÖMBART K0 — icke-kanonisk grindentry"
+  exit 2
+fi
+
+SOURCE="$ROOT/scripts/nortropic-codex-autopilot.py"
+SCHEMA="$ROOT/docs/loop/codex-autopilot-report.schema.json"
+SPEC="$ROOT/specs/tasks.spec.json"
+H032_GATE="$ROOT/verify/bin/h-032-exit"
+WORK="$(/usr/bin/mktemp -d /private/tmp/nortropic-h031.XXXXXX)" || exit 2
+case "$WORK" in /private/tmp/nortropic-h031.*) ;; *) echo "ODÖMBART K0 — osäker tempidentitet"; exit 2;; esac
+cleanup() {
+  cleanup_rc=$?
+  trap - EXIT HUP INT TERM
+  case "${WORK:-}" in
+    /private/tmp/nortropic-h031.*) /bin/rm -rf -- "$WORK" || cleanup_rc=2 ;;
+    *) cleanup_rc=2 ;;
+  esac
+  exit "$cleanup_rc"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+/usr/bin/python3 -I -S - "$SOURCE" "$SCHEMA" "$SPEC" "$H032_GATE" "$WORK" <<'PY'
+from __future__ import annotations
+
+import ast
+import builtins
+import contextlib
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import sys
+
+source, schema_source, spec_path, h032_gate, work = map(Path, sys.argv[1:])
+root = source.parents[1]
+GIT = "/usr/bin/git"
+EXPECTED = {
+    "ARCHITECT": ("gpt-5.6-sol", "max"),
+    "TEST_AUTHOR": ("gpt-5.6-sol", "max"),
+    "GATE_REVIEWER": ("gpt-5.6-sol", "max"),
+    "BUILDER": ("gpt-5.6-sol", "high"),
+    "REVIEWER": ("gpt-5.6-sol", "max"),
+    "EMPIRICAL": ("gpt-5.6-sol", "max"),
+}
+ROUTING_SOURCE = "AUTOPILOT_ROLE_POLICY"
+EXPECTED_PREBUILDER_RED = {
+    "K_ROLE_ROUTE_MATRIX",
+    "K_AGENT_START_ROUTE_BINDING",
+    "K_UNKNOWN_ROLE_PRE_EFFECT_REJECT",
+    "K_GENERIC_CODEX_PRESPAWN_REJECT",
+}
+PROCESS_ATTRS = {
+    "subprocess": {"Popen", "run", "call", "check_call", "check_output", "getoutput", "getstatusoutput"},
+    "os": {"system", "popen", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
+    "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
+    "pty": {"spawn"},
+}
+checks: list[tuple[str, bool, str]] = []
+
+
+class DuplicateKey(ValueError):
+    pass
+
+
+class ProductFailure(RuntimeError):
+    pass
+
+
+def strict_json(raw: str):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise DuplicateKey(key)
+            out[key] = value
+        return out
+    return json.loads(raw, object_pairs_hook=pairs)
+
+
+def check(key: str, ok: bool, detail: str) -> None:
+    checks.append((key, bool(ok), detail))
+
+
+def odombart(key: str, detail: str) -> None:
+    print(f"ODÖMBART {key} — {detail}")
+    raise SystemExit(2)
+
+
+def sh(*argv: str, cwd: Path | None = None) -> str:
+    if not argv or argv[0] != GIT:
+        raise RuntimeError("judge helper permits only exact system Git")
+    p = subprocess.run(argv, cwd=cwd, text=True, stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, timeout=20)
+    if p.returncode:
+        raise RuntimeError(f"git rc={p.returncode}: {p.stdout}")
+    return p.stdout
+
+
+def sha256_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def task_row_valid(rows) -> bool:
+    hits = [row for row in rows if isinstance(row, dict) and row.get("id") == "h-031"]
+    if len(hits) != 1:
+        return False
+    row = hits[0]
+    return (
+        row.get("slice") == 16
+        and row.get("authority_class") == "ordinary"
+        and row.get("depends_on") == ["h-032"]
+        and row.get("exit_test") == "verify/bin/h-031-exit"
+        and row.get("allowed_write") == [
+            "scripts/nortropic-codex-autopilot.py",
+            "docs/05-beslutslogg.md",
+            "docs/loop/drift.md",
+        ]
+        and row.get("owner_author_allowed_write") == []
+    )
+
+
+def owner_map(tree: ast.Module) -> dict[ast.AST, str]:
+    owners: dict[ast.AST, str] = {}
+    def walk(node: ast.AST, owner: str = "<module>", cls: str = "") -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            owner = f"{cls}.{node.name}" if cls else node.name
+        elif isinstance(node, ast.Lambda):
+            owner = f"<lambda@{getattr(node, 'lineno', 0)}>"
+        next_cls = f"{cls}.{node.name}".strip(".") if isinstance(node, ast.ClassDef) else cls
+        owners[node] = owner
+        for child in ast.iter_child_nodes(node):
+            walk(child, owner, next_cls)
+    walk(tree)
+    return owners
+
+
+def process_shape(text: str) -> dict[str, object]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return {"boundary_ok": False, "observer_ok": False, "detail": f"syntax:{exc}"}
+    owners = owner_map(tree)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    funcs = {node.name for node in ast.walk(tree)
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    calls: dict[str, set[str]] = {name: set() for name in funcs}
+    sites: list[tuple[str, str, int, str]] = []
+    violations: list[tuple[str, int, str]] = []
+
+    for node in ast.walk(tree):
+        owner = owners.get(node, "<module>")
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in PROCESS_ATTRS and alias.asname is not None:
+                    violations.append((owner, node.lineno, f"import-alias:{alias.name} as {alias.asname}"))
+        elif isinstance(node, ast.ImportFrom) and node.module in PROCESS_ATTRS:
+            violations.append((owner, node.lineno, f"from-import:{node.module}"))
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            if isinstance(node.value, ast.Name) and node.value.id in PROCESS_ATTRS:
+                violations.append((owner, node.lineno, f"module-assignment:{node.value.id}"))
+        if isinstance(node, ast.Name) and node.id in PROCESS_ATTRS and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            safe_getattr = (
+                isinstance(parent, ast.Call)
+                and isinstance(parent.func, ast.Name)
+                and parent.func.id == "getattr"
+                and len(parent.args) >= 2
+                and parent.args[0] is node
+                and isinstance(parent.args[1], ast.Constant)
+                and isinstance(parent.args[1].value, str)
+                and parent.args[1].value not in PROCESS_ATTRS[node.id]
+                and parent.args[1].value != "__dict__"
+            )
+            if not ((isinstance(parent, ast.Attribute) and parent.value is node) or safe_getattr):
+                violations.append((owner, node.lineno, f"bare-process-module:{node.id}"))
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            module, attr = node.value.id, node.attr
+            if module in PROCESS_ATTRS and attr == "__dict__":
+                violations.append((owner, node.lineno, f"process-dictionary:{module}"))
+            if module in PROCESS_ATTRS and attr in PROCESS_ATTRS[module]:
+                parent = parents.get(node)
+                if not (isinstance(parent, ast.Call) and parent.func is node):
+                    violations.append((owner, node.lineno, f"process-reference:{module}.{attr}"))
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile"}:
+            violations.append((owner, node.lineno, f"dynamic-code:{node.func.id}"))
+        if isinstance(node.func, ast.Name) and owner in calls and node.func.id in funcs:
+            calls[owner].add(node.func.id)
+        if isinstance(node.func, ast.Name) and node.func.id in {"getattr", "vars"} and node.args:
+            target = node.args[0]
+            if isinstance(target, ast.Name) and target.id in PROCESS_ATTRS:
+                attr = node.args[1] if len(node.args) > 1 else None
+                if (not isinstance(attr, ast.Constant) or not isinstance(attr.value, str)
+                        or attr.value in PROCESS_ATTRS[target.id]):
+                    violations.append((owner, node.lineno, f"dynamic-process-access:{target.id}"))
+        if (isinstance(node.func, ast.Name) and node.func.id == "__import__" and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value in PROCESS_ATTRS):
+            violations.append((owner, node.lineno, f"dynamic-import:{node.args[0].value}"))
+        if not (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)):
+            continue
+        module, attr = node.func.value.id, node.func.attr
+        if module not in PROCESS_ATTRS or attr not in PROCESS_ATTRS[module]:
+            continue
+        literal = ""
+        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            literal = node.args[0].value
+        sites.append((owner, f"{module}.{attr}", node.lineno, literal))
+
+    counts = {"run": 0, "run_codex": 0, "clear": 0}
+    for owner, name, line, literal in sites:
+        if owner == "run" and name == "subprocess.run":
+            counts["run"] += 1
+        elif owner == "run_codex" and name == "subprocess.Popen":
+            counts["run_codex"] += 1
+        elif owner == "watch" and name == "os.system" and literal == "clear":
+            counts["clear"] += 1
+        else:
+            violations.append((owner, line, name))
+
+    def reachable(start: str) -> set[str]:
+        seen, todo = set(), [start]
+        while todo:
+            cur = todo.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            todo.extend(calls.get(cur, ()))
+        return seen
+
+    observer_hits = {name: sorted(reachable(name) & {"run_codex"})
+                     for name in ("status", "watch", "roadmap_status")}
+    observer_hits = {name: hit for name, hit in observer_hits.items() if hit}
+    exact = counts == {"run": 1, "run_codex": 1, "clear": 1}
+    return {
+        "boundary_ok": exact and not violations,
+        "observer_ok": not observer_hits,
+        "funcs": funcs,
+        "detail": f"counts={counts} sites={sites} violations={violations}",
+        "observer_hits": observer_hits,
+    }
+
+
+def route_observation(argv: list[str]) -> dict[str, object]:
+    models: list[str] = []
+    efforts: list[str] = []
+    config_models: list[str] = []
+    ignore_count = argv.count("--ignore-user-config")
+    forbidden = [arg for arg in argv
+                 if arg in {"--oss", "--profile", "-p", "--local-provider"}
+                 or arg.startswith("--profile=") or arg.startswith("--local-provider=")]
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in {"-m", "--model"} and i + 1 < len(argv):
+            models.append(argv[i + 1]); i += 2; continue
+        if arg.startswith("--model="):
+            models.append(arg.split("=", 1)[1])
+        value = None
+        if arg in {"-c", "--config"} and i + 1 < len(argv):
+            value = argv[i + 1]; i += 2
+        elif arg.startswith("--config="):
+            value = arg.split("=", 1)[1]; i += 1
+        else:
+            i += 1
+        if value is not None and "=" in value:
+            key, raw = value.split("=", 1)
+            parsed = raw.strip().strip("\"'")
+            if key.strip() == "model_reasoning_effort":
+                efforts.append(parsed)
+            if key.strip() == "model":
+                config_models.append(parsed)
+    return {"models": models, "efforts": efforts, "config_models": config_models,
+            "ignore_count": ignore_count, "forbidden": forbidden}
+
+
+def route_ok(argv: list[str], expected: tuple[str, str]) -> bool:
+    observed = route_observation(argv)
+    return (
+        observed["models"] == [expected[0]]
+        and observed["efforts"] == [expected[1]]
+        and observed["config_models"] == []
+        and observed["ignore_count"] == 1
+        and observed["forbidden"] == []
+    )
+
+
+try:
+    spec_document = strict_json(spec_path.read_text(encoding="utf-8"))
+    tasks = spec_document.get("tasks", []) if isinstance(spec_document, dict) else []
+    check("F_H031_EXACT_TASK", task_row_valid(tasks), "current task identity")
+    check("J_H031_ABSENT_REJECT", not task_row_valid(
+        [row for row in tasks if not isinstance(row, dict) or row.get("id") != "h-031"]), "absence")
+    row = next((row for row in tasks if isinstance(row, dict) and row.get("id") == "h-031"), {})
+    check("J_H031_DUPLICATE_REJECT", not task_row_valid(tasks + [dict(row)]), "duplicate")
+    for label, key, value in (
+        ("WRONG_DEPENDENCY", "depends_on", ["h-033"]),
+        ("WRONG_GATE", "exit_test", "verify/bin/h-032-exit"),
+        ("WRONG_AUTHORITY", "authority_class", "owner_authority"),
+    ):
+        mutant = []
+        for item in tasks:
+            changed = dict(item) if isinstance(item, dict) else item
+            if isinstance(changed, dict) and changed.get("id") == "h-031":
+                changed[key] = value
+            mutant.append(changed)
+        check("J_H031_" + label + "_REJECT", not task_row_valid(mutant), key)
+
+    h032 = [row for row in tasks if isinstance(row, dict) and row.get("id") == "h-032"]
+    h032_static = (len(h032) == 1 and h032[0].get("authority_class") == "ordinary"
+                   and h032[0].get("depends_on") == ["h-033"]
+                   and h032[0].get("exit_test") == "verify/bin/h-032-exit"
+                   and h032_gate.is_file()
+                   and sha256_bytes(h032_gate.read_bytes())
+                       == "5bc7a5f13c5323c62c76c21d7ba328ab73c56b37c89448397ac60e55fa2928d0")
+    check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
+
+    source_text = source.read_text(encoding="utf-8")
+    try:
+        compile(source_text, str(source), "exec")
+    except SyntaxError as exc:
+        print(f"FAIL K_SOURCE_SYNTAX — {exc}")
+        print("H031_GATE_SUMMARY=0 PASS 1 FAIL")
+        print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:K_SOURCE_SYNTAX")
+        print("H031_GATE_RESULT=FAIL")
+        raise SystemExit(1)
+    shape = process_shape(source_text)
+    required_api = {"run", "run_codex", "status", "watch", "roadmap_status", "journal_root"}
+    check("K_REQUIRED_API", required_api <= shape["funcs"],
+          f"present={sorted(required_api & shape['funcs'])}")
+    check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"]), str(shape["detail"]))
+    check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
+
+    shape_mutants = {
+        "DIRECT_POPEN": "\nsubprocess.Popen(['/bin/true'])\n",
+        "MODULE_ALIAS": "\nimport subprocess as sp\nsp.Popen(['/bin/true'])\n",
+        "ASSIGNMENT_ALIAS": "\nh031_alias = subprocess.Popen\nh031_alias(['/bin/true'])\n",
+        "LAMBDA": "\nh031_lambda = lambda: subprocess.Popen(['/bin/true'])\n",
+        "DEFAULT": "\ndef h031_default(x=subprocess.Popen):\n    return x\n",
+        "CONTAINER": "\nh031_box = {'x': subprocess.Popen}\nh031_box['x'](['/bin/true'])\n",
+        "CLASS_METHOD": "\nclass H031Bad:\n    def go(self):\n        return os.posix_spawn('/bin/true', ['/bin/true'], {})\n",
+        "GETATTR": "\ngetattr(subprocess, 'Popen')(['/bin/true'])\n",
+        "DYNAMIC_GETATTR": "\nh031_name = 'Popen'\ngetattr(subprocess, h031_name)(['/bin/true'])\n",
+        "PROCESS_DICTIONARY": "\nsubprocess.__dict__['Popen'](['/bin/true'])\n",
+        "DYNAMIC_CODE": "\neval(\"__import__('subprocess').Popen(['/bin/true'])\")\n",
+    }
+    for label, suffix in shape_mutants.items():
+        mutant_shape = process_shape(source_text + suffix)
+        check("J_PROCESS_" + label + "_REJECT", not mutant_shape["boundary_ok"],
+              str(mutant_shape["detail"]))
+    harmless = process_shape(source_text + "\ndef h031_harmless(repo, wt, role, prompt):\n    return run_codex(repo, wt, role, prompt)\n")
+    check("J_HARMLESS_ROLE_CONSOLIDATION", bool(harmless["boundary_ok"]), str(harmless["detail"]))
+
+    upstream = subprocess.run([str(h032_gate)], cwd=root, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    if upstream.returncode == 2:
+        odombart("K_H032_FRESH_UPSTREAM", "nested G20/H033 owner effects unavailable")
+    check("K_H032_FRESH_UPSTREAM", upstream.returncode == 0,
+          f"rc={upstream.returncode} tail={upstream.stdout[-700:].replace(chr(10), '|')}")
+    if upstream.returncode != 0:
+        raise ProductFailure("published H032 dependency is not green")
+
+    repo = work / "repo"
+    repo.mkdir()
+    sh(GIT, "init", "-q", cwd=repo)
+    sh(GIT, "config", "user.name", "h031-gate", cwd=repo)
+    sh(GIT, "config", "user.email", "h031@nortropic.invalid", cwd=repo)
+    schema = repo / "docs/loop/codex-autopilot-report.schema.json"
+    schema.parent.mkdir(parents=True)
+    shutil.copyfile(schema_source, schema)
+    (repo / "anchor").write_text("h031\n", encoding="utf-8")
+    sh(GIT, "add", ".", cwd=repo)
+    sh(GIT, "commit", "-qm", "fixture", cwd=repo)
+
+    provider_dir = work / "provider"
+    provider_dir.mkdir()
+    provider = provider_dir / "arbitrary-provider-name"
+    capture = work / "provider-capture.jsonl"
+    provider.write_text("""#!/usr/bin/env python3
+import hashlib,json,os,pathlib,re,sys
+self_path=pathlib.Path(sys.argv[0]); argv=sys.argv[1:]
+record={'argv0':str(self_path),'sha256':hashlib.sha256(self_path.read_bytes()).hexdigest(),'argv':argv,'codex_home':os.environ.get('CODEX_HOME')}
+with pathlib.Path(os.environ['H031_CAPTURE']).open('a',encoding='utf-8') as handle: handle.write(json.dumps(record,sort_keys=True)+'\\n')
+joined=' '.join(argv); match=re.search(r'H031_GATE_ROLE=([A-Z_]+)',joined); role=match.group(1) if match else 'OVERIFIERAT'
+out=pathlib.Path(argv[argv.index('-o')+1]); out.write_text(json.dumps({'role':role,'outcome':'READY','owner_decision_required':False,'blocking_findings':[]}))
+print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
+""", encoding="utf-8")
+    provider.chmod(0o700)
+    provider_hash = sha256_bytes(provider.read_bytes())
+    config = repo / "config/codex-provider-identity.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"schema_version": 1, "provider": "openai-codex",
+                                  "executable_path": str(provider),
+                                  "executable_sha256": provider_hash}), encoding="utf-8")
+    hostile_home = work / "hostile-codex-home"
+    hostile_home.mkdir()
+    (hostile_home / "config.toml").write_text(
+        'model="caller-other-model"\nmodel_reasoning_effort="ultra"\n', encoding="utf-8")
+    shadow_dir = work / "path-shadow"
+    shadow_dir.mkdir()
+    shadow_marker = work / "PATH_CODEX_EXECUTED"
+    shadow = shadow_dir / "codex"
+    shadow.write_text(f"#!/bin/sh\ntouch '{shadow_marker}'\nexit 91\n", encoding="utf-8")
+    shadow.chmod(0o700)
+    old_environment = dict(os.environ)
+    os.environ.update(CODEX_HOME=str(hostile_home), H031_CAPTURE=str(capture),
+                      PATH=str(shadow_dir) + os.pathsep + os.environ.get("PATH", ""))
+    try:
+        module_spec = importlib.util.spec_from_file_location("h031_subject", source)
+        if module_spec is None or module_spec.loader is None:
+            odombart("K_IMPORT", "cannot create production module spec")
+        module = importlib.util.module_from_spec(module_spec)
+        sys.modules[module_spec.name] = module
+        try:
+            module_spec.loader.exec_module(module)
+        except Exception as exc:
+            raise ProductFailure(f"subject import failed: {type(exc).__name__}:{exc}") from exc
+        seq = [0]
+        original_now_id = module.now_id
+        def fixture_now_id():
+            seq[0] += 1
+            return f"{original_now_id()}-{seq[0]:04d}"
+        module.now_id = fixture_now_id
+
+        journal_file = module.journal_root(repo) / "events.jsonl"
+        legacy = {"ts": "2026-01-01T00:00:00+00:00", "event": "AGENT_START",
+                  "role": "BUILDER", "model": "legacy-model",
+                  "reasoning_effort": "ultra", "model_routing_source": "USER_CONFIG"}
+        journal_file.write_text(json.dumps(legacy, sort_keys=True) + "\n", encoding="utf-8")
+        errors = []
+        muted = io.StringIO()
+        for role in EXPECTED:
+            try:
+                with contextlib.redirect_stdout(muted):
+                    module.run_codex(repo, repo, role, f"H031_GATE_ROLE={role}")
+            except Exception as exc:
+                errors.append(f"{role}:{type(exc).__name__}:{exc}")
+        captures = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()
+                    if line.strip()] if capture.exists() else []
+        route_details = [route_observation(item.get("argv", [])) for item in captures]
+        routes_ok = (not errors and len(captures) == len(EXPECTED)
+                     and all(route_ok(record["argv"], EXPECTED[role])
+                             for record, role in zip(captures, EXPECTED)))
+        check("K_ROLE_ROUTE_MATRIX", routes_ok, f"routes={route_details} errors={errors}")
+        provider_effect_ok = (len(captures) == len(EXPECTED)
+                              and all(record.get("sha256") == provider_hash
+                                      and Path(record.get("argv0", "")).is_absolute()
+                                      and Path(record.get("argv0", "")) != provider
+                                      and not Path(record.get("argv0", "")).exists()
+                                      and record.get("codex_home") == str(hostile_home)
+                                      for record in captures)
+                              and not shadow_marker.exists())
+        check("K_H032_BOUND_ACTUAL_PROVIDER", provider_effect_ok,
+              f"captures={len(captures)} shadow={shadow_marker.exists()}")
+
+        records = [json.loads(line) for line in journal_file.read_text(encoding="utf-8").splitlines()
+                   if line.strip()]
+        starts = [record for record in records[1:] if record.get("event") == "AGENT_START"]
+        journal_ok = (len(starts) == len(EXPECTED)
+                      and all(record.get("role") == role
+                              and record.get("model") == EXPECTED[role][0]
+                              and record.get("reasoning_effort") == EXPECTED[role][1]
+                              and record.get("model_routing_source") == ROUTING_SOURCE
+                              for record, role in zip(starts, EXPECTED)))
+        check("K_AGENT_START_ROUTE_BINDING", journal_ok, f"starts={starts}")
+        check("K_LEGACY_ROUTING_NONAUTHORITATIVE", records[0] == legacy
+              and all(record.get("reasoning_effort") != "ultra" for record in starts),
+              f"legacy_preserved={records[0] == legacy}")
+
+        runs_dir = module.journal_root(repo) / "runs"
+        before = (capture.read_bytes() if capture.exists() else b"",
+                  journal_file.read_bytes(),
+                  sorted(path.name for path in runs_dir.iterdir()) if runs_dir.exists() else [])
+        unknown_errors = []
+        for invalid_role in ("UNKNOWN_ROLE", "", "builder"):
+            try:
+                with contextlib.redirect_stdout(muted):
+                    module.run_codex(repo, repo, invalid_role,
+                                     f"H031_GATE_ROLE={invalid_role or 'EMPTY'}")
+                unknown_errors.append("NO_ERROR")
+            except Exception as exc:
+                unknown_errors.append(f"{type(exc).__name__}:{exc}")
+        after = (capture.read_bytes() if capture.exists() else b"",
+                 journal_file.read_bytes(),
+                 sorted(path.name for path in runs_dir.iterdir()) if runs_dir.exists() else [])
+        check("K_UNKNOWN_ROLE_PRE_EFFECT_REJECT",
+              all(error != "NO_ERROR" for error in unknown_errors) and before == after,
+              f"errors={unknown_errors} unchanged={before == after}")
+
+        original_run = module.subprocess.run
+        spawned: list[list[str]] = []
+        class Result:
+            returncode = 0
+            stdout = "GENERIC_OK\n"
+        def stub(argv, **kwargs):
+            spawned.append(list(argv))
+            return Result()
+        module.subprocess.run = stub
+        codex_outcomes = []
+        try:
+            for executable in ("codex", "/private/tmp/codex", "/private/tmp/CODEX"):
+                try:
+                    module.run([executable, "exec"], check=False)
+                    codex_outcomes.append("ADMITTED")
+                except Exception:
+                    codex_outcomes.append("REJECTED")
+            codex_spawned = list(spawned)
+            spawned.clear()
+            helper_results = []
+            for argv in (["gh", "--version"], ["git", "--version"],
+                         ["/private/tmp/controller-helper", "token"]):
+                try:
+                    result = module.run(list(argv), check=False)
+                    helper_results.append((result.rc, result.out))
+                except Exception as exc:
+                    helper_results.append((99, type(exc).__name__))
+            helper_spawned = list(spawned)
+        finally:
+            module.subprocess.run = original_run
+        check("K_GENERIC_CODEX_PRESPAWN_REJECT",
+              codex_outcomes == ["REJECTED", "REJECTED", "REJECTED"] and not codex_spawned,
+              f"outcomes={codex_outcomes} spawned={codex_spawned}")
+        check("K_GENERIC_NONPROVIDER_ALLOWED",
+              helper_results == [(0, "GENERIC_OK\n")] * 3
+              and helper_spawned == [["gh", "--version"], ["git", "--version"],
+                                    ["/private/tmp/controller-helper", "token"]],
+              f"results={helper_results} spawned={helper_spawned}")
+
+        valid_route = ["exec", "--ignore-user-config", "-m", "gpt-5.6-sol",
+                       "-c", 'model_reasoning_effort="max"']
+        check("J_ROUTE_VALID_ORACLE", route_ok(valid_route, EXPECTED["ARCHITECT"]),
+              str(route_observation(valid_route)))
+        routing_mutants = {
+            "NO_MODEL": ["exec", "--ignore-user-config", "-c", 'model_reasoning_effort="max"'],
+            "DUPLICATE_MODEL": valid_route + ["-m", "gpt-5.6-sol"],
+            "NO_EFFORT": ["exec", "--ignore-user-config", "-m", "gpt-5.6-sol"],
+            "DUPLICATE_EFFORT": valid_route + ["-c", 'model_reasoning_effort="max"'],
+            "NO_IGNORE": [arg for arg in valid_route if arg != "--ignore-user-config"],
+            "PROFILE": valid_route + ["--profile", "hostile"],
+            "OSS": valid_route + ["--oss"],
+            "CONFIG_MODEL": valid_route + ["-c", 'model="other"'],
+        }
+        for label, mutant in routing_mutants.items():
+            check("J_ROUTE_" + label + "_REJECT", not route_ok(mutant, EXPECTED["ARCHITECT"]),
+                  str(route_observation(mutant)))
+        wrong_effort = [
+            'model_reasoning_effort="ultra"' if item.startswith("model_reasoning_effort=") else item
+            for item in valid_route
+        ]
+        check("J_ROUTE_WRONG_EFFORT_REJECT", not route_ok(wrong_effort, EXPECTED["ARCHITECT"]),
+              str(route_observation(wrong_effort)))
+    finally:
+        os.environ.clear()
+        os.environ.update(old_environment)
+
+except SystemExit:
+    raise
+except ProductFailure as exc:
+    check("K_PRODUCT_EXECUTION", False, str(exc))
+except Exception as exc:
+    odombart("K_JUDGE", f"{type(exc).__name__}:{exc}")
+
+failed = {key for key, ok, _detail in checks if not ok}
+for key, ok, detail in checks:
+    print(("PASS " if ok else "FAIL ") + key + " — " + detail)
+print(f"H031_GATE_SUMMARY={sum(1 for _k, ok, _d in checks if ok)} PASS {len(failed)} FAIL")
+if not failed:
+    print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
+    print("H031_GATE_RESULT=PASS")
+    raise SystemExit(0)
+if failed == EXPECTED_PREBUILDER_RED:
+    print("CURRENT_RED_REASON=EXPLICIT_ROLE_MODEL_ROUTING_ABSENT")
+else:
+    print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(failed)))
+print("H031_GATE_RESULT=FAIL")
+raise SystemExit(1)
+PY

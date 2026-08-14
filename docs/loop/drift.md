@@ -578,3 +578,26 @@ rehashed and protected; the absolute Python snapshot runs the exact `-I -S` flag
 The provider environment is otherwise retained, but `DYLD_*`, `LD_PRELOAD`, `LD_LIBRARY_PATH` and
 `__PYVENV_LAUNCHER__` are removed because they can execute or redirect code before isolation/G20. A
 constructor dylib plus hostile global/user site, PATH, HOME and Python-family inputs produced no marker.
+
+## 2026-08-14 — Fresh H-031 role routing after published H-032
+
+H-031 is rematerialized from authoritative main `32b6e07`; every historical H-031 gate and candidate
+remains forensic evidence only. The task is ordinary, depends exactly on H-032 and owns no new provider,
+session or verdict component. Its effect is the route received by the actually spawned provider process
+through H-032's exact opened-object, co-snapshot, final-rehash and G20 boundary. Provider prose, a would-be
+argv variable and a paid live response are not routing authority.
+
+The owner-frozen matrix remains `gpt-5.6-sol` for all six runtime roles, with `high` for BUILDER and
+`max` for ARCHITECT, TEST_AUTHOR, GATE_REVIEWER, REVIEWER and EMPIRICAL. This matches the machine's
+current owner configuration and active Codex model surface. Codex CLI 0.147.0 exposes `-m/--model`,
+`-c/--config`, `model_reasoning_effort` and `--ignore-user-config`; H-031 therefore binds exact actual
+argv and requires user configuration to be ignored. Backend availability and model self-report are
+deliberately outside the deterministic verdict.
+
+The frozen pre-builder baseline is exactly four product failures: absent actual role route, absent
+AGENT_START route binding, unknown-role effects before rejection, and a generic `run()` boundary that
+does not yet reject a Codex basename. H-032 itself is freshly green at 71/0. The new source-form control
+retains Design B's explicit composition boundary—one Popen site, one generic subprocess.run site and the
+literal watch clear—while auditing the whole module for methods, lambdas, defaults, containers, aliases,
+dynamic attribute access and dynamic code. It admits ordinary non-provider helpers and harmless role
+call consolidation, so it does not revive the abandoned general Python dataflow evaluator.

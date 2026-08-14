@@ -458,6 +458,30 @@
       "max_added_lines": 1200
     },
     {
+      "id": "h-031",
+      "slice": 16,
+      "authority_class": "ordinary",
+      "title": "Codex-autopiloten — explicit modellrouting per agentroll",
+      "summary": "Every actual H-032-bound Codex provider start carries one owner-frozen model and reasoning-effort route selected only by the runtime role. The same values are journaled from the launch path, caller Codex configuration cannot override them, unknown roles reject before any run state or process effect, and the existing generic non-provider process boundary remains available but cannot become an alternate Codex launcher.",
+      "allowed_write": [
+        "scripts/nortropic-codex-autopilot.py",
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
+      "owner_author_allowed_write": [],
+      "exit_test": "verify/bin/h-031-exit",
+      "exit_criterion": "LIFECYCLE AND UPSTREAM AUTHORITY: H-031 is exactly one ordinary task, depends exactly on published H-032 and uses canonical verify/bin/h-031-exit. H-032's exact task/gate and owner-frozen Codex provider authority remain unchanged and green. H-031 adds no provider selector, verifier, session truth store or parallel launch component; it owns only role-to-model routing at the existing run_codex boundary. OWNER-FROZEN ROLE POLICY: the complete admitted runtime role set is ARCHITECT, TEST_AUTHOR, GATE_REVIEWER, BUILDER, REVIEWER and EMPIRICAL. Each actual start executes model gpt-5.6-sol. ARCHITECT, TEST_AUTHOR, GATE_REVIEWER, REVIEWER and EMPIRICAL execute reasoning effort max; BUILDER executes high. No normal role executes implicit ultra. An unknown, empty, case-variant or caller-selected role rejects before run-directory creation, provider snapshot/process, AGENT_START or any new journal event. ACTUAL PROCESS EFFECT: the route is measured from argv received by a genuinely spawned byte-identified provider process through the published H-032 opened-object/private-snapshot/final-rehash/G20 path, not from a would-be argv variable, serialized configuration, model prose or provider self-report. The actual argv contains exactly one model selector for the required model, exactly one model_reasoning_effort override for the required effort and exactly one --ignore-user-config, with no profile, OSS/local-provider or competing model configuration. A hostile CODEX_HOME containing another model/effort and a PATH codex shadow cannot change the executed route. The current Codex 0.147.0 owner measurement establishes -m/--model, -c/--config model_reasoning_effort and --ignore-user-config as the supported explicit mechanism; provider/network availability is not a verdict source. JOURNAL BINDING: every successful actual provider start emits exactly one AGENT_START whose role, model, reasoning_effort and model_routing_source=AUTOPILOT_ROLE_POLICY are byte-equal to the values used by that same launch path. Legacy persisted routing remains byte-preserved and readable but never selects a new route. Status, watch and roadmap_status remain model-free observers and cannot reach run_codex. PROCESS BOUNDARY: run_codex owns the only subprocess.Popen site; generic run owns the only subprocess.run site and rejects, before spawn, any executable whose basename case-folds to codex; watch may retain only literal os.system(\"clear\"). Every other native process site, import alias, process-function reference/assignment, lambda/default/container alias, getattr/dictionary escape or unresolved process-module dispatch rejects under a whole-module source-form audit. This is an intentional bounded trust property, not a general Python dataflow interpreter. Ordinary Git/GitHub/node/controller helpers through run and legitimate consolidation of role calls remain admitted. Disposable mutants independently remove or duplicate model/effort/ignore-user-config, journal different values, trust caller config, admit an unknown role, add alternate process sites/aliases or bypass the generic codex guard and must reject; a legitimate H-032-bound fake provider and ordinary non-provider helper remain positive anchors. Nested hosts that cannot install the already frozen G20 Seatbelt boundary are ODÖMBART, never PASS or product FAIL. The frozen pre-builder RED is exactly EXPLICIT_ROLE_MODEL_ROUTING_ABSENT. MATERIAL_PROPERTIES_JUDGE_ONLY=NONE.",
+      "docs_impact": [
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
+      "depends_on": [
+        "h-032"
+      ],
+      "max_changed_files": 6,
+      "max_added_lines": 1000
+    },
+    {
       "id": "h-034",
       "slice": "H034_NATIVE_FINITE_VERIFIER_KERNEL",
       "authority_class": "owner_authority",
