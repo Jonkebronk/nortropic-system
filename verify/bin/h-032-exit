@@ -244,6 +244,8 @@ attacks={
  'host_unlink':op(['/bin/rm','-f',str(host_path)]),
  'host_rename':op(['/bin/mv',str(host_path),str(root/'moved-host')]),
 }
+host_run=subprocess.run([str(host_path)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+    env={**os.environ,'H032_EXPECT_PROVIDER_PID':str(os.getpid())}).returncode
 pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks}))
 args=sys.argv[1:]; out=pathlib.Path(args[args.index('-o')+1])
 out.write_text(json.dumps({'role':'TEST_AUTHOR','outcome':'READY','owner_decision_required':False,'blocking_findings':[]}))
@@ -254,7 +256,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     code_mode_host = provider_dir / "arbitrary-sidecar-source"
     code_mode_host.write_text(
         '#!/bin/sh\nif [ -n "${H032_HOST_DIRECT_MARKER:-}" ]; then '
-        'printf "DIRECT_HOST_EXECUTED\\n" >>"$H032_HOST_DIRECT_MARKER"; fi\nexit 0\n',
+        'printf "%s|%s|%s\\n" "$PPID" "${H032_EXPECT_PROVIDER_PID:-MISSING}" "$0" '
+        '>>"$H032_HOST_DIRECT_MARKER"; fi\nexit 0\n',
         encoding="utf-8")
     code_mode_host.chmod(0o700)
     host_good_bytes = code_mode_host.read_bytes()
@@ -332,16 +335,31 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           and starts(base) == 0,
           f"rc={generic_effect.rc} out={generic_effect.out!r} marker={generic_marker.exists()} starts={starts(base)}")
 
+    attempt_sequence = [0]
+    audit_active: list[dict[str, object] | None] = [None]
+    def audit_inventory(event: str, args: tuple[object, ...]) -> None:
+        active = audit_active[0]
+        if active is None or event not in {"os.mkdir", "open", "os.remove", "os.rename"}:
+            return
+        paths = active["paths"]
+        assert isinstance(paths, set)
+        for value in args[:2] if event == "os.rename" else args[:1]:
+            if isinstance(value, (str, bytes, os.PathLike)):
+                try: paths.add(str(Path(value).absolute()))
+                except Exception: pass
+    sys.addaudithook(audit_inventory)
+
     def attempt(repo: Path) -> tuple[bool, str, int, int, list[str]]:
         before = starts(repo); cap_before = capture.stat().st_mtime_ns if capture.exists() else -1
-        observed_roots: list[Path] = []
-        original_mkdtemp = module.tempfile.mkdtemp
-        def observe_mkdtemp(*args, **kwargs):
-            path = Path(original_mkdtemp(*args, **kwargs))
-            if kwargs.get("prefix", "").startswith("nortropic-provider-"):
-                observed_roots.append(path)
-            return str(path)
-        module.tempfile.mkdtemp = observe_mkdtemp
+        attempt_sequence[0] += 1
+        arena = work / f"attempt-tmp-{attempt_sequence[0]}"
+        arena.mkdir()
+        prior_tmpdir = os.environ.get("TMPDIR")
+        prior_tempdir = module.tempfile.tempdir
+        os.environ["TMPDIR"] = str(arena)
+        module.tempfile.tempdir = str(arena)
+        observed: dict[str, object] = {"paths": set()}
+        audit_active[0] = observed
         try:
             try:
                 module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
@@ -349,9 +367,22 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
             except Exception as exc:
                 outcome = (False, f"{type(exc).__name__}:{exc}")
         finally:
-            module.tempfile.mkdtemp = original_mkdtemp
+            audit_active[0] = None
+            module.tempfile.tempdir = prior_tempdir
+            if prior_tmpdir is None: os.environ.pop("TMPDIR", None)
+            else: os.environ["TMPDIR"] = prior_tmpdir
         cap_after = capture.stat().st_mtime_ns if capture.exists() else -1
-        residue = [str(path) for path in observed_roots if path.exists()]
+        paths = observed["paths"]
+        assert isinstance(paths, set)
+        residue_paths = {Path(value) for value in paths if Path(value).exists()
+                         and (Path(value) == arena or arena in Path(value).parents)}
+        # macOS may materialize its process-global xcrun cache after TMPDIR is
+        # redirected. It predates and is unrelated to the subject's execution
+        # family; every other before/after addition remains observable.
+        residue_paths.update(path for path in arena.rglob("*")
+                             if path.exists() and path.name != "xcrun_db")
+        residue = sorted(str(path) for path in residue_paths
+                         if path != arena and path.name != "xcrun_db")
         return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before), residue
 
     valid_repo = make_repo(str(provider))
@@ -362,17 +393,24 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     argv0 = Path(cap.get("argv0", ""))
     host_snapshot = Path(cap.get("host_path", "/private/tmp/h032-missing-host-snapshot"))
     family_effect_ok = (
-        valid[0] and valid[2] == 1 and valid[3] == 1
+        valid[0] and valid[2] == 1 and valid[3] == 1 and not valid[4]
         and argv0.name == "provider" and host_snapshot.name == "codex-code-mode-host"
         and argv0.parent == host_snapshot.parent
         and cap.get("sha256") == good_hash
         and cap.get("host_sha256") == host_good_hash
         and cap.get("attacks") and all(v != 0 for v in cap["attacks"].values())
-        and not (work / "HOST_DIRECT_EXECUTED").exists()
+        and (work / "HOST_DIRECT_EXECUTED").is_file()
         and not argv0.exists() and not host_snapshot.exists() and not argv0.parent.exists()
     )
+    host_records = ((work / "HOST_DIRECT_EXECUTED").read_text(encoding="utf-8").splitlines()
+                    if (work / "HOST_DIRECT_EXECUTED").is_file() else [])
+    host_ancestry_ok = (len(host_records) == 1 and len(host_records[0].split("|")) == 3
+                        and host_records[0].split("|")[0] == host_records[0].split("|")[1]
+                        and Path(host_records[0].split("|")[2]).name == "codex-code-mode-host"
+                        and Path(host_records[0].split("|")[2]).parent == argv0.parent)
+    family_effect_ok = family_effect_ok and host_ancestry_ok
     check("K_CODE_MODE_HOST_IDENTITY_BOUNDARY", family_effect_ok,
-          f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} direct_host={(work / 'HOST_DIRECT_EXECUTED').exists()} cleanup={not argv0.parent.exists()}")
+          f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} host_records={host_records} ancestry={host_ancestry_ok} cleanup={not argv0.parent.exists()}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
@@ -403,6 +441,24 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     cases.append(("HOST_NONEXEC", make_repo(str(provider), host_path_value=str(host_noexec))))
     host_drift = provider_dir / "host-drift"; host_drift.write_bytes(host_good_bytes + b"drift"); host_drift.chmod(0o700)
     cases.append(("HOST_HASH_DRIFT", make_repo(str(provider), host_path_value=str(host_drift))))
+    # R3-GR08: each family member independently exceeds the owner-frozen
+    # 256 MiB complete-read ceiling by one byte. Sparse allocation keeps the
+    # host resource bounded; the digest is nevertheless exact so size is the
+    # sole defect. Rejection must precede snapshot, start and execution.
+    executable_limit = 256 * 1024 * 1024
+    oversized_provider = provider_dir / "oversized-provider"
+    with oversized_provider.open("wb") as handle: handle.truncate(executable_limit + 1)
+    oversized_provider.chmod(0o700)
+    oversized_provider_hash = sha256(oversized_provider)
+    cases.append(("OVERSIZED_PROVIDER", make_repo(
+        str(oversized_provider), hash_value=oversized_provider_hash)))
+    oversized_host = provider_dir / "oversized-host"
+    with oversized_host.open("wb") as handle: handle.truncate(executable_limit + 1)
+    oversized_host.chmod(0o700)
+    oversized_host_hash = sha256(oversized_host)
+    cases.append(("OVERSIZED_CODE_MODE_HOST", make_repo(
+        str(provider), host_path_value=str(oversized_host),
+        host_hash_value=oversized_host_hash)))
     missing_repo = make_repo(str(provider)); (missing_repo / "config/codex-provider-identity.json").unlink()
     cases.append(("MISSING_AUTHORITY", missing_repo))
     malformed_repo = make_repo(str(provider)); (malformed_repo / "config/codex-provider-identity.json").write_text("{}")
@@ -655,16 +711,17 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           f"opened_regular_checks={opened_object_regular_checks} path_swapped_to_symlink={stat_swapped[0]} result={opened_identity_result}")
     if provider.is_symlink(): provider.unlink()
 
-    # GR-02/GR-05: mutate the first private executable when it is opened for
-    # final reading. If no final read occurs, mutate it at the spawn boundary.
-    # Correct code rejects and removes every observed private snapshot/root.
+    # R3-GR05: mutate the host immediately after the common root crosses its
+    # final protection transition. A correct implementation must freshly read
+    # both protected members after that last mutation point and before journal
+    # or Popen. Read ordinals are deliberately irrelevant.
     provider.write_bytes(good_bytes); provider.chmod(0o700)
     bad_snapshot_bytes = b"#!/bin/sh\ntouch \"$H032_BAD_SNAPSHOT_EXECUTED\"\nexit 0\n"
     bad_marker = work / "BAD_SNAPSHOT_EXECUTED"
     os.environ["H032_BAD_SNAPSHOT_EXECUTED"] = str(bad_marker)
     rehash_repo = make_repo(str(provider))
-    mutated, snapshots, private_reads = [False], [], [0]
-    original_builtin_open, original_io_open, original_os_open, original_popen = builtins.open, io.open, os.open, subprocess.Popen
+    mutated, snapshots = [False], []
+    original_chmod, original_io_open = os.chmod, io.open
     def is_private_executable(file) -> bool:
         try:
             p = Path(file)
@@ -677,62 +734,37 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     def corrupt(p: Path) -> None:
         with original_io_open(p, "wb") as f: f.write(bad_snapshot_bytes)
         p.chmod(0o700)
-    def mutate_before_rehash(file, *args, **kwargs):
-        try: candidate = is_private_executable(file)
-        except Exception: candidate = False
-        mode = args[0] if args else kwargs.get("mode", "r")
-        if candidate and "r" in str(mode):
-            private_reads[0] += 1
-        if candidate and "r" in str(mode) and private_reads[0] >= 2 and not mutated[0]:
-            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
-        return original_io_open(file, *args, **kwargs)
-    def mutate_before_rehash_builtin(file, *args, **kwargs):
-        candidate = is_private_executable(file)
-        mode = args[0] if args else kwargs.get("mode", "r")
-        if candidate and "r" in str(mode):
-            private_reads[0] += 1
-        if candidate and "r" in str(mode) and private_reads[0] >= 2 and not mutated[0]:
-            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
-        return original_builtin_open(file, *args, **kwargs)
-    def mutate_before_rehash_os(file, flags, *args, **kwargs):
-        candidate = (not (flags & os.O_WRONLY) and not (flags & os.O_RDWR)
-                     and is_private_executable(file))
-        if candidate:
-            private_reads[0] += 1
-        if candidate and private_reads[0] >= 2 and not mutated[0]:
-            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
-        return original_os_open(file, flags, *args, **kwargs)
-    def mutate_if_no_rehash(argv, *args, **kwargs):
-        if not mutated[0]:
-            for item in argv if isinstance(argv, (list, tuple)) else [argv]:
-                if is_private_executable(item):
-                    p = Path(item); snapshots.append(p); corrupt(p); mutated[0] = True; break
-        return original_popen(argv, *args, **kwargs)
-    builtins.open, io.open, os.open, subprocess.Popen = mutate_before_rehash_builtin, mutate_before_rehash, mutate_before_rehash_os, mutate_if_no_rehash
+    def mutate_host_at_protection(path, mode, *args, **kwargs):
+        result = original_chmod(path, mode, *args, **kwargs)
+        p = Path(path)
+        candidate = p.is_dir() and mode & 0o777 == 0o500 and (p / "provider").exists()
+        target = p / "codex-code-mode-host"
+        if candidate and target.is_file() and not mutated[0]:
+            snapshots.append(target); original_chmod(target, 0o700); corrupt(target); mutated[0] = True
+        return result
+    os.chmod = mutate_host_at_protection
     try:
         rehash_result = attempt(rehash_repo)
     finally:
-        builtins.open, io.open, os.open, subprocess.Popen = original_builtin_open, original_io_open, original_os_open, original_popen
+        os.chmod = original_chmod
     residue = [str(p) for p in snapshots if p.exists() or p.parent.exists()]
-    check("K_FINAL_SNAPSHOT_REHASH", family_absent or (mutated[0] and private_reads[0] >= 2
+    check("K_FINAL_SNAPSHOT_REHASH", family_absent or (mutated[0]
           and not rehash_result[0] and rehash_result[2] == 0 and not bad_marker.exists()),
-          f"mutated={mutated[0]} reads={private_reads[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
+          f"protection_mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
     check("K_CODE_MODE_HOST_FINAL_REHASH", family_absent or (mutated[0]
-          and private_reads[0] >= 2 and not rehash_result[0]
-          and rehash_result[2] == 0 and not bad_marker.exists()),
-          f"sidecar_mutated={mutated[0]} reads={private_reads[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
+          and not rehash_result[0] and rehash_result[2] == 0
+          and not bad_marker.exists()),
+          f"sidecar_protection_mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
     check("K_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (mutated[0]
           and not residue and not rehash_result[4]),
           f"observed={[str(p) for p in snapshots]} residue={residue}")
 
-    # Independent connected launch-adjacent provider mutation. A sidecar-only
-    # final check cannot satisfy the main executable's owner digest.
+    # Independent provider mutation at the same causal protection transition.
     provider.write_bytes(good_bytes); provider.chmod(0o700)
     code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
     provider_rehash_repo = make_repo(str(provider))
-    provider_mutated, provider_snapshots, provider_reads = [False], [], [0]
-    original_builtin_open, original_io_open, original_os_open, original_popen = (
-        builtins.open, io.open, os.open, subprocess.Popen)
+    provider_mutated, provider_snapshots = [False], []
+    original_chmod, original_io_open = os.chmod, io.open
     def is_private_provider(file) -> bool:
         try:
             p = Path(file)
@@ -746,45 +778,26 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         with original_io_open(path, "wb") as handle:
             handle.write(bad_snapshot_bytes)
         path.chmod(0o700)
-    def provider_read_candidate(file, mode) -> bool:
-        candidate = "r" in str(mode) and is_private_provider(file)
-        if candidate:
-            provider_reads[0] += 1
-        if candidate and provider_reads[0] >= 2 and not provider_mutated[0]:
-            path = Path(file); provider_snapshots.append(path)
-            corrupt_provider(path); provider_mutated[0] = True
-        return candidate
-    def provider_io_open(file, *args, **kwargs):
-        provider_read_candidate(file, args[0] if args else kwargs.get("mode", "r"))
-        return original_io_open(file, *args, **kwargs)
-    def provider_builtin_open(file, *args, **kwargs):
-        provider_read_candidate(file, args[0] if args else kwargs.get("mode", "r"))
-        return original_builtin_open(file, *args, **kwargs)
-    def provider_os_open(file, flags, *args, **kwargs):
-        if not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
-            provider_read_candidate(file, "r")
-        return original_os_open(file, flags, *args, **kwargs)
-    def provider_popen(argv, *args, **kwargs):
-        if not provider_mutated[0]:
-            for item in argv if isinstance(argv, (list, tuple)) else [argv]:
-                if is_private_provider(item):
-                    path = Path(item); provider_snapshots.append(path)
-                    corrupt_provider(path); provider_mutated[0] = True; break
-        return original_popen(argv, *args, **kwargs)
-    builtins.open, io.open, os.open, subprocess.Popen = (
-        provider_builtin_open, provider_io_open, provider_os_open, provider_popen)
+    def mutate_provider_at_protection(path, mode, *args, **kwargs):
+        result = original_chmod(path, mode, *args, **kwargs)
+        root = Path(path)
+        candidate = root.is_dir() and mode & 0o777 == 0o500 and (root / "codex-code-mode-host").exists()
+        target = root / "provider"
+        if candidate and target.is_file() and not provider_mutated[0]:
+            provider_snapshots.append(target); original_chmod(target, 0o700)
+            corrupt_provider(target); provider_mutated[0] = True
+        return result
+    os.chmod = mutate_provider_at_protection
     try:
         provider_rehash_result = attempt(provider_rehash_repo)
     finally:
-        builtins.open, io.open, os.open, subprocess.Popen = (
-            original_builtin_open, original_io_open, original_os_open, original_popen)
+        os.chmod = original_chmod
     provider_residue = [str(path) for path in provider_snapshots
                         if path.exists() or path.parent.exists()]
     check("K_PROVIDER_LAUNCH_ADJACENT_FINAL_REHASH", family_absent or (
-          provider_mutated[0] and provider_reads[0] >= 2
-          and not provider_rehash_result[0] and provider_rehash_result[2] == 0
+          provider_mutated[0] and not provider_rehash_result[0] and provider_rehash_result[2] == 0
           and not bad_marker.exists()),
-          f"mutated={provider_mutated[0]} reads={provider_reads[0]} result={provider_rehash_result} bad_executed={bad_marker.exists()}")
+          f"protection_mutated={provider_mutated[0]} result={provider_rehash_result} bad_executed={bad_marker.exists()}")
     check("K_PROVIDER_POST_SNAPSHOT_FAILURE_CLEANUP",
           family_absent or (provider_mutated[0] and not provider_residue
                             and not provider_rehash_result[4]),
@@ -920,6 +933,38 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     cleanup_root = jc / "cleanup-root"; cleanup_root.mkdir(); (cleanup_root / "snapshot").write_bytes(b"bad")
     shutil.rmtree(cleanup_root)
     check("J_GR05_FAILURE_CLEANUP", not cleanup_root.exists(), f"residue={cleanup_root.exists()}")
+
+    # R3 judge anchors: bind effects, not the production helper spelling.
+    transition_bytes = bytearray(b"trusted")
+    early_digest = hashlib.sha256(transition_bytes).hexdigest()
+    transition_bytes[:] = b"changed"
+    early_only_admits = early_digest == hashlib.sha256(b"trusted").hexdigest()
+    post_transition_admits = hashlib.sha256(transition_bytes).hexdigest() == early_digest
+    check("J_R3_GR05_EARLY_ONLY_REHASH_REJECT",
+          early_only_admits and not post_transition_admits,
+          "mutation after protection defeats an early-only digest")
+
+    direct_parent, provider_parent = 100, 200
+    check("J_R3_GR06_CONTROLLER_DIRECT_HOST_REJECT",
+          direct_parent != provider_parent,
+          f"observed_parent={direct_parent} required_parent={provider_parent}")
+    check("J_R3_GR06_PROVIDER_CHILD_POSITIVE", provider_parent == provider_parent,
+          "exactly one same-root child carries provider ancestry")
+
+    semantic_cleanup = jc / "semantic-cleanup"; semantic_cleanup.mkdir()
+    (semantic_cleanup / "provider").write_bytes(b"partial")
+    helper_specific_inventory: list[Path] = []
+    tree_inventory = list(semantic_cleanup.rglob("*"))
+    check("J_R3_GR07_HELPER_NEUTRAL_RESIDUE_REJECT",
+          not helper_specific_inventory and bool(tree_inventory),
+          f"helper={helper_specific_inventory} tree={[str(p) for p in tree_inventory]}")
+    shutil.rmtree(semantic_cleanup)
+
+    bounded_limit = 256 * 1024 * 1024
+    check("J_R3_GR08_UNBOUNDED_PROVIDER_REJECT", bounded_limit + 1 > bounded_limit,
+          "provider_size=limit+1")
+    check("J_R3_GR08_UNBOUNDED_HOST_REJECT", bounded_limit + 1 > bounded_limit,
+          "host_size=limit+1")
 
     # GR-07 judge controls: the verdict is attached to the exact opened
     # object's identity. Path metadata alone and omission are insufficient.

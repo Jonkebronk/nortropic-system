@@ -807,3 +807,9 @@ provider root and requires no partial member/root residue. Finally, the host fix
 writes a dedicated marker if directly launched; the legitimate provider run requires that marker to
 remain absent. These are gate-only changes. The one intended product RED and all prior upstream
 regressions remain unchanged.
+
+R3 gate hardening replaces the second-read heuristic with a causal post-protection mutation point for
+each family member. It adds a positive exactly-once provider-to-host ancestry anchor, filesystem-effect
+cleanup observation independent of tempfile API/prefix, and separate oversized sparse provider/host
+negatives at 256 MiB + 1 byte. This remains owner TEST_AUTHOR work only: no production implementation
+is present and H-032 must stay RED solely for the absent execution-family boundary.
