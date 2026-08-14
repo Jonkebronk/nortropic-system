@@ -42,13 +42,12 @@ EXPECTED_REPO = "Nortropic/nortropic-system"
 OWNER_DECISION_PATH = "docs/loop/owner-h003-attestation-authority-v1.md"
 REPORT_SCHEMA_PATH = "docs/loop/codex-autopilot-report.schema.json"
 PROVIDER_IDENTITY_PATH = "config/codex-provider-identity.json"
-PYTHON_IDENTITY_PATH = "config/python-interpreter-authority-v1.json"
 PROVIDER_IDENTITY_KEYS = {
     "schema_version", "provider", "executable_path", "executable_sha256",
 }
 MAX_PROVIDER_AUTHORITY_BYTES = 16 * 1024
 MAX_PROVIDER_EXECUTABLE_BYTES = 256 * 1024 * 1024
-MAX_PYTHON_AUTHORITY_BYTES = 16 * 1024
+CONTROLLER_LAUNCH_PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 REJECTED_S3 = "1e21a7fe150f25626301f3656893d1798ae46c3d"
 FULL_ROADMAP_OWNER_PATH = "docs/loop/codex-autopilot-v3-full-roadmap.md"
 SUBSTITUTION_OWNER_PATH = "docs/loop/harness-substitution-contract-v1.md"
@@ -673,50 +672,6 @@ def _provider_snapshot(repo: Path) -> tuple[Path, Path, str]:
         raise
 
 
-def _controller_python() -> Path:
-    """Resolve the controller interpreter without consulting caller PATH."""
-    authority_path = Path(__file__).resolve().parents[1] / PYTHON_IDENTITY_PATH
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(authority_path, flags)
-    except OSError as e:
-        raise Stop(f"controller Python authority unavailable: {e}") from e
-    try:
-        raw = _read_stable_opened(fd, MAX_PYTHON_AUTHORITY_BYTES,
-                                  "controller Python authority")
-    finally:
-        os.close(fd)
-    try:
-        authority = strict_json_bytes(raw)
-    except (AuthorityError, UnicodeError, ValueError) as e:
-        raise Stop(f"controller Python authority is not strict JSON: {e}") from e
-    if not isinstance(authority, dict):
-        raise Stop("controller Python authority has invalid shape")
-    path_value, expected = authority.get("canonical_path"), authority.get("executable_sha256")
-    if (authority.get("schema_version") != 1 or type(path_value) is not str
-            or not path_value or type(expected) is not str
-            or not re.fullmatch(r"[0-9a-f]{64}", expected)):
-        raise Stop("controller Python authority has invalid values")
-    path = Path(path_value)
-    if not path.is_absolute():
-        raise Stop("controller Python authority path must be absolute")
-    try:
-        fd = os.open(path, flags)
-    except OSError as e:
-        raise Stop(f"controller Python unavailable: {e}") from e
-    try:
-        opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or not (opened.st_mode & 0o111):
-            raise Stop("controller Python is not a regular executable file")
-        payload = _read_stable_opened(fd, MAX_PROVIDER_EXECUTABLE_BYTES,
-                                      "controller Python executable")
-    finally:
-        os.close(fd)
-    if hashlib.sha256(payload).hexdigest() != expected:
-        raise Stop("controller Python digest does not match authority")
-    return path
-
-
 def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
     jr = journal_root(repo) / "runs" / f"{now_id()}-{role.lower()}"
     jr.mkdir(parents=True, exist_ok=False)
@@ -741,9 +696,13 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
     envelope = jr / "provider-envelope.json"
     envelope.write_text(json.dumps({"task_id": prompt, "role": role}), encoding="utf-8")
     launcher = Path(__file__).resolve().parents[1] / "controller/launch/cli"
-    argv = [str(_controller_python()), "-I", "-S", str(launcher),
-            "run", str(wt), str(envelope), "86400", "--", *provider_argv]
-    env = dict(os.environ, NORTROPIC_TRUST_ROOT=str(snapshot_root))
+    argv = [str(launcher), "run", str(wt), str(envelope), "86400", "--", *provider_argv]
+    # The launcher's /usr/bin/env shebang runs before Seatbelt. It therefore
+    # receives a closed interpreter-selection environment, not caller PATH or
+    # Python startup/module injection. Other provider variables are preserved.
+    env = {key: value for key, value in os.environ.items()
+           if not key.upper().startswith("PYTHON")}
+    env.update(PATH=CONTROLLER_LAUNCH_PATH, NORTROPIC_TRUST_ROOT=str(snapshot_root))
     thread_id: str | None = None
     try:
         # The final read is deliberately adjacent to the trust transition.

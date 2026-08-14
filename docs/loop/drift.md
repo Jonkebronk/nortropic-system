@@ -551,3 +551,12 @@ interpreter with isolated `-I -S` flags. It does not sanitize or replace the pro
 PATH reaches the provider only after the trusted controller process has established G20. A disposable
 fake `python3.12` placed first in caller PATH was not invoked, while the provider remained a descendant
 of the real launcher and all six namespace attacks stayed denied.
+
+The next review correctly rejected that candidate's partial consumption of the separate Python
+interpreter authority: hashing one opened descriptor and later executing its pathname did not satisfy
+that authority's full same-opened-object private-snapshot model. H-032 now makes no Python-authority
+claim. It relies on the already frozen H-017 launcher trust boundary and closes only the environment
+that reaches the launcher's pre-Seatbelt `/usr/bin/env` step: fixed non-caller PATH and removal of every
+caller `PYTHON*` variable. Other provider environment is retained. Dedicated fake PATH and
+launcher-specific `sitecustomize` controls remained silent; the actual provider still ran below the
+real launcher with G20 namespace attacks denied.
