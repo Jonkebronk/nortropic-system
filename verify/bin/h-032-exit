@@ -591,6 +591,12 @@ if mode == 'output_then_fail': sys.exit(17)
                 base=r34_value(node.value,env,active);known,key=r29_literal(node.slice)
                 if isinstance(base,dict) and known: return base.get(key,unknown)
                 return base if isinstance(base,tuple) else unknown
+            if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+                    and isinstance(node.func.value,ast.Name)
+                    and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
+                return {"__objref__":f"namespace:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}",
+                        "__initial_attrs__":{kw.arg:r34_value(kw.value,env,active)
+                                             for kw in node.keywords if kw.arg}}
             if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
                 fn=exception_functions.get(node.func.id)
                 if fn is not None and fn.name not in active:
@@ -715,7 +721,12 @@ if mode == 'output_then_fail': sys.exit(17)
                 return {"__objref__":f"namespace:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}",
                         "__initial_attrs__":{kw.arg:r38_assignment_value(kw.value,env)
                                              for kw in node.keywords if kw.arg}}
-            return r34_value(node,env)
+            value=r34_value(node,env)
+            if (isinstance(node,ast.Call) and isinstance(node.func,ast.Name)
+                    and isinstance(value,dict) and "__objref__" in value):
+                value={**value,"__objref__":value["__objref__"]+
+                    f":caller:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}"}
+            return value
         def r39_store_flow(target,env,delete=False):
             if isinstance(target,ast.Name):
                 if delete and target.id not in env: return False,frozenset({"NameError"})
@@ -1988,6 +1999,23 @@ if mode == 'output_then_fail': sys.exit(17)
             "try:\n    if repo:\n        alias.value = 1\n"
             "    else:\n        del holder.value\n"
             "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        types_admission_positive=r28_control(
+            "import types\nholder = types.SimpleNamespace(value=1)\n"
+            "try:\n    del holder.value\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        types_admission_negatives=all(not r28_control(source,False) for source in (
+            "import types as t\nholder = t.SimpleNamespace()\n",
+            "from types import SimpleNamespace\nholder = SimpleNamespace()\n",
+            "holder = __import__('types').SimpleNamespace()\n",
+            "import importlib\nholder = importlib.import_module('types').SimpleNamespace()\n",
+            "import types\nholder = getattr(types, 'SimpleNamespace')()\n",
+            "import types\ntypes.__dict__['SimpleNamespace'] = object\n",
+            "import types\nholder = types.MappingProxyType({})\n"))
+        repeated_helper_isolation_negative=not r28_control(
+            "import types\ndef _r43_make():\n    return types.SimpleNamespace()\n"
+            "a = _r43_make()\nb = _r43_make()\na.value = 1\n"
+            "try:\n    del b.value\n"
+            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
         helper_multikey_positive=r28_control(
             "def _r36_types():\n    return {'runtime': RuntimeError, 'value': ValueError}\n"
             "try:\n    M = _r36_types()\n    E = M['runtime']\n"
@@ -2042,6 +2070,9 @@ if mode == 'output_then_fail': sys.exit(17)
                                and namespace_alias_delete_negative
                                and namespace_alias_store_positive
                                and namespace_alias_branch_negative)
+        r25_static_mutants_ok=(r25_static_mutants_ok and types_admission_positive
+                               and types_admission_negatives
+                               and repeated_helper_isolation_negative)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own

@@ -1230,3 +1230,8 @@ R42 separates stable abstract object identity from path-local heap versions. Sam
 aliases share an object id, so mutation through either alias is visible through all of
 them; each branch receives a persistent copy-on-write heap. Only the audited pure
 `types.SimpleNamespace` constructor path is admitted, with dynamic/reflection routes closed.
+
+R43 makes that admission explicit in the same full analyzer: only exact `import types`
+and direct pure `types.SimpleNamespace(...)` construction pass; aliases, ImportFrom,
+dynamic import, reflection, module mutation and other APIs reject. Allocation identity
+also includes caller context, separating repeated helper calls without breaking aliases.
