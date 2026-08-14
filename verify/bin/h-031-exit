@@ -793,7 +793,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "5bc7a5f13c5323c62c76c21d7ba328ab73c56b37c89448397ac60e55fa2928d0")
+                       == "1ad90dbc35e244fd010480a7da08323a0d48cd87495be9a947e693a7f6a2cf67")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
@@ -1004,11 +1004,17 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
 """, encoding="utf-8")
     provider.chmod(0o700)
     provider_hash = sha256_bytes(provider.read_bytes())
+    code_mode_host = provider_dir / "arbitrary-sidecar-source"
+    code_mode_host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    code_mode_host.chmod(0o700)
+    code_mode_host_hash = sha256_bytes(code_mode_host.read_bytes())
     config = repo / "config/codex-provider-identity.json"
     config.parent.mkdir(parents=True)
-    config.write_text(json.dumps({"schema_version": 1, "provider": "openai-codex",
+    config.write_text(json.dumps({"schema_version": 2, "provider": "openai-codex",
                                   "executable_path": str(provider),
-                                  "executable_sha256": provider_hash}), encoding="utf-8")
+                                  "executable_sha256": provider_hash,
+                                  "code_mode_host_path": str(code_mode_host),
+                                  "code_mode_host_sha256": code_mode_host_hash}), encoding="utf-8")
     hostile_home = work / "hostile-codex-home"
     hostile_home.mkdir()
     (hostile_home / "config.toml").write_text(
@@ -1250,7 +1256,11 @@ if not failed:
     print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
     print("H031_GATE_RESULT=PASS")
     raise SystemExit(0)
-if failed == EXPECTED_PREBUILDER_RED:
+if (failed == {"K_H032_FRESH_UPSTREAM", "K_PRODUCT_EXECUTION"}
+        and "CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT"
+            in getattr(locals().get("upstream"), "stdout", "")):
+    print("CURRENT_RED_REASON=UPSTREAM_CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
+elif failed == EXPECTED_PREBUILDER_RED:
     print("CURRENT_RED_REASON=EXPLICIT_ROLE_MODEL_ROUTING_ABSENT")
 else:
     print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(failed)))

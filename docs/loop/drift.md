@@ -778,3 +778,79 @@ was not identity authority and could not certify the later process: provider ide
 model/effort argv and the actual process effect remain bound at the sole H-032-protected `run_codex`
 boundary. Generic `run()` remains closed to Codex, and no subprocess site or alternate launch route was
 added. Physical file-backed `status` and `doctor` runs now proceed through dependency preflight.
+
+## 2026-08-14 — H-032 execution-family authority amendment after first launch
+
+The first real autonomous launch falsified the single-executable H-032 model. The verified Codex 0.147
+snapshot started and emitted `thread.started`, but stable `code_mode_host` resolves a required native
+sibling named `codex-code-mode-host`; the isolated snapshot root contained only `provider`, so no
+structured result was produced. This is a provider execution-family dependency, not a second provider
+selector or a caller-configured helper.
+
+Owner measurement binds the installed sibling at the exact native vendor path: arm64 Mach-O,
+49,991,616 bytes, SHA-256 `a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d`.
+The main provider digest remains `19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37`.
+Authority schema v2 binds both absolute paths and digests. The frozen H-032 amendment measures both
+from no-follow opened objects, requires exact private basenames `provider` and
+`codex-code-mode-host` in one root, final-rehashes both, directly executes only the provider, denies
+namespace mutation of either under G20 and requires whole-family cleanup on every path. H-031's role
+routing fixture is upgraded to the same family authority; its route and process-source controls are
+unchanged. The owner pre-builder state is RED only for
+`CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT`; no production implementation is included here.
+
+Independent gate review then found five ways a superficial family implementation could pass. The
+amended controls now mutate provider and host independently at their launch-adjacent reads, with a
+spawn-boundary fallback that exposes implementations which verified only immediately after copying.
+The host's same-opened-object metadata is observed through fstat and raced against stale path
+stat/access plus a nonexecutable symlink target. Every identity-negative attempt records any created
+provider root and requires no partial member/root residue. Finally, the host fixture is executable and
+writes a dedicated marker if directly launched; the legitimate provider run requires that marker to
+remain absent. These are gate-only changes. The one intended product RED and all prior upstream
+regressions remain unchanged.
+
+R3 gate hardening replaces the second-read heuristic with a causal post-protection mutation point for
+each family member. It adds a positive exactly-once provider-to-host ancestry anchor, filesystem-effect
+cleanup observation independent of tempfile API/prefix, and separate oversized sparse provider/host
+negatives at 256 MiB + 1 byte. This remains owner TEST_AUTHOR work only: no production implementation
+is present and H-032 must stay RED solely for the absent execution-family boundary.
+
+R4 replaces R3's first-matching protection mutation with an ordered launch trace spanning chmod,
+fchmod, complete member reads and actual Popen; both fresh reads must follow the final mode transition.
+Cleanup now retains every audited absent-at-event path anywhere and uses exact pre-seeding for system
+noise rather than location or basename exclusions. Both 256 MiB + 1 fixtures are valid executable
+programs whose unbounded capture effects are run and proven. No production byte is changed.
+
+R5 adds independent connected physical corruption for provider and host, rejects cached or ignored
+digest comparisons through actual capture effects, and requires no writable family descriptor at spawn.
+Expected journal paths are classified exactly; every other audit-observed success or failure residue is
+forbidden. The alternate-root cleanup fixture is now trap-owned and finally-cleaned. Production remains
+untouched and the sole intended RED is unchanged.
+
+R6 binds connected corruption to the first actual post-protection read of the snapshot object, including
+pre-opened handles and descriptors. Actual process fd enumeration plus fstat/F_GETFL replaces API-level
+writer bookkeeping at Popen. The journal cleanup exemption is now an exact finite shape, and a family
+subtree beneath runs is an explicit rejection mutant. Production remains unchanged.
+
+R7 removes original-fd history from connected corruption: every actual read fstats its live descriptor
+against current snapshot dev/inode, including a connected duplicated-RO subject control. Cleanup now
+binds the exact single run directory created by the invocation and rejects empty sibling roots or valid
+leaf names beneath any other child. Production remains unchanged.
+
+R8 seeds snapshot dev/inode identities from the observed exact private family at protection transitions,
+not from pathname-open spelling. Connected corruption covers high-level buffered variants plus os.read,
+pread, readv and preadv, with actual all-openat and positional-read subject controls. Production remains
+unchanged.
+
+R9 always wraps fdopen handles and resolves their live fileno identity on every buffered read, allowing
+identity seeding to occur later at protection. A connected pre-protection openat-to-fdopen subject path
+proves corruption precedes its actual final complete verification. Production remains unchanged.
+
+R10 preserves that live identity observation transitively when a pre-protection buffered handle yields
+its readable opened object through detach() or the public raw chain. Separate connected openat-to-fdopen
+detach and raw subject controls require corruption before their complete final verification read and do
+not accept the launch fallback. Ownership remains single-close and production remains unchanged.
+
+R11 removes all historical integer-descriptor fallback from connected read classification. Every read
+receives snapshot credit only from its current live fstat identity; a delegated pre-seed handle must also
+match the same live opened object. A close-and-forced-number-reuse control proves an unrelated read stays
+unchanged before the genuine duplicate/fdopen snapshot reader triggers pre-verification corruption.

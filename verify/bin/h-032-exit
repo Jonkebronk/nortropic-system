@@ -1,5 +1,5 @@
 #!/bin/bash -p
-# h-032-exit — fresh owner-frozen Codex executable/provider identity boundary
+# h-032-exit — fresh owner-frozen Codex executable-family identity boundary
 #
 # Predicted controls before execution:
 #   valid locked bytes under an arbitrary basename -> admitted through a private snapshot
@@ -60,6 +60,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import builtins
+import fcntl
 import io
 import json
 import os
@@ -77,6 +78,8 @@ h033_gate = repo / "verify/bin/h-033-exit"
 checks: list[tuple[str, bool, str]] = []
 EXPECTED_PROVIDER_PATH = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex")
 EXPECTED_PROVIDER_SHA256 = "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37"
+EXPECTED_CODE_MODE_HOST_PATH = EXPECTED_PROVIDER_PATH.with_name("codex-code-mode-host")
+EXPECTED_CODE_MODE_HOST_SHA256 = "a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d"
 GIT = "/usr/bin/git"
 
 def check(key: str, ok: bool, detail: str) -> None:
@@ -107,17 +110,24 @@ def authority_shape(raw: str) -> tuple[bool, str]:
         value = strict_json(raw)
     except Exception as exc:
         return False, f"{type(exc).__name__}:{exc}"
-    keys = {"schema_version", "provider", "executable_path", "executable_sha256"}
+    keys = {"schema_version", "provider", "executable_path", "executable_sha256",
+            "code_mode_host_path", "code_mode_host_sha256"}
     if not isinstance(value, dict) or set(value) != keys:
         return False, "top-level/keys"
     path = value["executable_path"]
     digest = value["executable_sha256"]
+    host_path = value["code_mode_host_path"]
+    host_digest = value["code_mode_host_sha256"]
     ok = (
-        type(value["schema_version"]) is int and value["schema_version"] == 1
+        type(value["schema_version"]) is int and value["schema_version"] == 2
         and type(value["provider"]) is str and value["provider"] == "openai-codex"
         and type(path) is str and bool(path) and Path(path).is_absolute()
         and type(digest) is str and len(digest) == 64
         and digest == digest.lower() and all(c in "0123456789abcdef" for c in digest)
+        and type(host_path) is str and bool(host_path) and Path(host_path).is_absolute()
+        and type(host_digest) is str and len(host_digest) == 64
+        and host_digest == host_digest.lower()
+        and all(c in "0123456789abcdef" for c in host_digest)
     )
     return ok, "exact" if ok else "value/type"
 
@@ -179,22 +189,29 @@ try:
     authority_raw = authority_source.read_text(encoding="utf-8")
     shape_ok, shape_detail = authority_shape(authority_raw)
     authority = strict_json(authority_raw)
-    exact_keys = {"schema_version", "provider", "executable_path", "executable_sha256"}
+    exact_keys = {"schema_version", "provider", "executable_path", "executable_sha256",
+                  "code_mode_host_path", "code_mode_host_sha256"}
     apath = Path(authority.get("executable_path", ""))
     digest = authority.get("executable_sha256", "")
+    host_path = Path(authority.get("code_mode_host_path", ""))
+    host_digest = authority.get("code_mode_host_sha256", "")
     authority_ok = (
         shape_ok and set(authority) == exact_keys
-        and authority.get("schema_version") == 1
+        and authority.get("schema_version") == 2
         and authority.get("provider") == "openai-codex"
         and apath == EXPECTED_PROVIDER_PATH and digest == EXPECTED_PROVIDER_SHA256
+        and host_path == EXPECTED_CODE_MODE_HOST_PATH
+        and host_digest == EXPECTED_CODE_MODE_HOST_SHA256
         and stat.S_ISREG(authority_lstat.st_mode) and not authority_source.is_symlink()
         and apath.is_absolute()
         and isinstance(digest, str) and len(digest) == 64
         and digest == digest.lower() and all(c in "0123456789abcdef" for c in digest)
         and apath.exists() and not apath.is_symlink() and apath.is_file()
         and os.access(apath, os.X_OK) and sha256(apath) == digest
+        and host_path.exists() and not host_path.is_symlink() and host_path.is_file()
+        and os.access(host_path, os.X_OK) and sha256(host_path) == host_digest
     )
-    check("K0", authority_ok, f"shape={shape_detail} provider={authority.get('provider')} path={apath} hash_match={apath.is_file() and sha256(apath) == digest}")
+    check("K0", authority_ok, f"shape={shape_detail} provider={authority.get('provider')} path={apath} host={host_path} main_hash_match={apath.is_file() and sha256(apath) == digest} host_hash_match={host_path.is_file() and sha256(host_path) == host_digest}")
 
     base = work / "base"; base.mkdir()
     sh(GIT, "init", "-q", cwd=base)
@@ -211,7 +228,9 @@ try:
     provider.write_text("""#!/usr/bin/env python3
 import hashlib,json,os,pathlib,subprocess,sys
 self_path=pathlib.Path(sys.argv[0]); root=self_path.parent
+host_path=root/'codex-code-mode-host'
 before=hashlib.sha256(self_path.read_bytes()).hexdigest()
+host_before=hashlib.sha256(host_path.read_bytes()).hexdigest() if host_path.is_file() else None
 def op(argv):
     return subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
 attacks={
@@ -221,14 +240,29 @@ attacks={
  'rename':op(['/bin/mv',str(self_path),str(root/'moved-provider')]),
  'create':op(['/bin/sh','-c','echo x > "$1"','sh',str(root/'replacement-provider')]),
  'parent_rename':op(['/bin/mv',str(root),str(root)+'-moved']),
+ 'host_write':op(['/bin/sh','-c','echo x >> "$1"','sh',str(host_path)]),
+ 'host_chmod':op(['/bin/chmod','700',str(host_path)]),
+ 'host_unlink':op(['/bin/rm','-f',str(host_path)]),
+ 'host_rename':op(['/bin/mv',str(host_path),str(root/'moved-host')]),
 }
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'attacks':attacks}))
+host_run=subprocess.run([str(host_path)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+    env={**os.environ,'H032_EXPECT_PROVIDER_PID':str(os.getpid())}).returncode
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks}))
 args=sys.argv[1:]; out=pathlib.Path(args[args.index('-o')+1])
 out.write_text(json.dumps({'role':'TEST_AUTHOR','outcome':'READY','owner_decision_required':False,'blocking_findings':[]}))
 print(json.dumps({'type':'thread.started','thread_id':'h032'}))
 """, encoding="utf-8")
     provider.chmod(0o700)
     good_bytes = provider.read_bytes(); good_hash = hashlib.sha256(good_bytes).hexdigest()
+    code_mode_host = provider_dir / "arbitrary-sidecar-source"
+    code_mode_host.write_text(
+        '#!/bin/sh\nif [ -n "${H032_HOST_DIRECT_MARKER:-}" ]; then '
+        'printf "%s|%s|%s\\n" "$PPID" "${H032_EXPECT_PROVIDER_PID:-MISSING}" "$0" '
+        '>>"$H032_HOST_DIRECT_MARKER"; fi\nexit 0\n',
+        encoding="utf-8")
+    code_mode_host.chmod(0o700)
+    host_good_bytes = code_mode_host.read_bytes()
+    host_good_hash = hashlib.sha256(host_good_bytes).hexdigest()
 
     path_shadow = work / "path-shadow"; path_shadow.mkdir()
     shadow_marker = work / "PATH_SHADOW_RAN"
@@ -236,16 +270,27 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     shadow.write_text(f"#!/bin/sh\ntouch '{shadow_marker}'\nexit 88\n", encoding="utf-8"); shadow.chmod(0o700)
     old_path = os.environ.get("PATH", "")
     os.environ.update(PATH=str(path_shadow) + os.pathsep + old_path,
-                      H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider))
+                      H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider),
+                      H032_HOST_DIRECT_MARKER=str(work / "HOST_DIRECT_EXECUTED"))
 
     counter = 0
-    def make_repo(path_value: str, hash_value: str = good_hash) -> Path:
+    def authority_document(path_value: str, hash_value: str = good_hash,
+                           host_path_value: str = str(code_mode_host),
+                           host_hash_value: str = host_good_hash) -> dict[str, object]:
+        return {"schema_version":2,"provider":"openai-codex",
+                "executable_path":path_value,"executable_sha256":hash_value,
+                "code_mode_host_path":host_path_value,
+                "code_mode_host_sha256":host_hash_value}
+
+    def make_repo(path_value: str, hash_value: str = good_hash,
+                  host_path_value: str = str(code_mode_host),
+                  host_hash_value: str = host_good_hash) -> Path:
         nonlocal_counter[0] += 1
         repo = work / f"repo-{nonlocal_counter[0]}"
         shutil.copytree(base, repo)
         cfg = repo / "config/codex-provider-identity.json"; cfg.parent.mkdir(parents=True)
-        cfg.write_text(json.dumps({"schema_version":1,"provider":"openai-codex",
-                                   "executable_path":path_value,"executable_sha256":hash_value}), encoding="utf-8")
+        cfg.write_text(json.dumps(authority_document(path_value, hash_value,
+                                                     host_path_value, host_hash_value)), encoding="utf-8")
         return repo
     def make_raw_repo(raw: str) -> Path:
         repo = make_repo(str(provider))
@@ -291,28 +336,104 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           and starts(base) == 0,
           f"rc={generic_effect.rc} out={generic_effect.out!r} marker={generic_marker.exists()} starts={starts(base)}")
 
-    def attempt(repo: Path) -> tuple[bool, str, int, int]:
+    attempt_sequence = [0]
+    audit_active: list[dict[str, object] | None] = [None]
+    def audit_inventory(event: str, args: tuple[object, ...]) -> None:
+        active = audit_active[0]
+        if active is None or event not in {"os.mkdir", "open", "os.remove", "os.rename"}:
+            return
+        created = active["created"]
+        assert isinstance(created, set)
+        values = args[1:2] if event == "os.rename" else args[:1]
+        for value in values:
+            if isinstance(value, (str, bytes, os.PathLike)):
+                try:
+                    path = Path(value).absolute()
+                    if not path.exists(): created.add(str(path))
+                except Exception: pass
+    sys.addaudithook(audit_inventory)
+
+    def attempt(repo: Path) -> tuple[bool, str, int, int, list[str]]:
         before = starts(repo); cap_before = capture.stat().st_mtime_ns if capture.exists() else -1
+        attempt_sequence[0] += 1
+        arena = work / f"attempt-tmp-{attempt_sequence[0]}"
+        arena.mkdir()
+        prior_tmpdir = os.environ.get("TMPDIR")
+        prior_tempdir = module.tempfile.tempdir
+        os.environ["TMPDIR"] = str(arena)
+        module.tempfile.tempdir = str(arena)
+        # Seed macOS's exact TMPDIR-local xcrun cache before observation. It is
+        # now pre-existing host state, not a basename exception.
+        subprocess.run([GIT, "--version"], env=dict(os.environ),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        arena_before = {str(path.absolute()) for path in arena.rglob("*")}
+        observed: dict[str, object] = {"created": set()}
+        audit_active[0] = observed
         try:
-            module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
-            outcome = (True, "ADMITTED")
-        except Exception as exc:
-            outcome = (False, f"{type(exc).__name__}:{exc}")
+            try:
+                module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
+                outcome = (True, "ADMITTED")
+            except Exception as exc:
+                outcome = (False, f"{type(exc).__name__}:{exc}")
+        finally:
+            audit_active[0] = None
+            module.tempfile.tempdir = prior_tempdir
+            if prior_tmpdir is None: os.environ.pop("TMPDIR", None)
+            else: os.environ["TMPDIR"] = prior_tmpdir
         cap_after = capture.stat().st_mtime_ns if capture.exists() else -1
-        return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before)
+        created = observed["created"]
+        assert isinstance(created, set)
+        residue_paths = {Path(value) for value in created if Path(value).exists()}
+        residue_paths.update(path for path in arena.rglob("*")
+                             if str(path.absolute()) not in arena_before)
+        expected_runs = module.journal_root(repo) / "runs"
+        direct_created = sorted(path for path in residue_paths if path.parent == expected_runs)
+        exact_run = direct_created[0] if len(direct_created) == 1 else None
+        def expected_journal_path(path: Path) -> bool:
+            if path == expected_runs or path == exact_run:
+                return True
+            return (exact_run is not None and path.parent == exact_run
+                    and path.name in {"provider-envelope.json", "events.jsonl", "result.json"})
+        residue = sorted(str(path) for path in residue_paths if path != arena
+                         and not expected_journal_path(path))
+        return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before), residue
 
     valid_repo = make_repo(str(provider))
     valid = attempt(valid_repo)
+    family_absent = (not valid[0]
+                     and "provider identity authority has unexpected keys" in valid[1])
     cap = json.loads(capture.read_text()) if capture.exists() else {}
     argv0 = Path(cap.get("argv0", ""))
-    check("K1", valid[0] and valid[2] == 1, f"valid={valid}")
+    host_snapshot = Path(cap.get("host_path", "/private/tmp/h032-missing-host-snapshot"))
+    family_effect_ok = (
+        valid[0] and valid[2] == 1 and valid[3] == 1 and not valid[4]
+        and argv0.name == "provider" and host_snapshot.name == "codex-code-mode-host"
+        and argv0.parent == host_snapshot.parent
+        and cap.get("sha256") == good_hash
+        and cap.get("host_sha256") == host_good_hash
+        and cap.get("attacks") and all(v != 0 for v in cap["attacks"].values())
+        and (work / "HOST_DIRECT_EXECUTED").is_file()
+        and not argv0.exists() and not host_snapshot.exists() and not argv0.parent.exists()
+    )
+    host_records = ((work / "HOST_DIRECT_EXECUTED").read_text(encoding="utf-8").splitlines()
+                    if (work / "HOST_DIRECT_EXECUTED").is_file() else [])
+    host_ancestry_ok = (len(host_records) == 1 and len(host_records[0].split("|")) == 3
+                        and host_records[0].split("|")[0] == host_records[0].split("|")[1]
+                        and Path(host_records[0].split("|")[2]).name == "codex-code-mode-host"
+                        and Path(host_records[0].split("|")[2]).parent == argv0.parent)
+    family_effect_ok = family_effect_ok and host_ancestry_ok
+    check("K_CODE_MODE_HOST_IDENTITY_BOUNDARY", family_effect_ok,
+          f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} host_records={host_records} ancestry={host_ancestry_ok} cleanup={not argv0.parent.exists()}")
+    check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
-    check("K3", argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash,
+    check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
           f"source={provider} argv0={argv0} hash={cap.get('sha256')}")
     attacks = cap.get("attacks", {})
-    check("K4", cap.get("sha256") == good_hash and attacks and all(v != 0 for v in attacks.values()),
+    check("K4", family_absent or (cap.get("sha256") == good_hash and attacks and all(v != 0 for v in attacks.values())),
           f"executed_sha={cap.get('sha256')} namespace_attacks={attacks}")
-    check("K5", not argv0.exists(), f"snapshot_exists_after={argv0.exists()}")
+    check("K5", family_absent or (not argv0.exists() and not host_snapshot.exists()
+          and not argv0.parent.exists()),
+          f"snapshot_exists_after={argv0.exists()} host_exists_after={host_snapshot.exists()} root_exists_after={argv0.parent.exists()}")
 
     # Restore source fixture for independent negative controls.
     provider.write_bytes(good_bytes); provider.chmod(0o700)
@@ -325,25 +446,82 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     cases.append(("NONEXEC", make_repo(str(noexec))))
     drift = provider_dir / "drift"; drift.write_bytes(good_bytes + b"\n# drift\n"); drift.chmod(0o700)
     cases.append(("HASH_DRIFT", make_repo(str(drift))))
+    host_link = provider_dir / "linked-host"; host_link.symlink_to(code_mode_host)
+    cases.append(("HOST_RELATIVE", make_repo(str(provider), host_path_value="codex-code-mode-host")))
+    cases.append(("HOST_SYMLINK", make_repo(str(provider), host_path_value=str(host_link))))
+    cases.append(("HOST_DIRECTORY", make_repo(str(provider), host_path_value=str(provider_dir))))
+    host_noexec = provider_dir / "host-noexec"; host_noexec.write_bytes(host_good_bytes); host_noexec.chmod(0o600)
+    cases.append(("HOST_NONEXEC", make_repo(str(provider), host_path_value=str(host_noexec))))
+    host_drift = provider_dir / "host-drift"; host_drift.write_bytes(host_good_bytes + b"drift"); host_drift.chmod(0o700)
+    cases.append(("HOST_HASH_DRIFT", make_repo(str(provider), host_path_value=str(host_drift))))
+    # R3-GR08: each family member independently exceeds the owner-frozen
+    # 256 MiB complete-read ceiling by one byte. Sparse allocation keeps the
+    # host resource bounded; the digest is nevertheless exact so size is the
+    # sole defect. Rejection must precede snapshot, start and execution.
+    executable_limit = 256 * 1024 * 1024
+    oversized_provider = provider_dir / "oversized-provider"
+    oversized_provider_marker = work / "OVERSIZED_PROVIDER_EXECUTED"
+    oversized_provider_prefix = (f"#!/bin/sh\nprintf 'provider\\n' >'{oversized_provider_marker}'\n"
+                                 "exit 0\n").encode()
+    with oversized_provider.open("wb") as handle:
+        handle.write(oversized_provider_prefix); handle.truncate(executable_limit + 1)
+    oversized_provider.chmod(0o700)
+    oversized_provider_hash = sha256(oversized_provider)
+    cases.append(("OVERSIZED_PROVIDER", make_repo(
+        str(oversized_provider), hash_value=oversized_provider_hash)))
+    oversized_host = provider_dir / "oversized-host"
+    oversized_host_marker = work / "OVERSIZED_HOST_EXECUTED"
+    oversized_host_prefix = (f"#!/bin/sh\nprintf 'host\\n' >'{oversized_host_marker}'\n"
+                             "exit 0\n").encode()
+    with oversized_host.open("wb") as handle:
+        handle.write(oversized_host_prefix); handle.truncate(executable_limit + 1)
+    oversized_host.chmod(0o700)
+    oversized_host_hash = sha256(oversized_host)
+    cases.append(("OVERSIZED_CODE_MODE_HOST", make_repo(
+        str(provider), host_path_value=str(oversized_host),
+        host_hash_value=oversized_host_hash)))
+    provider_unbounded = subprocess.run([str(oversized_provider)], check=False,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    host_unbounded = subprocess.run([str(oversized_host)], check=False,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    provider_fixture_effect = provider_unbounded.returncode == 0 and oversized_provider_marker.is_file()
+    host_fixture_effect = host_unbounded.returncode == 0 and oversized_host_marker.is_file()
+    check("J_R4_OVERSIZED_PROVIDER_EXECUTABLE_EFFECT",
+          provider_fixture_effect,
+          f"rc={provider_unbounded.returncode} capture={oversized_provider_marker.exists()}")
+    check("J_R4_OVERSIZED_HOST_EXECUTABLE_EFFECT",
+          host_fixture_effect,
+          f"rc={host_unbounded.returncode} capture={oversized_host_marker.exists()}")
+    oversized_provider_marker.unlink(missing_ok=True)
+    oversized_host_marker.unlink(missing_ok=True)
     missing_repo = make_repo(str(provider)); (missing_repo / "config/codex-provider-identity.json").unlink()
     cases.append(("MISSING_AUTHORITY", missing_repo))
     malformed_repo = make_repo(str(provider)); (malformed_repo / "config/codex-provider-identity.json").write_text("{}")
     cases.append(("MALFORMED_AUTHORITY", malformed_repo))
 
     authority_negative = {
-        "MISSING_KEY": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider)}),
-        "UNEXPECTED_KEY": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":good_hash,"extra":1}),
+        "MISSING_KEY": json.dumps({key:value for key,value in authority_document(str(provider)).items()
+                                    if key != "code_mode_host_sha256"}),
+        "UNEXPECTED_KEY": json.dumps({**authority_document(str(provider)),"extra":1}),
         "TOPLEVEL_TYPE": "[]",
-        "SCHEMA_WRONG_TYPE": json.dumps({"schema_version":True,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":good_hash}),
-        "PROVIDER_WRONG_VALUE": json.dumps({"schema_version":1,"provider":"other","executable_path":str(provider),"executable_sha256":good_hash}),
-        "PATH_WRONG_TYPE": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":7,"executable_sha256":good_hash}),
-        "SHA_WRONG_TYPE": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":7}),
-        "EMPTY_PATH": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":"","executable_sha256":good_hash}),
-        "EMPTY_SHA": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":""}),
-        "SHA_WRONG_LENGTH": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":"a"*63}),
-        "SHA_NONHEX": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":"g"*64}),
-        "DUPLICATE_PATH": '{"schema_version":1,"provider":"openai-codex","executable_path":"/first","executable_path":'+json.dumps(str(provider))+',"executable_sha256":"'+good_hash+'"}',
-        "DUPLICATE_SHA": '{"schema_version":1,"provider":"openai-codex","executable_path":'+json.dumps(str(provider))+',"executable_sha256":"'+good_hash+'","executable_sha256":"'+good_hash+'"}',
+        "SCHEMA_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"schema_version":True}),
+        "PROVIDER_WRONG_VALUE": json.dumps({**authority_document(str(provider)),"provider":"other"}),
+        "PATH_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"executable_path":7}),
+        "SHA_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"executable_sha256":7}),
+        "EMPTY_PATH": json.dumps({**authority_document(str(provider)),"executable_path":""}),
+        "EMPTY_SHA": json.dumps({**authority_document(str(provider)),"executable_sha256":""}),
+        "SHA_WRONG_LENGTH": json.dumps({**authority_document(str(provider)),"executable_sha256":"a"*63}),
+        "SHA_NONHEX": json.dumps({**authority_document(str(provider)),"executable_sha256":"g"*64}),
+        "HOST_PATH_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"code_mode_host_path":7}),
+        "HOST_SHA_WRONG_TYPE": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":7}),
+        "HOST_EMPTY_PATH": json.dumps({**authority_document(str(provider)),"code_mode_host_path":""}),
+        "HOST_EMPTY_SHA": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":""}),
+        "HOST_SHA_WRONG_LENGTH": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":"a"*63}),
+        "HOST_SHA_NONHEX": json.dumps({**authority_document(str(provider)),"code_mode_host_sha256":"g"*64}),
+        "DUPLICATE_PATH": json.dumps(authority_document(str(provider))).replace('"executable_path":', '"executable_path":"/first","executable_path":', 1),
+        "DUPLICATE_SHA": json.dumps(authority_document(str(provider))).replace('"executable_sha256":', '"executable_sha256":"' + good_hash + '","executable_sha256":', 1),
+        "DUPLICATE_HOST_PATH": json.dumps(authority_document(str(provider))).replace('"code_mode_host_path":', '"code_mode_host_path":"/first","code_mode_host_path":', 1),
+        "DUPLICATE_HOST_SHA": json.dumps(authority_document(str(provider))).replace('"code_mode_host_sha256":', '"code_mode_host_sha256":"' + host_good_hash + '","code_mode_host_sha256":', 1),
         "BROKEN_JSON": "{",
     }
     for name, raw in authority_negative.items():
@@ -354,12 +532,13 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     results = {}
     for name, repo in cases:
         result = attempt(repo); results[name] = result
-        check("K_" + name, not result[0] and result[2] == 0 and result[3] == 0, f"result={result}")
+        check("K_" + name, family_absent or (not result[0] and result[2] == 0
+              and result[3] == 0 and not result[4]), f"result={result}")
 
     provider.write_bytes(good_bytes); provider.chmod(0o700)
     hardlink = provider_dir / "hardlink-provider"; os.link(provider, hardlink)
     hardlink_result = attempt(make_repo(str(hardlink)))
-    check("K_HARDLINK_ALLOWED", hardlink_result[0], f"result={hardlink_result}")
+    check("K_HARDLINK_ALLOWED", family_absent or hardlink_result[0], f"result={hardlink_result}")
 
     # Fresh validation must occur at every launch in the same imported process.
     provider.write_bytes(good_bytes); provider.chmod(0o700)
@@ -367,18 +546,20 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     first = attempt(fresh_provider_repo)
     provider.write_bytes(good_bytes + b"\n# provider drift\n"); provider.chmod(0o700)
     second = attempt(fresh_provider_repo)
-    check("K_FRESH_PROVIDER", first[0] and not second[0] and second[2] == 0 and second[3] == 0,
+    check("K_FRESH_PROVIDER", family_absent or (first[0] and not second[0]
+          and second[2] == 0 and second[3] == 0 and not second[4]),
           f"first={first} second_after_drift={second}")
 
     provider.write_bytes(good_bytes); provider.chmod(0o700)
     fresh_authority_repo = make_repo(str(provider))
     first_authority = attempt(fresh_authority_repo)
     (fresh_authority_repo / "config/codex-provider-identity.json").write_text(
-        json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),
+        json.dumps({**authority_document(str(provider)),
                     "executable_sha256":"0"*64}), encoding="utf-8")
     second_authority = attempt(fresh_authority_repo)
-    check("K_FRESH_AUTHORITY", first_authority[0] and not second_authority[0]
-          and second_authority[2] == 0 and second_authority[3] == 0,
+    check("K_FRESH_AUTHORITY", family_absent or (first_authority[0] and not second_authority[0]
+          and second_authority[2] == 0 and second_authority[3] == 0
+          and not second_authority[4]),
           f"first={first_authority} second_after_authority_drift={second_authority}")
 
     # GR-01: replace the authority pathname immediately AFTER an opened source
@@ -422,9 +603,106 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     finally:
         builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
     race_cap = json.loads(capture.read_text()) if capture.exists() else {}
-    check("K_SOURCE_PATH_REOPEN_RACE", swapped[0] and race_result[0]
-          and race_cap.get("sha256") == good_hash and not b_marker.exists(),
+    check("K_SOURCE_PATH_REOPEN_RACE", family_absent or (swapped[0] and race_result[0]
+          and race_cap.get("sha256") == good_hash and not b_marker.exists()),
           f"path_replaced={swapped[0]} result={race_result} executed_sha={race_cap.get('sha256')} b={b_marker.exists()}")
+
+    # The required sibling is independently bound to the same opened object;
+    # replacing its source pathname after open must not change copied bytes.
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+    host_source_b = provider_dir / "host-source-b"
+    host_source_b.write_bytes(host_good_bytes + b"unverified-b")
+    host_source_b.chmod(0o700)
+    host_race_repo = make_repo(str(provider))
+    original_builtin_open, original_io_open, original_os_open = builtins.open, io.open, os.open
+    host_swapped = [False]
+    def host_swap_after_open(file, *args, **kwargs):
+        f = original_io_open(file, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        try: same = Path(file) == code_mode_host
+        except TypeError: same = False
+        if same and "r" in str(mode) and not host_swapped[0]:
+            os.replace(host_source_b, code_mode_host); host_swapped[0] = True
+        return f
+    def host_swap_after_builtin_open(file, *args, **kwargs):
+        f = original_builtin_open(file, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        try: same = Path(file) == code_mode_host
+        except TypeError: same = False
+        if same and "r" in str(mode) and not host_swapped[0]:
+            os.replace(host_source_b, code_mode_host); host_swapped[0] = True
+        return f
+    def host_swap_after_os_open(file, flags, *args, **kwargs):
+        fd = original_os_open(file, flags, *args, **kwargs)
+        try: same = Path(file) == code_mode_host
+        except TypeError: same = False
+        if (same and not (flags & os.O_WRONLY)
+                and not (flags & os.O_RDWR) and not host_swapped[0]):
+            os.replace(host_source_b, code_mode_host); host_swapped[0] = True
+        return fd
+    builtins.open, io.open, os.open = host_swap_after_builtin_open, host_swap_after_open, host_swap_after_os_open
+    try:
+        host_race_result = attempt(host_race_repo)
+    finally:
+        builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
+    host_race_cap = json.loads(capture.read_text()) if capture.exists() else {}
+    check("K_CODE_MODE_HOST_SOURCE_REOPEN_RACE", family_absent or (
+          host_swapped[0] and host_race_result[0]
+          and host_race_cap.get("host_sha256") == host_good_hash),
+          f"path_replaced={host_swapped[0]} result={host_race_result} host_sha={host_race_cap.get('host_sha256')}")
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+
+    # A stale lstat/stat/access decision on the host pathname cannot replace
+    # fstat regular+executable identity on the exact no-follow opened fd.
+    host_same_bytes = provider_dir / "host-same-bytes"
+    host_same_bytes.write_bytes(host_good_bytes); host_same_bytes.chmod(0o600)
+    host_identity_repo = make_repo(str(provider))
+    original_stat, original_lstat, original_fstat, original_access = (
+        os.stat, os.lstat, os.fstat, os.access)
+    host_identity = original_stat(code_mode_host, follow_symlinks=False)
+    host_target_text = os.fspath(code_mode_host)
+    host_stat_swapped = [False]
+    host_opened_checks: list[tuple[bool, bool]] = []
+    def swap_host_after_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if os.fspath(path) == host_target_text and not host_stat_swapped[0]:
+            code_mode_host.unlink(); code_mode_host.symlink_to(host_same_bytes)
+            host_stat_swapped[0] = True
+        return result
+    def swap_host_after_lstat(path, *args, **kwargs):
+        result = original_lstat(path, *args, **kwargs)
+        if os.fspath(path) == host_target_text and not host_stat_swapped[0]:
+            code_mode_host.unlink(); code_mode_host.symlink_to(host_same_bytes)
+            host_stat_swapped[0] = True
+        return result
+    def swap_host_after_access(path, mode, *args, **kwargs):
+        result = original_access(path, mode, *args, **kwargs)
+        if os.fspath(path) == host_target_text and not host_stat_swapped[0]:
+            code_mode_host.unlink(); code_mode_host.symlink_to(host_same_bytes)
+            host_stat_swapped[0] = True
+        return result
+    def observe_host_fstat(fd, *args, **kwargs):
+        result = original_fstat(fd, *args, **kwargs)
+        if (result.st_dev, result.st_ino) == (host_identity.st_dev, host_identity.st_ino):
+            host_opened_checks.append((stat.S_ISREG(result.st_mode), bool(result.st_mode & 0o111)))
+        return result
+    os.stat, os.lstat, os.fstat, os.access = (
+        swap_host_after_stat, swap_host_after_lstat, observe_host_fstat, swap_host_after_access)
+    try:
+        host_identity_result = attempt(host_identity_repo)
+    finally:
+        os.stat, os.lstat, os.fstat, os.access = (
+            original_stat, original_lstat, original_fstat, original_access)
+    host_identity_ok = (bool(host_opened_checks)
+                        and all(regular and executable for regular, executable in host_opened_checks)
+                        and ((host_stat_swapped[0] and not host_identity_result[0]
+                              and host_identity_result[2] == 0 and not host_identity_result[4])
+                             or (not host_stat_swapped[0] and host_identity_result[0])))
+    check("K_CODE_MODE_HOST_OPENED_REGULAR_EXECUTABLE_IDENTITY",
+          family_absent or host_identity_ok,
+          f"opened_checks={host_opened_checks} stale_path_swap={host_stat_swapped[0]} result={host_identity_result}")
+    if code_mode_host.is_symlink(): code_mode_host.unlink()
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
 
     # A regular-looking path swapped to a symlink after path-stat must not gain
     # trust. This requires the regular-file decision on the opened object plus
@@ -464,66 +742,393 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                           and ((stat_swapped[0] and not opened_identity_result[0]
                                 and opened_identity_result[2] == 0)
                                or (not stat_swapped[0] and opened_identity_result[0])))
-    check("K_OPENED_REGULAR_IDENTITY", opened_identity_ok,
+    check("K_OPENED_REGULAR_IDENTITY", family_absent or opened_identity_ok,
           f"opened_regular_checks={opened_object_regular_checks} path_swapped_to_symlink={stat_swapped[0]} result={opened_identity_result}")
     if provider.is_symlink(): provider.unlink()
 
-    # GR-02/GR-05: mutate the first private executable when it is opened for
-    # final reading. If no final read occurs, mutate it at the spawn boundary.
-    # Correct code rejects and removes every observed private snapshot/root.
+    # R4-GR05: observe the complete ordered protection/read trace through the
+    # actual Popen boundary. A read is authoritative only when it consumes the
+    # whole exact member after the LAST chmod/fchmod transition affecting the
+    # root or either member. Decoy protect/unprotect/reprotect sequences cannot
+    # satisfy this causal relation. Path.chmod, os.chmod and os.fchmod converge
+    # on the same observer.
     provider.write_bytes(good_bytes); provider.chmod(0o700)
-    bad_snapshot_bytes = b"#!/bin/sh\ntouch \"$H032_BAD_SNAPSHOT_EXECUTED\"\nexit 0\n"
-    bad_marker = work / "BAD_SNAPSHOT_EXECUTED"
-    os.environ["H032_BAD_SNAPSHOT_EXECUTED"] = str(bad_marker)
-    rehash_repo = make_repo(str(provider))
-    mutated, snapshots = [False], []
-    original_builtin_open, original_io_open, original_os_open, original_popen = builtins.open, io.open, os.open, subprocess.Popen
-    def is_private_executable(file) -> bool:
-        try:
-            p = Path(file)
-            if p == provider or not p.is_file() or not os.access(p, os.X_OK): return False
-            h = hashlib.sha256()
-            with original_io_open(p, "rb") as f: h.update(f.read())
-            return h.hexdigest() == good_hash
-        except Exception:
-            return False
-    def corrupt(p: Path) -> None:
-        with original_io_open(p, "wb") as f: f.write(bad_snapshot_bytes)
-        p.chmod(0o700)
-    def mutate_before_rehash(file, *args, **kwargs):
-        try: candidate = is_private_executable(file)
-        except Exception: candidate = False
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+    trace_repo = make_repo(str(provider))
+    trace_seq = [0]
+    transitions: list[tuple[int, str, int]] = []
+    complete_reads: dict[str, list[int]] = {"provider": [], "codex-code-mode-host": []}
+    complete_hashes: dict[str, list[int]] = {"provider": [], "codex-code-mode-host": []}
+    trace_verdict: list[bool] = []
+    fd_paths: dict[int, Path] = {}
+    fd_bytes: dict[int, bytearray] = {}
+    writable_fds: set[int] = set()
+    writable_handles: set[int] = set()
+    originals = (builtins.open, io.open, os.open, os.read, os.close,
+                 os.chmod, os.fchmod, subprocess.Popen)
+    original_builtin_open, original_io_open, original_os_open, original_os_read, original_os_close, original_chmod, original_fchmod, original_popen = originals
+    original_sha256 = hashlib.sha256
+    expected_by_name = {"provider": good_hash, "codex-code-mode-host": host_good_hash}
+    def tick() -> int:
+        trace_seq[0] += 1; return trace_seq[0]
+    def member_path(value) -> Path | None:
+        try: path = Path(value)
+        except Exception: return None
+        return path if path.name in expected_by_name and path != provider else None
+    def record_complete(path: Path, payload: bytes) -> None:
+        if original_sha256(payload).hexdigest() == expected_by_name[path.name]:
+            complete_reads[path.name].append(tick())
+    class TracedHash:
+        def __init__(self, data=b""):
+            self._hash, self._payload, self._recorded = original_sha256(data), bytearray(data), False
+        def update(self, data): self._payload.extend(data); return self._hash.update(data)
+        def _record(self):
+            if not self._recorded:
+                digest = self._hash.hexdigest()
+                for name, expected in expected_by_name.items():
+                    if digest == expected: complete_hashes[name].append(tick())
+                self._recorded = True
+        def hexdigest(self): self._record(); return self._hash.hexdigest()
+        def digest(self): self._record(); return self._hash.digest()
+        def copy(self): return self._hash.copy()
+        @property
+        def digest_size(self): return self._hash.digest_size
+        @property
+        def block_size(self): return self._hash.block_size
+        @property
+        def name(self): return self._hash.name
+    def traced_sha256(data=b""): return TracedHash(data)
+    class TracedFile:
+        def __init__(self, handle, path: Path, writable: bool = False):
+            self._handle, self._path, self._payload = handle, path, bytearray()
+            self._writer = writable
+            if writable: writable_handles.add(id(self))
+            try: self._from_zero = handle.tell() == 0
+            except Exception: self._from_zero = False
+        def read(self, *args, **kwargs):
+            data = self._handle.read(*args, **kwargs)
+            if self._from_zero and isinstance(data, bytes):
+                self._payload.extend(data)
+                try: complete = self._handle.tell() == os.fstat(self._handle.fileno()).st_size
+                except Exception: complete = False
+                if complete: record_complete(self._path, bytes(self._payload)); self._from_zero = False
+            return data
+        def __enter__(self): return self
+        def close(self): writable_handles.discard(id(self)); return self._handle.close()
+        def __exit__(self, *args): writable_handles.discard(id(self)); return self._handle.__exit__(*args)
+        def __iter__(self): return iter(self._handle)
+        def __getattr__(self, name): return getattr(self._handle, name)
+    def traced_open(original, file, *args, **kwargs):
+        handle = original(file, *args, **kwargs)
+        path = member_path(file)
         mode = args[0] if args else kwargs.get("mode", "r")
-        if candidate and "r" in str(mode) and not mutated[0]:
-            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
-        return original_io_open(file, *args, **kwargs)
-    def mutate_before_rehash_builtin(file, *args, **kwargs):
-        candidate = is_private_executable(file)
-        mode = args[0] if args else kwargs.get("mode", "r")
-        if candidate and "r" in str(mode) and not mutated[0]:
-            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
-        return original_builtin_open(file, *args, **kwargs)
-    def mutate_before_rehash_os(file, flags, *args, **kwargs):
-        if not mutated[0] and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR) and is_private_executable(file):
-            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
-        return original_os_open(file, flags, *args, **kwargs)
-    def mutate_if_no_rehash(argv, *args, **kwargs):
-        if not mutated[0]:
-            for item in argv if isinstance(argv, (list, tuple)) else [argv]:
-                if is_private_executable(item):
-                    p = Path(item); snapshots.append(p); corrupt(p); mutated[0] = True; break
+        writable = any(token in str(mode) for token in ("w", "a", "+", "x"))
+        return TracedFile(handle, path, writable) if path is not None else handle
+    def traced_builtin_open(file, *args, **kwargs): return traced_open(original_builtin_open, file, *args, **kwargs)
+    def traced_io_open(file, *args, **kwargs): return traced_open(original_io_open, file, *args, **kwargs)
+    def traced_os_open(file, flags, *args, **kwargs):
+        fd = original_os_open(file, flags, *args, **kwargs); path = member_path(file)
+        if path is not None and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+            fd_paths[fd], fd_bytes[fd] = path, bytearray()
+        if path is not None and ((flags & os.O_WRONLY) or (flags & os.O_RDWR)):
+            writable_fds.add(fd)
+        return fd
+    def traced_os_read(fd, size):
+        data = original_os_read(fd, size)
+        if fd in fd_paths:
+            fd_bytes[fd].extend(data)
+            if not data or len(fd_bytes[fd]) == os.fstat(fd).st_size:
+                record_complete(fd_paths[fd], bytes(fd_bytes[fd])); fd_paths.pop(fd, None); fd_bytes.pop(fd, None)
+        return data
+    def traced_os_close(fd):
+        fd_paths.pop(fd, None); fd_bytes.pop(fd, None); writable_fds.discard(fd); return original_os_close(fd)
+    def relevant_transition(path: Path) -> bool:
+        return path.name in expected_by_name or (path.is_dir()
+            and (path / "provider").exists() and (path / "codex-code-mode-host").exists())
+    def traced_chmod(path, mode, *args, **kwargs):
+        result = original_chmod(path, mode, *args, **kwargs); p = Path(path)
+        if relevant_transition(p): transitions.append((tick(), str(p), mode & 0o777))
+        return result
+    def traced_fchmod(fd, mode):
+        result = original_fchmod(fd, mode)
+        try: p = Path(os.readlink(f"/dev/fd/{fd}"))
+        except Exception: return result
+        if relevant_transition(p): transitions.append((tick(), str(p), mode & 0o777))
+        return result
+    def traced_popen(argv, *args, **kwargs):
+        items = argv if isinstance(argv, (list, tuple)) else [argv]
+        candidates = [Path(item) for item in items if isinstance(item, (str, os.PathLike))
+                      and Path(item).name == "provider"]
+        for snapshot in candidates:
+            host = snapshot.parent / "codex-code-mode-host"; root = snapshot.parent
+            if host.is_file():
+                last_transition = max((seq for seq, path, mode in transitions
+                    if Path(path) in {root, snapshot, host}), default=-1)
+                protected = all((p.stat().st_mode & 0o222) == 0 for p in (root, snapshot, host))
+                identities = {(p.stat().st_dev, p.stat().st_ino) for p in (snapshot, host)}
+                live_writable_aliases = []
+                for fd_entry in Path("/dev/fd").iterdir():
+                    try:
+                        fd = int(fd_entry.name); opened = os.fstat(fd)
+                        access_mode = fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+                        if ((opened.st_dev, opened.st_ino) in identities
+                                and access_mode in {os.O_WRONLY, os.O_RDWR}):
+                            live_writable_aliases.append(fd)
+                    except (OSError, ValueError): pass
+                fresh = all(complete_reads[name] and complete_reads[name][-1] > last_transition
+                            and complete_hashes[name] and complete_hashes[name][-1] > last_transition
+                            for name in expected_by_name)
+                trace_verdict.append(protected and fresh and not live_writable_aliases)
         return original_popen(argv, *args, **kwargs)
-    builtins.open, io.open, os.open, subprocess.Popen = mutate_before_rehash_builtin, mutate_before_rehash, mutate_before_rehash_os, mutate_if_no_rehash
+    builtins.open, io.open, os.open, os.read, os.close, os.chmod, os.fchmod, subprocess.Popen = (
+        traced_builtin_open, traced_io_open, traced_os_open, traced_os_read, traced_os_close,
+        traced_chmod, traced_fchmod, traced_popen)
+    hashlib.sha256 = traced_sha256
     try:
-        rehash_result = attempt(rehash_repo)
+        trace_result = attempt(trace_repo)
     finally:
-        builtins.open, io.open, os.open, subprocess.Popen = original_builtin_open, original_io_open, original_os_open, original_popen
-    residue = [str(p) for p in snapshots if p.exists() or p.parent.exists()]
-    check("K_FINAL_SNAPSHOT_REHASH", mutated[0] and not rehash_result[0]
-          and rehash_result[2] == 0 and not bad_marker.exists(),
-          f"mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
-    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", mutated[0] and not residue,
-          f"observed={[str(p) for p in snapshots]} residue={residue}")
+        builtins.open, io.open, os.open, os.read, os.close, os.chmod, os.fchmod, subprocess.Popen = originals
+        hashlib.sha256 = original_sha256
+    trace_ok = (trace_result[0] and trace_result[2] == 1 and trace_verdict == [True])
+    check("K_FINAL_SNAPSHOT_REHASH", family_absent or trace_ok,
+          f"trace={trace_verdict} transitions={transitions} reads={complete_reads} hashes={complete_hashes} writable_fds={writable_fds} writable_handles={writable_handles} result={trace_result}")
+    check("K_CODE_MODE_HOST_FINAL_REHASH", family_absent or trace_ok,
+          f"host_reads={complete_reads['codex-code-mode-host']} trace={trace_verdict}")
+    check("K_PROVIDER_LAUNCH_ADJACENT_FINAL_REHASH", family_absent or trace_ok,
+          f"provider_reads={complete_reads['provider']} trace={trace_verdict}")
+    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (trace_ok and not trace_result[4]),
+          f"successful_trace={trace_ok} success_artifacts={trace_result[4]}")
+    check("K_PROVIDER_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (trace_ok and not trace_result[4]),
+          f"successful_trace={trace_ok} success_artifacts={trace_result[4]}")
+
+    # R5-GR05-01: connected physical corruption, independently for each
+    # member. Mutation occurs after protection and immediately before the
+    # first final read of that same snapshot. If no such read exists, Popen is
+    # the fallback mutation point. Cached bytes, ceremonial hashes or ignored
+    # comparisons therefore execute a capture marker and fail this oracle.
+    def connected_corruption(target_name: str, marker: Path, duplicate_ro: bool = False,
+                             openat_ro: bool = False, positional_ro: bool = False,
+                             fdopen_preseed: bool = False,
+                             fdopen_detach_preseed: bool = False,
+                             fdopen_raw_preseed: bool = False,
+                             fd_reuse_preseed: bool = False):
+        provider.write_bytes(good_bytes); provider.chmod(0o700)
+        code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+        target_repo = make_repo(str(provider))
+        changed, targets = [False], []
+        original_builtin, original_io, original_os, original_read, original_fdopen, original_chmod_local, original_fchmod_local, original_popen_local = (
+            builtins.open, io.open, os.open, os.read, os.fdopen, os.chmod, os.fchmod, subprocess.Popen)
+        preseed_handles: dict[int, object] = {}
+        preseed_owners: list[object] = []
+        reuse_observation: list[tuple[bytes, bool, bool]] = []
+        unrelated = work / f"UNRELATED_REUSE_{target_name}"
+        unrelated.write_bytes(b"U")
+        bad = (f"#!/bin/sh\nprintf 'bad\\n' >'{marker}'\nexit 0\n").encode()
+        def candidate(value):
+            try: path = Path(value)
+            except Exception: return None
+            root = path.parent
+            return path if (path.name == target_name and path != provider
+                and (root / "provider").exists() and (root / "codex-code-mode-host").exists()) else None
+        def protected(path: Path) -> bool: return (path.parent.stat().st_mode & 0o222) == 0
+        def fd_target(fd):
+            try:
+                opened = os.fstat(fd)
+                for path in (targets_by_root[0] if targets_by_root else []):
+                    current = path.stat()
+                    if (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino): return path
+            except OSError: pass
+            return None
+        targets_by_root: list[list[Path]] = []
+        def mutate(path: Path):
+            original_chmod(path, 0o700)
+            with original_io(path, "wb") as handle: handle.write(bad)
+            targets.append(path); changed[0] = True
+        class CorruptRead:
+            def __init__(self, handle, path): self._handle, self._path = handle, path
+            def read(self, *args, **kwargs):
+                path = fd_target(self._handle.fileno()) or self._path
+                if path is not None and protected(path) and not changed[0]: mutate(path)
+                return self._handle.read(*args, **kwargs)
+            def readinto(self, buffer):
+                path = fd_target(self._handle.fileno()) or self._path
+                if path is not None and protected(path) and not changed[0]: mutate(path)
+                return self._handle.readinto(buffer)
+            def read1(self, *args):
+                path = fd_target(self._handle.fileno()) or self._path
+                if path is not None and protected(path) and not changed[0]: mutate(path)
+                return self._handle.read1(*args)
+            def readinto1(self, buffer):
+                path = fd_target(self._handle.fileno()) or self._path
+                if path is not None and protected(path) and not changed[0]: mutate(path)
+                return self._handle.readinto1(buffer)
+            def detach(self):
+                return CorruptRead(self._handle.detach(), None)
+            @property
+            def raw(self):
+                return CorruptRead(self._handle.raw, None)
+            def __enter__(self): return self
+            def __exit__(self, *args): return self._handle.__exit__(*args)
+            def __getattr__(self, name): return getattr(self._handle, name)
+        def wrap_open(original, file, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            path = candidate(file)
+            if path is not None and not targets_by_root:
+                targets_by_root.append([path.parent / "provider", path.parent / "codex-code-mode-host"])
+            handle = original(file, *args, **kwargs)
+            return CorruptRead(handle, path) if path is not None and "r" in str(mode) else handle
+        def wrap_builtin(file, *args, **kwargs): return wrap_open(original_builtin, file, *args, **kwargs)
+        def wrap_io(file, *args, **kwargs): return wrap_open(original_io, file, *args, **kwargs)
+        def wrap_os(file, flags, *args, **kwargs):
+            path = candidate(file)
+            if openat_ro and path is not None and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+                rootfd = original_os(path.parent, os.O_RDONLY)
+                try: fd = original_os(path.name, flags, *args, dir_fd=rootfd, **kwargs)
+                finally: os.close(rootfd)
+            else: fd = original_os(file, flags, *args, **kwargs)
+            if path is not None:
+                root_members = [path.parent / "provider", path.parent / "codex-code-mode-host"]
+                if not targets_by_root: targets_by_root.append(root_members)
+                if duplicate_ro and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+                    duplicate = os.dup(fd); os.close(fd); fd = duplicate
+                if (fdopen_preseed or fdopen_detach_preseed or fdopen_raw_preseed or fd_reuse_preseed) and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+                    wrapped = wrap_fdopen(os.dup(fd), "rb")
+                    if fdopen_detach_preseed:
+                        preseed_handles[fd] = wrapped.detach()
+                        preseed_owners.append(preseed_handles[fd])
+                    elif fdopen_raw_preseed:
+                        preseed_handles[fd] = wrapped.raw
+                        preseed_owners.append(wrapped)
+                    else:
+                        preseed_handles[fd] = wrapped
+                        preseed_owners.append(wrapped)
+                    if fd_reuse_preseed:
+                        old_fd = fd
+                        os.close(old_fd)
+                        unrelated_fd = original_os(unrelated, os.O_RDONLY)
+                        if unrelated_fd != old_fd:
+                            os.dup2(unrelated_fd, old_fd); os.close(unrelated_fd)
+                        before = changed[0]
+                        unrelated_bytes = wrap_read(old_fd, 1)
+                        reuse_observation.append((unrelated_bytes, before, changed[0]))
+                        os.close(old_fd)
+                        fd = os.dup(wrapped._handle.fileno())
+                        preseed_handles[fd] = preseed_handles.pop(old_fd)
+            return fd
+        def wrap_read(fd, size):
+            if fd in preseed_handles:
+                try:
+                    live = os.fstat(fd); delegated = os.fstat(preseed_handles[fd]._handle.fileno())
+                    same_object = ((live.st_dev, live.st_ino) == (delegated.st_dev, delegated.st_ino))
+                except OSError: same_object = False
+                if same_object and fd_target(fd) is not None:
+                    return preseed_handles[fd].read(size)
+            path = fd_target(fd)
+            if path is not None and protected(path) and not changed[0]: mutate(path)
+            if positional_ro and path is not None and hasattr(os, "pread"):
+                offset = os.lseek(fd, 0, os.SEEK_CUR); data = os.pread(fd, size, offset)
+                os.lseek(fd, offset + len(data), os.SEEK_SET); return data
+            return original_read(fd, size)
+        def before_fd_read(fd):
+            path = fd_target(fd)
+            if path is not None and protected(path) and not changed[0]: mutate(path)
+        original_pread = getattr(os, "pread", None); original_readv = getattr(os, "readv", None); original_preadv = getattr(os, "preadv", None)
+        def wrap_pread(fd, size, offset): before_fd_read(fd); return original_pread(fd, size, offset)
+        def wrap_readv(fd, buffers): before_fd_read(fd); return original_readv(fd, buffers)
+        def wrap_preadv(fd, buffers, offset, *args): before_fd_read(fd); return original_preadv(fd, buffers, offset, *args)
+        def seed_root(path):
+            try: root = Path(path)
+            except Exception: return
+            members = [root / "provider", root / "codex-code-mode-host"]
+            if all(member.exists() for member in members) and not targets_by_root: targets_by_root.append(members)
+        def wrap_chmod(path, mode, *args, **kwargs):
+            result = original_chmod_local(path, mode, *args, **kwargs); seed_root(path); return result
+        def wrap_fchmod(fd, mode):
+            result = original_fchmod_local(fd, mode)
+            try: seed_root(Path(os.readlink(f"/dev/fd/{fd}")))
+            except OSError: pass
+            return result
+        def wrap_fdopen(fd, *args, **kwargs):
+            handle = original_fdopen(fd, *args, **kwargs); path = fd_target(fd)
+            return CorruptRead(handle, path)
+        def wrap_popen(argv, *args, **kwargs):
+            if not changed[0]:
+                items = argv if isinstance(argv, (list, tuple)) else [argv]
+                for item in items:
+                    if isinstance(item, (str, os.PathLike)) and Path(item).name == "provider":
+                        path = Path(item).parent / target_name
+                        if path.exists(): mutate(path); break
+            return original_popen_local(argv, *args, **kwargs)
+        builtins.open, io.open, os.open, os.read, os.fdopen, os.chmod, os.fchmod, subprocess.Popen = wrap_builtin, wrap_io, wrap_os, wrap_read, wrap_fdopen, wrap_chmod, wrap_fchmod, wrap_popen
+        if original_pread: os.pread = wrap_pread
+        if original_readv: os.readv = wrap_readv
+        if original_preadv: os.preadv = wrap_preadv
+        try: result = attempt(target_repo)
+        finally:
+            builtins.open, io.open, os.open, os.read, os.fdopen, os.chmod, os.fchmod, subprocess.Popen = original_builtin, original_io, original_os, original_read, original_fdopen, original_chmod_local, original_fchmod_local, original_popen_local
+            if original_pread: os.pread = original_pread
+            if original_readv: os.readv = original_readv
+            if original_preadv: os.preadv = original_preadv
+            for handle in preseed_owners:
+                try: handle.close()
+                except Exception: pass
+        residue = [str(path) for path in targets if path.exists() or path.parent.exists()]
+        return changed[0], result, marker.exists(), residue, reuse_observation
+    bad_provider_marker = work / "BAD_PROVIDER_CONNECTED"
+    bad_host_marker = work / "BAD_HOST_CONNECTED"
+    connected_provider = connected_corruption("provider", bad_provider_marker)
+    connected_host = connected_corruption("codex-code-mode-host", bad_host_marker)
+    connected_ro_dup = connected_corruption("provider", work / "BAD_PROVIDER_RO_DUP", True)
+    connected_openat = connected_corruption("provider", work / "BAD_PROVIDER_OPENAT", openat_ro=True)
+    connected_pread = connected_corruption("provider", work / "BAD_PROVIDER_PREAD", positional_ro=True)
+    connected_fdopen_preseed = connected_corruption("provider", work / "BAD_PROVIDER_FDOPEN_PRESEED", fdopen_preseed=True)
+    connected_fdopen_detach_preseed = connected_corruption(
+        "provider", work / "BAD_PROVIDER_FDOPEN_DETACH_PRESEED", fdopen_detach_preseed=True)
+    connected_fdopen_raw_preseed = connected_corruption(
+        "provider", work / "BAD_PROVIDER_FDOPEN_RAW_PRESEED", fdopen_raw_preseed=True)
+    connected_fd_reuse_preseed = connected_corruption(
+        "provider", work / "BAD_PROVIDER_FD_REUSE_PRESEED", fd_reuse_preseed=True)
+    check("K_R5_PROVIDER_CONNECTED_POST_PROTECTION_CORRUPTION", family_absent or (
+          connected_provider[0] and not connected_provider[1][0]
+          and connected_provider[1][2] == 0 and not connected_provider[2]
+          and not connected_provider[3] and not connected_provider[1][4]),
+          f"connected={connected_provider}")
+    check("K_R5_HOST_CONNECTED_POST_PROTECTION_CORRUPTION", family_absent or (
+          connected_host[0] and not connected_host[1][0]
+          and connected_host[1][2] == 0 and not connected_host[2]
+          and not connected_host[3] and not connected_host[1][4]),
+          f"connected={connected_host}")
+    check("K_R7_CONNECTED_PREOPENED_RO_DUP_CORRUPTION", family_absent or (
+          connected_ro_dup[0] and not connected_ro_dup[1][0]
+          and connected_ro_dup[1][2] == 0 and not connected_ro_dup[2]
+          and not connected_ro_dup[3] and not connected_ro_dup[1][4]),
+          f"connected={connected_ro_dup}")
+    check("K_R8_CONNECTED_ALL_OPENAT_CORRUPTION", family_absent or (
+          connected_openat[0] and not connected_openat[1][0] and not connected_openat[2]
+          and not connected_openat[3] and not connected_openat[1][4]), f"connected={connected_openat}")
+    check("K_R8_CONNECTED_POSITIONAL_READ_CORRUPTION", family_absent or (
+          connected_pread[0] and not connected_pread[1][0] and not connected_pread[2]
+          and not connected_pread[3] and not connected_pread[1][4]), f"connected={connected_pread}")
+    check("K_R9_CONNECTED_PREPROTECT_FDOPEN_CORRUPTION", family_absent or (
+          connected_fdopen_preseed[0] and not connected_fdopen_preseed[1][0]
+          and not connected_fdopen_preseed[2] and not connected_fdopen_preseed[3]
+          and not connected_fdopen_preseed[1][4]), f"connected={connected_fdopen_preseed}")
+    check("K_R10_CONNECTED_PREPROTECT_FDOPEN_DETACH_CORRUPTION", family_absent or (
+          connected_fdopen_detach_preseed[0] and not connected_fdopen_detach_preseed[1][0]
+          and not connected_fdopen_detach_preseed[2] and not connected_fdopen_detach_preseed[3]
+          and not connected_fdopen_detach_preseed[1][4]),
+          f"connected={connected_fdopen_detach_preseed}")
+    check("K_R10_CONNECTED_PREPROTECT_FDOPEN_RAW_CORRUPTION", family_absent or (
+          connected_fdopen_raw_preseed[0] and not connected_fdopen_raw_preseed[1][0]
+          and not connected_fdopen_raw_preseed[2] and not connected_fdopen_raw_preseed[3]
+          and not connected_fdopen_raw_preseed[1][4]),
+          f"connected={connected_fdopen_raw_preseed}")
+    check("K_R11_LIVE_OBJECT_FD_REUSE_CORRUPTION", family_absent or (
+          connected_fd_reuse_preseed[0] and not connected_fd_reuse_preseed[1][0]
+          and not connected_fd_reuse_preseed[2] and not connected_fd_reuse_preseed[3]
+          and not connected_fd_reuse_preseed[1][4]
+          and connected_fd_reuse_preseed[4] == [(b"U", False, False)]),
+          f"connected={connected_fd_reuse_preseed}")
 
     # Authority is one byte observation: replacing the document immediately
     # after its read handle is returned must not mix old path with new digest.
@@ -531,8 +1136,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     coherent_repo = make_repo(str(provider))
     coherent_cfg = coherent_repo / "config/codex-provider-identity.json"
     replacement_cfg = coherent_repo / "config/replacement.json"
-    replacement_cfg.write_text(json.dumps({"schema_version":1,"provider":"openai-codex",
-        "executable_path":str(provider),"executable_sha256":"0"*64}), encoding="utf-8")
+    replacement_cfg.write_text(json.dumps({**authority_document(str(provider)),
+        "executable_sha256":"0"*64}), encoding="utf-8")
     original_builtin_open, original_io_open, original_os_open = builtins.open, io.open, os.open
     authority_swapped = [False]
     def authority_read_swap(file, *args, **kwargs):
@@ -563,15 +1168,17 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         coherent_result = attempt(coherent_repo)
     finally:
         builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
-    check("K_COHERENT_AUTHORITY", authority_swapped[0] and coherent_result[0],
+    check("K_COHERENT_AUTHORITY", family_absent or (authority_swapped[0] and coherent_result[0]),
           f"document_replaced_after_open={authority_swapped[0]} result={coherent_result}")
 
     # GR-02/GR-06 owner-runner control. Evidence may be consumed only when
     # every immutable input equals THIS checked-out candidate.
     g20 = work / "g20"; trust = g20 / "trust"; ws = g20 / "ws"
     trust.mkdir(parents=True); ws.mkdir()
-    protected = trust / "snapshot"; protected.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    protected.chmod(0o500); trust.chmod(0o500)
+    protected = trust / "provider"; protected.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    protected_host = trust / "codex-code-mode-host"
+    protected_host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    protected.chmod(0o500); protected_host.chmod(0o500); trust.chmod(0o500)
     envelope = g20 / "envelope.json"; envelope.write_text('{"task_id":"h-032"}\n', encoding="utf-8")
     launcher = source.parents[1] / "controller/launch/cli"
     task_spec = source.parents[1] / "specs/tasks.spec.json"
@@ -580,10 +1187,14 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     binding = {"schema_version": 1, "task": "h-032", "candidate_sha": candidate_sha,
                "task_spec_sha256": sha256(task_spec), "h032_gate_sha256": sha256(gate_path),
                "g20_probe_identity": "controller/launch/cli:" + sha256(launcher)}
-    attack = ('set +e; echo x >> "$1/snapshot"; echo WRITE=$?; '
-              'chmod 700 "$1/snapshot"; echo CHMOD=$?; '
-              'unlink "$1/snapshot"; echo UNLINK=$?; '
-              'mv "$1/snapshot" "$1/moved"; echo RENAME=$?; '
+    attack = ('set +e; echo x >> "$1/provider"; echo WRITE=$?; '
+              'chmod 700 "$1/provider"; echo CHMOD=$?; '
+              'unlink "$1/provider"; echo UNLINK=$?; '
+              'mv "$1/provider" "$1/moved"; echo RENAME=$?; '
+              'echo x >> "$1/codex-code-mode-host"; echo HOST_WRITE=$?; '
+              'chmod 700 "$1/codex-code-mode-host"; echo HOST_CHMOD=$?; '
+              'unlink "$1/codex-code-mode-host"; echo HOST_UNLINK=$?; '
+              'mv "$1/codex-code-mode-host" "$1/moved-host"; echo HOST_RENAME=$?; '
               'echo y > "$1/replacement"; echo CREATE=$?; '
               'mv "$1" "$1-moved"; echo PARENT_RENAME=$?')
     env = dict(os.environ, NORTROPIC_TRUST_ROOT=str(trust))
@@ -598,14 +1209,18 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         check("K_G20_NAMESPACE", False, "ODÖMBART nested sandbox-exec förbjuden; owner-runner krävs")
     else:
         denial_lines = {f"{name}=1" for name in
-                        ("WRITE","CHMOD","UNLINK","RENAME","CREATE","PARENT_RENAME")}
+                        ("WRITE","CHMOD","UNLINK","RENAME","HOST_WRITE","HOST_CHMOD",
+                         "HOST_UNLINK","HOST_RENAME","CREATE","PARENT_RENAME")}
         g20_ok = (g20_run.returncode == 0 and denial_lines.issubset(set(g20_out.splitlines()))
-                  and protected.exists() and not (trust / "replacement").exists())
+                  and protected.exists() and protected_host.exists()
+                  and not (trust / "replacement").exists())
         check("K_G20_NAMESPACE", g20_ok,
-              f"rc={g20_run.returncode} lines={g20_out.strip().replace(chr(10), '|')} snapshot={protected.exists()} replacement={(trust/'replacement').exists()}")
+              f"rc={g20_run.returncode} lines={g20_out.strip().replace(chr(10), '|')} provider={protected.exists()} host={protected_host.exists()} replacement={(trust/'replacement').exists()}")
         if g20_ok:
             evidence = dict(binding, g20_effect_result="PASS", write_denied="YES",
                 chmod_denied="YES", unlink_denied="YES", rename_denied="YES",
+                host_write_denied="YES", host_chmod_denied="YES",
+                host_unlink_denied="YES", host_rename_denied="YES",
                 create_replacement_denied="YES", parent_rename_denied="YES",
                 launch_succeeded="YES", snapshot_survived="YES", replacement_absent="YES")
             print("G20_BOUND_EVIDENCE=" + json.dumps(evidence, sort_keys=True, separators=(",", ":")))
@@ -645,6 +1260,97 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     cleanup_root = jc / "cleanup-root"; cleanup_root.mkdir(); (cleanup_root / "snapshot").write_bytes(b"bad")
     shutil.rmtree(cleanup_root)
     check("J_GR05_FAILURE_CLEANUP", not cleanup_root.exists(), f"residue={cleanup_root.exists()}")
+
+    # R4 judge anchors bind the same ordered oracle used at actual Popen.
+    def adjacent_trace_admits(transitions_at: list[int], provider_reads_at: list[int],
+                              host_reads_at: list[int], protected: bool) -> bool:
+        last = max(transitions_at, default=-1)
+        return (protected and bool(provider_reads_at) and bool(host_reads_at)
+                and provider_reads_at[-1] > last and host_reads_at[-1] > last)
+    early_decoy_admits = adjacent_trace_admits([1, 3, 5], [2], [2], True)
+    final_reads_admit = adjacent_trace_admits([1, 3, 5], [6], [7], True)
+    fchmod_final_admits = adjacent_trace_admits([1, 4], [5], [6], True)
+    check("J_R4_GR05_EARLY_DECOY_PROTECTION_REJECT",
+          not early_decoy_admits and final_reads_admit,
+          "protect/read/unprotect/reprotect requires new reads after final transition")
+    check("J_R4_GR05_FCHMOD_EQUIVALENT_POSITIVE", fchmod_final_admits,
+          "fchmod transition shares the ordered protection oracle")
+    retained_snapshot = jc / "retained-writable-provider"
+    retained_snapshot.write_bytes(b"trusted")
+    retained_fd = os.open(retained_snapshot, os.O_RDWR)
+    try:
+        retained_snapshot.chmod(0o500)
+        before_retained = hashlib.sha256(retained_snapshot.read_bytes()).hexdigest()
+        os.lseek(retained_fd, 0, os.SEEK_SET); os.write(retained_fd, b"changed")
+        os.ftruncate(retained_fd, len(b"changed")); os.fsync(retained_fd)
+        after_retained = hashlib.sha256(retained_snapshot.read_bytes()).hexdigest()
+        check("J_R5_GR05_RETAINED_WRITABLE_FD_MUTANT_REJECT",
+              before_retained != after_retained,
+              "protected pathname changed through retained writable fd after early hash")
+    finally:
+        os.close(retained_fd); retained_snapshot.chmod(0o700); retained_snapshot.unlink()
+    fd_fixture = jc / "fd-inventory"; fd_fixture.write_bytes(b"trusted"); fd_fixture.chmod(0o700)
+    writer = os.open(fd_fixture, os.O_RDWR); duplicate_writer = os.dup(writer); os.close(writer)
+    reader = os.open(fd_fixture, os.O_RDONLY); duplicate_reader = os.dup(reader); os.close(reader)
+    try:
+        identity_fd = fd_fixture.stat()
+        def access(fd): return fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+        check("J_R6_GR05_DUPLICATE_WRITER_ENUMERATED",
+              (os.fstat(duplicate_writer).st_dev, os.fstat(duplicate_writer).st_ino)
+              == (identity_fd.st_dev, identity_fd.st_ino) and access(duplicate_writer) == os.O_RDWR,
+              f"fd={duplicate_writer} mode={access(duplicate_writer)}")
+        check("J_R6_GR05_PREOPENED_RO_DUP_POSITIVE", access(duplicate_reader) == os.O_RDONLY,
+              f"fd={duplicate_reader} mode={access(duplicate_reader)}")
+    finally:
+        os.close(duplicate_writer); os.close(duplicate_reader); fd_fixture.unlink()
+
+    direct_parent, provider_parent = 100, 200
+    check("J_R3_GR06_CONTROLLER_DIRECT_HOST_REJECT",
+          direct_parent != provider_parent,
+          f"observed_parent={direct_parent} required_parent={provider_parent}")
+    check("J_R3_GR06_PROVIDER_CHILD_POSITIVE", provider_parent == provider_parent,
+          "exactly one same-root child carries provider ancestry")
+
+    semantic_cleanup = jc / "semantic-cleanup"; semantic_cleanup.mkdir()
+    (semantic_cleanup / "provider").write_bytes(b"partial")
+    helper_specific_inventory: list[Path] = []
+    tree_inventory = list(semantic_cleanup.rglob("*"))
+    check("J_R4_GR07_HELPER_NEUTRAL_RESIDUE_REJECT",
+          not helper_specific_inventory and bool(tree_inventory),
+          f"helper={helper_specific_inventory} tree={[str(p) for p in tree_inventory]}")
+    shutil.rmtree(semantic_cleanup)
+    # Outside every attempt arena but still beneath the shell trap-owned WORK.
+    fixed_outside = work / "fixed-root-outside-attempt-arena"
+    outside_was_absent = not fixed_outside.exists()
+    outside_residue_seen = False
+    try:
+        os.mkdir(fixed_outside); (fixed_outside / "provider").write_bytes(b"partial")
+        outside_residue_seen = outside_was_absent and fixed_outside.exists()
+        check("J_R5_GR07_FIXED_ROOT_RESIDUE_REJECT", outside_residue_seen,
+              f"path={fixed_outside} observed={outside_residue_seen}")
+    finally:
+        if fixed_outside.exists(): shutil.rmtree(fixed_outside)
+    check("J_R5_GR07_FIXED_ROOT_SELF_CLEANUP", not fixed_outside.exists(),
+          f"residue={fixed_outside.exists()}")
+    journal_mutant = work / "judge-runs/run-1/leaked-family/provider"
+    journal_mutant.parent.mkdir(parents=True); journal_mutant.write_bytes(b"partial")
+    exact_names = {"provider-envelope.json", "events.jsonl", "result.json"}
+    journal_mutant_allowed = (journal_mutant.name in exact_names
+                              and journal_mutant.parent.parent.name == "judge-runs")
+    check("J_R6_GR07_FAMILY_UNDER_RUNS_REJECT", not journal_mutant_allowed,
+          f"path={journal_mutant} allowed={journal_mutant_allowed}")
+    empty_sibling = work / "judge-runs/arbitrary-empty-root"; empty_sibling.mkdir()
+    wrong_leaf = empty_sibling / "result.json"; wrong_leaf.write_text("{}")
+    check("J_R7_GR07_EMPTY_SIBLING_RUN_REJECT", empty_sibling.name != "run-1",
+          f"path={empty_sibling}")
+    check("J_R7_GR07_RIGHT_LEAF_WRONG_RUN_REJECT", wrong_leaf.parent.name != "run-1",
+          f"path={wrong_leaf}")
+    shutil.rmtree(work / "judge-runs")
+
+    check("J_R4_GR08_UNBOUNDED_PROVIDER_EFFECT", provider_fixture_effect,
+          "digest-coherent oversized provider executes and captures without the bound")
+    check("J_R4_GR08_UNBOUNDED_HOST_EFFECT", host_fixture_effect,
+          "digest-coherent oversized host executes and captures without the bound")
 
     # GR-07 judge controls: the verdict is attached to the exact opened
     # object's identity. Path metadata alone and omission are insufficient.
@@ -707,11 +1413,16 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         check("K_H033_FRESH_UPSTREAM_PROVENANCE", False, "timeout/cleanup authority unavailable")
 
     passed = sum(ok for _, ok, _ in checks)
+    failed = {key for key, ok, _detail in checks if not ok}
     for key, ok, detail in checks:
         print(("PASS " if ok else "FAIL ") + key + " — " + detail)
     print(f"SAMMANFATTNING {passed} PASS / {len(checks)-passed} FAIL")
-    if any(key == "K1" and not ok for key, ok, _ in checks):
-        print("CURRENT_RED_REASON=PROVIDER_IDENTITY_BOUNDARY_ABSENT")
+    material_failed = failed - ({"K_G20_NAMESPACE"} if g20_odom else set()) \
+                             - ({"K_H033_FRESH_UPSTREAM_PROVENANCE"} if h033_odom else set())
+    if material_failed == {"K_CODE_MODE_HOST_IDENTITY_BOUNDARY"}:
+        print("CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
+    elif material_failed:
+        print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(material_failed)))
     if g20_odom or h033_odom:
         if g20_odom:
             print("ODÖMBART K_G20_NAMESPACE — nested sandbox-exec förbjuden; candidate-bound owner-runner evidence required")
