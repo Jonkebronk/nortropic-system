@@ -96,7 +96,8 @@ EXPECTED_IMPORT_INVENTORY = sorted([
 ])
 SENSITIVE_MODULE_PROXIES = {
     "os", "sys", "subprocess", "builtins", "ctypes", "importlib", "pty",
-    "asyncio", "multiprocessing", "posix", "_posixsubprocess",
+    "asyncio", "multiprocessing", "posix", "_posixsubprocess", "threading", "_thread",
+    "signal", "atexit", "sched", "concurrent", "weakref",
 }
 ALLOWED_SYS_ATTRS = {
     "dont_write_bytecode", "path", "stderr", "stdout", "version", "version_info",
@@ -496,6 +497,10 @@ try:
         "COROUTINE_FRAME_GLOBALS": "\nasync def h031_coro():\n    return 1\nh031_coro().cr_frame.f_globals['subprocess'].Popen(['/bin/true'])\n",
         "ASYNCGEN_FRAME_GLOBALS": "\nasync def h031_asyncgen():\n    yield 1\nh031_asyncgen().ag_frame.f_globals['subprocess'].Popen(['/bin/true'])\n",
         "TRACEBACK_FRAME_GLOBALS": "\nh031_tb.tb_frame.f_globals['subprocess'].Popen(['/bin/true'])\n",
+        "SUBPROCESS_THREAD_TIMER": "\nsubprocess.threading.Timer(0.01, run_codex).start()\n",
+        "SUBPROCESS_SIGNAL_CALLBACK": "\nsubprocess.signal.signal(1, run_codex)\n",
+        "SUBPROCESS_ATEXIT_CALLBACK": "\nsubprocess.atexit.register(run_codex)\n",
+        "SUBPROCESS_WEAKREF_CALLBACK": "\nsubprocess.weakref.finalize(object(), run_codex)\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",

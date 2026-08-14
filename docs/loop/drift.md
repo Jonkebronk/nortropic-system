@@ -660,3 +660,9 @@ Ninth review recovered globals from public frame carriers without calling sys: g
 async generators and tracebacks expose frame objects, whose public namespaces contain subprocess and
 builtins. All frame-carrier and frame-namespace attributes are now sensitive reflection and reject in
 the whole module. None exists in current production; four independent mutants bind the carrier family.
+
+Tenth review demonstrated that a synchronous before/after oracle can be outrun by a delayed callback:
+`subprocess.threading.Timer` scheduled a real provider path after the audit window closed. Public proxies
+for threading, signal, exit handlers, schedulers, futures and finalizers now join process/import/FFI
+modules in the sensitive set. Timer, signal, atexit and weakref-finalizer mutants bind this asynchronous
+effect class; current production uses none of those proxy capabilities.
