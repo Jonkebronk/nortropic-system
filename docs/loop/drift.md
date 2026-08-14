@@ -854,3 +854,8 @@ R11 removes all historical integer-descriptor fallback from connected read class
 receives snapshot credit only from its current live fstat identity; a delegated pre-seed handle must also
 match the same live opened object. A close-and-forced-number-reuse control proves an unrelated read stays
 unchanged before the genuine duplicate/fdopen snapshot reader triggers pre-verification corruption.
+
+Post-publication integration exposed three gate-only false negatives hidden by the earlier schema-v1 RED.
+Provider race mutation is now reset and digest-anchored before each host control. Cleanup admits the exact
+root `events.jsonl` journal leaf but no sibling or subtree. The R11 fd-reuse experiment now surrounds the
+actual live snapshot read for both file-handle and descriptor APIs, rather than requiring an os.open shape.

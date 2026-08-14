@@ -387,10 +387,11 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         residue_paths.update(path for path in arena.rglob("*")
                              if str(path.absolute()) not in arena_before)
         expected_runs = module.journal_root(repo) / "runs"
+        expected_root_journal = module.journal_root(repo) / "events.jsonl"
         direct_created = sorted(path for path in residue_paths if path.parent == expected_runs)
         exact_run = direct_created[0] if len(direct_created) == 1 else None
         def expected_journal_path(path: Path) -> bool:
-            if path == expected_runs or path == exact_run:
+            if path == expected_root_journal or path == expected_runs or path == exact_run:
                 return True
             return (exact_run is not None and path.parent == exact_run
                     and path.name in {"provider-envelope.json", "events.jsonl", "result.json"})
@@ -609,6 +610,10 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
 
     # The required sibling is independently bound to the same opened object;
     # replacing its source pathname after open must not change copied bytes.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    check("J_HOST_RACE_PROVIDER_FIXTURE_ISOLATED",
+          hashlib.sha256(provider.read_bytes()).hexdigest() == good_hash,
+          "provider restored before host source race")
     code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
     host_source_b = provider_dir / "host-source-b"
     host_source_b.write_bytes(host_good_bytes + b"unverified-b")
@@ -654,6 +659,10 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
 
     # A stale lstat/stat/access decision on the host pathname cannot replace
     # fstat regular+executable identity on the exact no-follow opened fd.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    check("J_HOST_IDENTITY_PROVIDER_FIXTURE_ISOLATED",
+          hashlib.sha256(provider.read_bytes()).hexdigest() == good_hash,
+          "provider restored before host opened-identity control")
     host_same_bytes = provider_dir / "host-same-bytes"
     host_same_bytes.write_bytes(host_good_bytes); host_same_bytes.chmod(0o600)
     host_identity_repo = make_repo(str(provider))
@@ -911,7 +920,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                              fdopen_preseed: bool = False,
                              fdopen_detach_preseed: bool = False,
                              fdopen_raw_preseed: bool = False,
-                             fd_reuse_preseed: bool = False):
+                             fd_reuse_control: bool = False):
         provider.write_bytes(good_bytes); provider.chmod(0o700)
         code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
         target_repo = make_repo(str(provider))
@@ -944,23 +953,37 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
             original_chmod(path, 0o700)
             with original_io(path, "wb") as handle: handle.write(bad)
             targets.append(path); changed[0] = True
+        def exercise_fd_reuse(fd: int, path: Path) -> None:
+            if not fd_reuse_control or reuse_observation or not protected(path): return
+            snapshot_fd = os.dup(fd)
+            original_number = fd
+            os.close(original_number)
+            unrelated_fd = original_os(unrelated, os.O_RDONLY)
+            if unrelated_fd != original_number:
+                os.dup2(unrelated_fd, original_number); os.close(unrelated_fd)
+            before = changed[0]
+            unrelated_bytes = original_read(original_number, 1)
+            reuse_observation.append((unrelated_bytes, before, changed[0]))
+            os.close(original_number)
+            os.dup2(snapshot_fd, original_number); os.close(snapshot_fd)
         class CorruptRead:
             def __init__(self, handle, path): self._handle, self._path = handle, path
+            def _before(self):
+                path = fd_target(self._handle.fileno())
+                if path is not None:
+                    exercise_fd_reuse(self._handle.fileno(), path)
+                    if protected(path) and not changed[0]: mutate(path)
             def read(self, *args, **kwargs):
-                path = fd_target(self._handle.fileno()) or self._path
-                if path is not None and protected(path) and not changed[0]: mutate(path)
+                self._before()
                 return self._handle.read(*args, **kwargs)
             def readinto(self, buffer):
-                path = fd_target(self._handle.fileno()) or self._path
-                if path is not None and protected(path) and not changed[0]: mutate(path)
+                self._before()
                 return self._handle.readinto(buffer)
             def read1(self, *args):
-                path = fd_target(self._handle.fileno()) or self._path
-                if path is not None and protected(path) and not changed[0]: mutate(path)
+                self._before()
                 return self._handle.read1(*args)
             def readinto1(self, buffer):
-                path = fd_target(self._handle.fileno()) or self._path
-                if path is not None and protected(path) and not changed[0]: mutate(path)
+                self._before()
                 return self._handle.readinto1(buffer)
             def detach(self):
                 return CorruptRead(self._handle.detach(), None)
@@ -991,7 +1014,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 if not targets_by_root: targets_by_root.append(root_members)
                 if duplicate_ro and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
                     duplicate = os.dup(fd); os.close(fd); fd = duplicate
-                if (fdopen_preseed or fdopen_detach_preseed or fdopen_raw_preseed or fd_reuse_preseed) and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+                if (fdopen_preseed or fdopen_detach_preseed or fdopen_raw_preseed) and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
                     wrapped = wrap_fdopen(os.dup(fd), "rb")
                     if fdopen_detach_preseed:
                         preseed_handles[fd] = wrapped.detach()
@@ -1002,18 +1025,6 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                     else:
                         preseed_handles[fd] = wrapped
                         preseed_owners.append(wrapped)
-                    if fd_reuse_preseed:
-                        old_fd = fd
-                        os.close(old_fd)
-                        unrelated_fd = original_os(unrelated, os.O_RDONLY)
-                        if unrelated_fd != old_fd:
-                            os.dup2(unrelated_fd, old_fd); os.close(unrelated_fd)
-                        before = changed[0]
-                        unrelated_bytes = wrap_read(old_fd, 1)
-                        reuse_observation.append((unrelated_bytes, before, changed[0]))
-                        os.close(old_fd)
-                        fd = os.dup(wrapped._handle.fileno())
-                        preseed_handles[fd] = preseed_handles.pop(old_fd)
             return fd
         def wrap_read(fd, size):
             if fd in preseed_handles:
@@ -1024,14 +1035,18 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 if same_object and fd_target(fd) is not None:
                     return preseed_handles[fd].read(size)
             path = fd_target(fd)
-            if path is not None and protected(path) and not changed[0]: mutate(path)
+            if path is not None:
+                exercise_fd_reuse(fd, path)
+                if protected(path) and not changed[0]: mutate(path)
             if positional_ro and path is not None and hasattr(os, "pread"):
                 offset = os.lseek(fd, 0, os.SEEK_CUR); data = os.pread(fd, size, offset)
                 os.lseek(fd, offset + len(data), os.SEEK_SET); return data
             return original_read(fd, size)
         def before_fd_read(fd):
             path = fd_target(fd)
-            if path is not None and protected(path) and not changed[0]: mutate(path)
+            if path is not None:
+                exercise_fd_reuse(fd, path)
+                if protected(path) and not changed[0]: mutate(path)
         original_pread = getattr(os, "pread", None); original_readv = getattr(os, "readv", None); original_preadv = getattr(os, "preadv", None)
         def wrap_pread(fd, size, offset): before_fd_read(fd); return original_pread(fd, size, offset)
         def wrap_readv(fd, buffers): before_fd_read(fd); return original_readv(fd, buffers)
@@ -1086,8 +1101,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         "provider", work / "BAD_PROVIDER_FDOPEN_DETACH_PRESEED", fdopen_detach_preseed=True)
     connected_fdopen_raw_preseed = connected_corruption(
         "provider", work / "BAD_PROVIDER_FDOPEN_RAW_PRESEED", fdopen_raw_preseed=True)
-    connected_fd_reuse_preseed = connected_corruption(
-        "provider", work / "BAD_PROVIDER_FD_REUSE_PRESEED", fd_reuse_preseed=True)
+    connected_fd_reuse = connected_corruption(
+        "provider", work / "BAD_PROVIDER_FD_REUSE", fd_reuse_control=True)
     check("K_R5_PROVIDER_CONNECTED_POST_PROTECTION_CORRUPTION", family_absent or (
           connected_provider[0] and not connected_provider[1][0]
           and connected_provider[1][2] == 0 and not connected_provider[2]
@@ -1124,11 +1139,11 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           and not connected_fdopen_raw_preseed[1][4]),
           f"connected={connected_fdopen_raw_preseed}")
     check("K_R11_LIVE_OBJECT_FD_REUSE_CORRUPTION", family_absent or (
-          connected_fd_reuse_preseed[0] and not connected_fd_reuse_preseed[1][0]
-          and not connected_fd_reuse_preseed[2] and not connected_fd_reuse_preseed[3]
-          and not connected_fd_reuse_preseed[1][4]
-          and connected_fd_reuse_preseed[4] == [(b"U", False, False)]),
-          f"connected={connected_fd_reuse_preseed}")
+          connected_fd_reuse[0] and not connected_fd_reuse[1][0]
+          and not connected_fd_reuse[2] and not connected_fd_reuse[3]
+          and not connected_fd_reuse[1][4]
+          and connected_fd_reuse[4] == [(b"U", False, False)]),
+          f"connected={connected_fd_reuse}")
 
     # Authority is one byte observation: replacing the document immediately
     # after its read handle is returned must not mix old path with new digest.
@@ -1346,6 +1361,19 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     check("J_R7_GR07_RIGHT_LEAF_WRONG_RUN_REJECT", wrong_leaf.parent.name != "run-1",
           f"path={wrong_leaf}")
     shutil.rmtree(work / "judge-runs")
+    journal_root_control = work / "judge-journal-root"
+    journal_root_control.mkdir()
+    exact_root_journal = journal_root_control / "events.jsonl"
+    exact_root_journal.write_text("{}\n")
+    root_sibling = journal_root_control / "unexpected.jsonl"
+    root_sibling.write_text("{}\n")
+    check("J_POSTPUB_EXACT_ROOT_JOURNAL_POSITIVE",
+          exact_root_journal == journal_root_control / "events.jsonl",
+          f"path={exact_root_journal}")
+    check("J_POSTPUB_ROOT_JOURNAL_SIBLING_REJECT",
+          root_sibling != journal_root_control / "events.jsonl",
+          f"path={root_sibling}")
+    shutil.rmtree(journal_root_control)
 
     check("J_R4_GR08_UNBOUNDED_PROVIDER_EFFECT", provider_fixture_effect,
           "digest-coherent oversized provider executes and captures without the bound")
