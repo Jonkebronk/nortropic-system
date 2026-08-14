@@ -477,3 +477,11 @@ and proves immediate exit, no `kill(-1)`/`kill(0)`, and no evidence write. The s
 producer writer child, verifies the complete post-setuid identity, checks exec-environment setup, and
 makes installer subprocess/write failures explicit. Signed native bytes and their candidate bindings
 were regenerated; the external root ceremony remains unexecuted.
+
+The first provisioned owner-environment run exposed a Darwin group-list portability error before any
+producer evidence was created. The service had required the dedicated primary GID to reappear as the
+sole `getgroups()` entry after the privilege drop, although Darwin leaves inclusion of the effective
+GID in that supplementary list unspecified. The drop now clears the supplementary list, changes GID
+before UID, and verifies exact real/effective UID and GID plus an empty supplementary list. A linked
+Darwin-semantics control omits the primary GID from `getgroups()` and must still execute the exact probe
+and create producer-owned evidence. Live authority is not changed by this repository correction.

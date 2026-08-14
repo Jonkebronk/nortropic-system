@@ -97,13 +97,12 @@ static int producer_ids(uid_t *uid,gid_t *gid){
 #endif
 }
 static int drop_identity(uid_t uid,gid_t gid){
-#ifdef NORTROPIC_FIXTURE
+#if defined(NORTROPIC_FIXTURE) && !defined(NORTROPIC_TEST_PRODUCTION_DROP)
   return uid==getuid()&&gid==getgid();
 #else
-  if(setgroups(1,&gid)||setgid(gid)||setuid(uid))return 0;
-  gid_t only_group=0;
+  if(setgroups(0,NULL)||setgid(gid)||setuid(uid))return 0;
   return getuid()==uid&&geteuid()==uid&&getgid()==gid&&getegid()==gid&&
-    getgroups(1,&only_group)==1&&only_group==gid;
+    getgroups(0,NULL)==0;
 #endif
 }
 static int root_fd(void){

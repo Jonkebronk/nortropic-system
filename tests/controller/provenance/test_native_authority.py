@@ -71,6 +71,19 @@ class NativeAuthorityTests(unittest.TestCase):
                      "-o", cls.fault_producer], timeout=30)
         if fault.returncode:
             raise RuntimeError((fault.returncode, fault.stdout, fault.stderr))
+        darwin_bin = Path(cls.temp.name) / "darwin-bin"
+        darwin_bin.mkdir()
+        cls.darwin_producer = darwin_bin / "request-producer"
+        darwin = run(["/usr/bin/clang", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                      "-arch", "arm64", "-DNORTROPIC_FIXTURE",
+                      "-DNORTROPIC_TEST_PRODUCTION_DROP",
+                      '-DPROBE_SHA256="' + PROBE_SHA + '"',
+                      '-DALLOWLIST_SHA256="' + allowlist_sha + '"',
+                      '-DAUTHORITY_ROOT="' + str(cls.authority) + '"',
+                      source, ROOT / "tests/controller/provenance/darwin_groups.c",
+                      "-o", cls.darwin_producer], timeout=30)
+        if darwin.returncode:
+            raise RuntimeError((darwin.returncode, darwin.stdout, darwin.stderr))
         cls.candidate = "1" * 40
         cls.spec = "2" * 64
         cls.gate = "3" * 64
@@ -211,6 +224,15 @@ class NativeAuthorityTests(unittest.TestCase):
         self.assertFalse(self.signal_marker.exists(),
                          self.signal_marker.read_text() if self.signal_marker.exists() else "")
         self.assertEqual(set((self.authority / "evidence").iterdir()), before)
+
+    def test_identity_drop_does_not_require_primary_gid_as_supplementary(self):
+        argv = self.producer_args(PROBES[0][0])
+        argv[0] = self.darwin_producer
+        q = run(argv)
+        self.assertEqual((q.returncode, q.stderr), (0, ""), q)
+        self.assertRegex(q.stdout, r"^REQUEST_ID=[0-9a-f]{64}\n$")
+        evidence = self.authority / "evidence" / (q.stdout[11:-1] + ".json")
+        self.assertTrue(evidence.is_file())
 
     def test_committed_artifact_identity_and_no_fixture_override(self):
         service = ROOT / "controller/provenance/dist/h033-service"
