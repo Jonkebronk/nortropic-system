@@ -583,11 +583,28 @@ if mode == 'output_then_fail': sys.exit(17)
     interruption_repo = Path(negative_cases["interruption"][1].get("canonical_result", work))
     interruption_root = (interruption_repo.parents[3] if interruption_repo != work
                          and len(interruption_repo.parents) > 3 else work)
-    interruption_before = sorted((str(p), p.stat().st_size) for p in interruption_root.rglob("*")
-                                 if p.is_file())
+    def quiescence_inventory(root: Path):
+        entries = []
+        for path in root.rglob("*"):
+            st = path.lstat(); kind = ("symlink" if path.is_symlink() else
+                "directory" if stat.S_ISDIR(st.st_mode) else
+                "regular" if stat.S_ISREG(st.st_mode) else "other")
+            digest_value = sha256(path) if kind == "regular" and st.st_size <= MAX_RESULT_BYTES else None
+            entries.append((str(path), kind, st.st_dev, st.st_ino,
+                            stat.S_IMODE(st.st_mode), st.st_size, digest_value,
+                            os.readlink(path) if kind == "symlink" else None))
+        fd_state = []
+        for fd_path in Path("/dev/fd").iterdir():
+            try:
+                st = fd_path.stat(); fd_state.append((int(fd_path.name), st.st_dev, st.st_ino))
+            except (OSError, ValueError): pass
+        ps = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,command="], text=True,
+                            stdout=subprocess.PIPE, check=True).stdout.splitlines()
+        owned = sorted(line.strip() for line in ps if str(work) in line)
+        return sorted(entries), sorted(fd_state), owned
+    interruption_before = quiescence_inventory(interruption_root)
     time.sleep(1.0)
-    interruption_after = sorted((str(p), p.stat().st_size) for p in interruption_root.rglob("*")
-                                if p.is_file())
+    interruption_after = quiescence_inventory(interruption_root)
     interruption_quiescent = interruption_before == interruption_after
 
     original_popen_timeout = module.subprocess.Popen
@@ -632,47 +649,51 @@ if mode == 'output_then_fail': sys.exit(17)
             if path.is_symlink() or path.is_file(): path.unlink()
             elif path.is_dir(): path.rmdir()
         return outcome, len(seeded) == 1, intact
-    selected_transport = ("stream" if str(valid_output).startswith("/dev/fd/")
-                          else "filesystem")
-    object_attacks = ({kind: object_attack(kind) for kind in ("symlink", "directory", "hardlink")}
-                      if selected_transport == "filesystem" else {})
-    object_attacks_ok = (selected_transport != "filesystem" or
-        all(not value[0][0] and value[0][2] == 0
-            and value[1] and value[2] for value in object_attacks.values()))
+    object_attacks = {kind: object_attack(kind) for kind in ("symlink", "directory", "hardlink")}
+    object_attacks_ok = all(not value[0][0] and value[0][2] == 0
+                            and value[1] and value[2] for value in object_attacks.values())
 
-    def framed_stream_oracle(raw: bytes) -> bool:
-        if len(raw) < 4: return False
-        size = int.from_bytes(raw[:4], "big")
-        if size > MAX_RESULT_BYTES or len(raw) != size + 4: return False
+    def cleanup_failure_case(persistent: bool):
+        cleanup_repo = make_repo(str(provider))
+        targets: list[Path] = []; failures = [0]
+        original_popen = module.subprocess.Popen
+        original_unlink = module.os.unlink
+        original_rmtree = module.shutil.rmtree
+        def observe_target(argv, *args, **kwargs):
+            flat = list(argv)
+            if "-o" in flat: targets.append(Path(flat[flat.index("-o") + 1]))
+            return original_popen(argv, *args, **kwargs)
+        def injected_unlink(path, *args, **kwargs):
+            candidate = Path(path)
+            if targets and candidate == targets[-1] and (persistent or failures[0] == 0):
+                failures[0] += 1; raise OSError("H032 injected result cleanup failure")
+            return original_unlink(path, *args, **kwargs)
+        def injected_rmtree(path, *args, **kwargs):
+            candidate = Path(path)
+            if targets and (candidate == targets[-1] or candidate in targets[-1].parents) \
+                    and (persistent or failures[0] == 0):
+                failures[0] += 1; raise OSError("H032 injected result cleanup failure")
+            return original_rmtree(path, *args, **kwargs)
+        module.subprocess.Popen = observe_target
+        module.os.unlink = injected_unlink
+        module.shutil.rmtree = injected_rmtree
         try:
-            document = strict_json(raw[4:].decode("utf-8", errors="strict"))
-        except Exception:
-            return False
-        return complete_schema_valid(document, schema_document)
-    stream_payload = bounded_stable_result(valid_canonical)
-    stream_frame = len(stream_payload).to_bytes(4, "big") + stream_payload
-    stream_reference_ok = (
-        framed_stream_oracle(stream_frame)
-        and not framed_stream_oracle(stream_frame[:-1])
-        and not framed_stream_oracle(stream_frame + b"x")
-        and not framed_stream_oracle((MAX_RESULT_BYTES + 1).to_bytes(4, "big") + stream_payload))
-
-    cleanup_repo = make_repo(str(provider))
-    original_rmtree_result = module.shutil.rmtree
-    cleanup_failures = [0]
-    def fail_first_transport_cleanup(path, *args, **kwargs):
-        target = Path(path)
-        if target.name.startswith("nortropic-provider-") and cleanup_failures[0] == 0:
-            cleanup_failures[0] += 1
-            raise OSError("H032 injected transient cleanup failure")
-        return original_rmtree_result(path, *args, **kwargs)
-    module.shutil.rmtree = fail_first_transport_cleanup
-    try:
-        cleanup_error_case = attempt(cleanup_repo)
-    finally:
-        module.shutil.rmtree = original_rmtree_result
-    cleanup_error_ok = (cleanup_failures[0] == 1 and not cleanup_error_case[0]
-                        and not cleanup_error_case[4])
+            outcome = attempt(cleanup_repo)
+        finally:
+            module.subprocess.Popen = original_popen
+            module.os.unlink = original_unlink
+            module.shutil.rmtree = original_rmtree
+        residue = [path for path in targets if path.exists()]
+        result = outcome, failures[0], [str(path) for path in residue]
+        for path in residue:
+            if path.is_file() or path.is_symlink(): path.unlink()
+        return result
+    transient_cleanup = cleanup_failure_case(False)
+    persistent_cleanup = cleanup_failure_case(True)
+    cleanup_error_ok = (
+        transient_cleanup[1] == 1 and transient_cleanup[0][0] and not transient_cleanup[2]
+        and persistent_cleanup[1] > 0 and not persistent_cleanup[0][0]
+        and "cleanup" in persistent_cleanup[0][1].lower())
 
     oversized_positive = result_case("exact_max")
     os.environ.pop("H032_RESULT_MODE", None)
@@ -790,7 +811,7 @@ if mode == 'output_then_fail': sys.exit(17)
         valid[0] and valid_schema and physical_topology_ok and stale_rejects and replay_rejects
         and external_replay_ok
         and oversized_positive[0][0] and atomic_ok and timeout_ok and object_attacks_ok
-        and stream_reference_ok and cleanup_error_ok and interruption_quiescent
+        and cleanup_error_ok and interruption_quiescent
         and valid_output.is_absolute()
         and valid_output != valid_canonical
         and repo not in valid_output.parents and valid_repo not in valid_output.parents
@@ -799,7 +820,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(rejected_clean(case) for case in negative_cases.values())
         and negative_cases["hostile"][1].get("hostile_error") != "WRITE_SUCCEEDED")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup_error={cleanup_error_case, cleanup_error_ok} transport={selected_transport} objects={object_attacks, object_attacks_ok} stream_alternative={stream_reference_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
