@@ -98,6 +98,9 @@ SENSITIVE_MODULE_PROXIES = {
     "os", "sys", "subprocess", "builtins", "ctypes", "importlib", "pty",
     "asyncio", "multiprocessing", "posix", "_posixsubprocess",
 }
+ALLOWED_SYS_ATTRS = {
+    "dont_write_bytecode", "path", "stderr", "stdout", "version", "version_info",
+}
 checks: list[tuple[str, bool, str]] = []
 
 
@@ -233,7 +236,10 @@ def process_shape(text: str) -> dict[str, object]:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             parent = parents.get(node)
             direct_call = isinstance(parent, ast.Call) and parent.func is node
-            if node.id in {"__import__", "__builtins__", "vars", "locals", "eval", "exec", "compile"}:
+            if node.id in {
+                "__import__", "__builtins__", "__loader__", "__spec__", "__package__",
+                "__cached__", "vars", "locals", "eval", "exec", "compile", "breakpoint", "help",
+            }:
                 violations.append((owner, node.lineno, f"sensitive-builtin:{node.id}"))
             elif node.id in {"getattr", "globals"} and not direct_call:
                 violations.append((owner, node.lineno, f"sensitive-builtin-reference:{node.id}"))
@@ -242,8 +248,8 @@ def process_shape(text: str) -> dict[str, object]:
             direct_attribute = isinstance(parent, ast.Attribute) and parent.value is node
             if not direct_attribute:
                 violations.append((owner, node.lineno, "bare-sys-module"))
-            elif parent.attr in {"modules", "__dict__", "__getattribute__"}:
-                violations.append((owner, node.lineno, f"dynamic-import-registry:sys.{parent.attr}"))
+            elif parent.attr not in ALLOWED_SYS_ATTRS:
+                violations.append((owner, node.lineno, f"unapproved-sys-attribute:sys.{parent.attr}"))
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             module, attr = node.value.id, node.attr
             if module in PROCESS_ATTRS and attr == "__dict__":
@@ -477,6 +483,10 @@ try:
         "SUBPROCESS_OS_FORK": "\nh031_pid = subprocess.os.fork()\n",
         "SHUTIL_OS_SPAWN": "\nshutil.os.posix_spawn('/bin/true', ['/bin/true'], {})\n",
         "SUBPROCESS_SYS_REGISTRY": "\nsubprocess.sys.modules['subprocess'].Popen(['/bin/true'])\n",
+        "SYS_SETTRACE_FRAME": "\ndef h031_trace(frame, event, arg):\n    return frame.f_globals['subprocess'].Popen(['/bin/true'])\nsys.settrace(h031_trace)\n",
+        "SYS_SETPROFILE_FRAME": "\ndef h031_profile(frame, event, arg):\n    return frame.f_globals['subprocess'].Popen(['/bin/true'])\nsys.setprofile(h031_profile)\n",
+        "BUILTIN_BREAKPOINT": "\nbreakpoint()\n",
+        "MODULE_LOADER_GLOBAL": "\n__loader__.load_module('ctypes')\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",

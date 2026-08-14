@@ -649,3 +649,9 @@ publicly re-export other module objects. A Name-rooted matcher therefore missed 
 and equivalent chains. Attribute access to sensitive process, import and FFI module proxies is now
 forbidden independently of the root object, while direct approved modules remain governed by the exact
 import inventory and their enumerated process APIs. Proxy fork/spawn/registry mutants bind the closure.
+
+Eighth review recovered a frame without private syntax by installing public sys trace/profile callbacks;
+the frame's public globals then exposed subprocess and dynamic import. Direct sys access is now frozen to
+the six attributes the current product already uses. Trace, profile, hooks, frames and registries are not
+available to H-031 implementation. Ambient module-loader globals plus builtins that can invoke dynamic
+debug/help machinery also reject on load. Dedicated mutants bind each newly closed capability.
