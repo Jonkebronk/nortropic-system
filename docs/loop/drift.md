@@ -685,3 +685,13 @@ placed executable/preexec substitutions into positional Popen slots. `types` is 
 sole Popen plus generic run site each require exactly one non-starred positional argument in addition to
 the existing unsafe-keyword prohibition. In-place positional and starred mutants test the legitimate
 site itself rather than adding an obviously extra process call.
+
+Fourteenth review recovered finalizer installation without `types` or a direct finalizer target: a
+metaclass `__prepare__` mapping injected the lifecycle key while Python executed an ordinary class-body
+assignment. The source envelope therefore admits only the product's existing `__init__` lifecycle
+method, rejects class keywords and literal finalizer keys, and binds the exact metaclass construction as
+a mutant. The same review changed process-global cwd, environment and umask before invalid-role
+rejection; the first three audit events had merely been omitted and umask emitted no event. Direct OS
+access is now frozen to the exact current product attributes and its sole read-only environment form,
+with process-state APIs prohibited. The runtime oracle independently snapshots cwd/environment/umask,
+restores them after measurement, and aborts audited mutation operations after recording their attempt.

@@ -80,7 +80,7 @@ EXPECTED_PREBUILDER_RED = {
 }
 PROCESS_ATTRS = {
     "subprocess": {"Popen", "run", "call", "check_call", "check_output", "getoutput", "getstatusoutput"},
-    "os": {"system", "popen", "fork", "forkpty", "register_at_fork", "kill", "killpg", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
+    "os": {"system", "popen", "fork", "forkpty", "register_at_fork", "kill", "killpg", "chdir", "fchdir", "putenv", "unsetenv", "umask", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
     "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
     "pty": {"spawn"},
 }
@@ -102,6 +102,11 @@ SENSITIVE_MODULE_PROXIES = {
 }
 ALLOWED_SYS_ATTRS = {
     "dont_write_bytecode", "path", "stderr", "stdout", "version", "version_info",
+}
+ALLOWED_OS_ATTRS = {
+    "O_CREAT", "O_EXCL", "O_RDONLY", "O_WRONLY", "X_OK", "access", "chmod",
+    "close", "environ", "fdopen", "fstat", "fsync", "getpid", "getuid", "open",
+    "read", "sep", "system", "write",
 }
 SENSITIVE_FRAME_ATTRS = {
     "f_globals", "f_builtins", "f_locals", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
@@ -203,8 +208,14 @@ def process_shape(text: str) -> dict[str, object]:
         owner = owners.get(node, "<module>")
         if isinstance(node, ast.AsyncFunctionDef):
             violations.append((owner, node.lineno, f"deferred-async-function:{node.name}"))
-        if isinstance(node, ast.FunctionDef) and node.name == "__del__":
-            violations.append((owner, node.lineno, "deferred-finalizer:__del__"))
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("__") and node.name.endswith("__")
+                and node.name != "__init__"):
+            violations.append((owner, node.lineno, f"dynamic-lifecycle-method:{node.name}"))
+        if isinstance(node, ast.ClassDef) and node.keywords:
+            violations.append((owner, node.lineno, "dynamic-class-keywords"))
+        if isinstance(node, ast.Constant) and node.value == "__del__":
+            violations.append((owner, node.lineno, "dynamic-finalizer-key"))
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if any(isinstance(item, ast.Name) and item.id == "__del__"
@@ -267,6 +278,35 @@ def process_shape(text: str) -> dict[str, object]:
                 violations.append((owner, node.lineno, "bare-sys-module"))
             elif parent.attr not in ALLOWED_SYS_ATTRS:
                 violations.append((owner, node.lineno, f"unapproved-sys-attribute:sys.{parent.attr}"))
+        if isinstance(node, ast.Name) and node.id == "os" and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            safe_getattr = (
+                isinstance(parent, ast.Call)
+                and isinstance(parent.func, ast.Name) and parent.func.id == "getattr"
+                and len(parent.args) == 3 and parent.args[0] is node
+                and isinstance(parent.args[1], ast.Constant)
+                and parent.args[1].value in {"O_CLOEXEC", "O_NOFOLLOW"}
+                and isinstance(parent.args[2], ast.Constant) and parent.args[2].value == 0
+                and not parent.keywords
+            )
+            if isinstance(parent, ast.Attribute) and parent.value is node:
+                if parent.attr not in ALLOWED_OS_ATTRS and parent.attr not in PROCESS_ATTRS["os"]:
+                    violations.append((owner, node.lineno,
+                                       f"unapproved-os-attribute:os.{parent.attr}"))
+                if parent.attr == "environ":
+                    environ_parent = parents.get(parent)
+                    environ_grandparent = parents.get(environ_parent)
+                    safe_environ_read = (
+                        isinstance(environ_parent, ast.Attribute)
+                        and environ_parent.value is parent and environ_parent.attr == "items"
+                        and isinstance(environ_grandparent, ast.Call)
+                        and environ_grandparent.func is environ_parent
+                        and not environ_grandparent.args and not environ_grandparent.keywords
+                    )
+                    if not safe_environ_read:
+                        violations.append((owner, node.lineno, "mutable-os-environ-access"))
+            elif not safe_getattr:
+                violations.append((owner, node.lineno, "bare-os-module"))
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             module, attr = node.value.id, node.attr
             if module in PROCESS_ATTRS and attr == "__dict__":
@@ -545,8 +585,25 @@ try:
         "FINALIZER_SETATTR": "\nsetattr(H031Finalizer, '__del__', run_codex)\n",
         "FINALIZER_DYNAMIC_TYPE": "\nH031Dynamic = type('H031Dynamic', (), {'__del__': run_codex})\n",
         "FINALIZER_TYPES_NEW_CLASS": "\nsubprocess.types.new_class('H031Dynamic', (), {}, lambda ns: ns.update({'__del__': run_codex}))\n",
+        "FINALIZER_METACLASS_PREPARE": (
+            "\ndef h031_later(self):\n    run_codex(None, None, 'BUILDER', 'late')\n"
+            "class H031Namespace(dict):\n"
+            "    def __setitem__(self, key, value):\n"
+            "        dict.update(self, {'__' + 'del__': h031_later, key: value})\n"
+            "class H031Meta(type):\n"
+            "    @classmethod\n"
+            "    def __prepare__(meta, name, bases):\n"
+            "        return H031Namespace()\n"
+            "class H031Prepared(metaclass=H031Meta):\n"
+            "    trigger = h031_later\n"
+        ),
         "OS_KILL": "\nos.kill(1, 0)\n",
         "OS_KILLPG": "\nos.killpg(1, 0)\n",
+        "OS_CHDIR": "\nos.chdir('/private/tmp')\n",
+        "OS_PUTENV": "\nos.putenv('H031_MUTANT', '1')\n",
+        "OS_UNSETENV": "\nos.unsetenv('PATH')\n",
+        "OS_UMASK": "\nos.umask(0)\n",
+        "OS_UNKNOWN_PROCESS_STATE": "\nos.nice(1)\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
@@ -711,6 +768,11 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
         before = (capture.read_bytes() if capture.exists() else b"",
                   journal_file.read_bytes(),
                   sorted(path.name for path in runs_dir.iterdir()) if runs_dir.exists() else [])
+        def current_umask():
+            value = os.umask(0o077)
+            os.umask(value)
+            return value
+        before_process = (os.getcwd(), dict(os.environ), current_umask())
         unknown_errors = []
         forbidden_effects = []
         audit_active = [False]
@@ -721,6 +783,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
             "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp", "os.system",
             "os.register_at_fork",
             "os.kill", "os.killpg",
+            "os.chdir", "os.fchdir", "os.putenv", "os.unsetenv",
             "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "subprocess.Popen",
         }
         def audit_hook(event, args):
@@ -732,8 +795,10 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
                 if ((isinstance(mode, str) and any(char in mode for char in "wax+"))
                         or (isinstance(flags, int) and flags & write_flags)):
                     forbidden_effects.append((event, repr(args[:3])))
+                    raise ProductFailure(f"forbidden pre-role effect: {event}")
             elif event in mutation_events:
                 forbidden_effects.append((event, repr(args[:3])))
+                raise ProductFailure(f"forbidden pre-role effect: {event}")
         sys.addaudithook(audit_hook)
         try:
             audit_active[0] = True
@@ -747,13 +812,19 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
                     unknown_errors.append(f"{type(exc).__name__}:{exc}")
         finally:
             audit_active[0] = False
+        after_process = (os.getcwd(), dict(os.environ), current_umask())
+        os.chdir(before_process[0])
+        os.environ.clear()
+        os.environ.update(before_process[1])
+        os.umask(before_process[2])
         after = (capture.read_bytes() if capture.exists() else b"",
                  journal_file.read_bytes(),
                  sorted(path.name for path in runs_dir.iterdir()) if runs_dir.exists() else [])
         check("K_UNKNOWN_ROLE_PRE_EFFECT_REJECT",
               all(error != "NO_ERROR" for error in unknown_errors)
-              and not forbidden_effects and before == after,
-              f"errors={unknown_errors} forbidden_effects={forbidden_effects} unchanged={before == after}")
+              and not forbidden_effects and before == after and before_process == after_process,
+              f"errors={unknown_errors} forbidden_effects={forbidden_effects} "
+              f"unchanged={before == after} process_unchanged={before_process == after_process}")
 
         original_run = module.subprocess.run
         spawned: list[list[str]] = []
