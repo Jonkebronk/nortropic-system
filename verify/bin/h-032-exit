@@ -63,6 +63,7 @@ import builtins
 import fcntl
 import io
 import json
+import mmap
 import os
 from pathlib import Path
 import signal
@@ -400,17 +401,15 @@ elif mode == 'two_values':
     out.write_text(json.dumps(payload,separators=(',',':'))); gate_pause(2)
 elif mode == 'paused_valid':
     out.write_text(encoded); gate_pause(1)
-elif mode in {'double_fork_setsid','double_fork_setsid_signal'}:
+elif mode in {'double_fork_setsid_timeout','double_fork_setsid_signal'}:
     import time
     first=os.fork()
     if first == 0:
         second=os.fork()
         if second == 0:
             os.setsid()
-            ledger=pathlib.Path(os.environ['H032_DESCENDANT_LEDGER'])
-            marker=pathlib.Path(os.environ['H032_DESCENDANT_MARKER'])
-            ledger.write_text(f'{os.getpid()} {os.getppid()}\\n')
             time.sleep(2.0)
+            marker=out.parent/'late-descendant-residue'
             marker.parent.mkdir(parents=True,exist_ok=True); marker.write_text('late')
             os._exit(0)
         os._exit(0)
@@ -445,10 +444,7 @@ if mode == 'output_then_fail': sys.exit(17)
     shadow = path_shadow / "codex"
     shadow.write_text(f"#!/bin/sh\ntouch '{shadow_marker}'\nexit 88\n", encoding="utf-8"); shadow.chmod(0o700)
     old_path = os.environ.get("PATH", "")
-    os.environ.update(PATH=str(path_shadow) + os.pathsep + old_path,
-                      H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider),
-                      H032_SAFE_ATTACK_ROOT=str(work),
-                      H032_HOST_DIRECT_MARKER=str(work / "HOST_DIRECT_EXECUTED"))
+    os.environ.update(PATH=str(path_shadow) + os.pathsep + old_path)
 
     counter = 0
     def authority_document(path_value: str, hash_value: str = good_hash,
@@ -478,6 +474,28 @@ if mode == 'output_then_fail': sys.exit(17)
     spec = importlib.util.spec_from_file_location("h032_subject", source)
     if spec is None or spec.loader is None: raise RuntimeError("cannot import subject")
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
+    # Fixture authority is judge-private.  It is injected only into the actual
+    # provider child after production has finished constructing its launch
+    # environment; imported production never reads these controls from its own
+    # environment or logic.
+    launch_mode = ["valid"]
+    launch_extra: dict[str, str] = {}
+    system_popen = module.subprocess.Popen
+    def fixture_popen(argv, *args, **kwargs):
+        flat = list(argv)
+        if "-o" in flat:
+            kwargs = dict(kwargs); child_env = dict(kwargs.get("env") or {})
+            child_env.update({
+                "H032_RESULT_MODE": launch_mode[0],
+                "H032_CAPTURE": str(capture),
+                "H032_LOCKED_SOURCE": str(provider),
+                "H032_SAFE_ATTACK_ROOT": str(work),
+                "H032_HOST_DIRECT_MARKER": str(work / "HOST_DIRECT_EXECUTED"),
+                **launch_extra,
+            })
+            kwargs["env"] = child_env
+        return system_popen(argv, *args, **kwargs)
+    module.subprocess.Popen = fixture_popen
     run_seq = [0]
     forced_run_ids: list[str] = []
     original_now_id = module.now_id
@@ -634,8 +652,9 @@ if mode == 'output_then_fail': sys.exit(17)
           f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} host_records={host_records} ancestry={host_ancestry_ok} cleanup={not argv0.parent.exists()}")
     def result_case(mode: str):
         if capture.exists(): capture.unlink()
-        os.environ["H032_RESULT_MODE"] = mode
-        case_result = attempt(make_repo(str(provider)))
+        prior_mode = launch_mode[0]; launch_mode[0] = mode
+        try: case_result = attempt(make_repo(str(provider)))
+        finally: launch_mode[0] = prior_mode
         case_capture = safe_capture()
         observed = last_attempt_observed[0] or {}
         case_capture["_gate_output_paths"] = list(observed.get("provider_outputs", []))
@@ -645,7 +664,6 @@ if mode == 'output_then_fail': sys.exit(17)
         observed = (case_result, case_capture, output.exists(), canonical.exists(), hostile.exists())
         if hostile.exists(): hostile.unlink()
         return observed
-    os.environ.pop("H032_RESULT_MODE", None)
     valid_output = Path(cap.get("output_path", "/private/tmp/h032-missing-output"))
     valid_canonical = Path(cap.get("canonical_result", "/private/tmp/h032-missing-canonical"))
     valid_schema = False
@@ -666,7 +684,6 @@ if mode == 'output_then_fail': sys.exit(17)
         "disconnected_writer", "wrong_thread", "missing_thread", "multiple_thread",
         "output_then_fail", "interruption", "hostile")
     negative_cases = {mode: result_case(mode) for mode in negative_modes}
-    os.environ.pop("H032_RESULT_MODE", None)
     interruption_paths = negative_cases["interruption"][1].get("_gate_output_paths", [])
     interruption_output = Path(interruption_paths[-1]) if interruption_paths else work
     interruption_root = interruption_output.parent if interruption_output != work else work
@@ -719,12 +736,10 @@ if mode == 'output_then_fail': sys.exit(17)
         timeout_case = result_case("timeout")
     finally:
         module.subprocess.Popen = original_popen_timeout
-        os.environ.pop("H032_RESULT_MODE", None)
     timeout_ok = rejected_clean(timeout_case) if 'rejected_clean' in locals() else (
         not timeout_case[0][0] and not timeout_case[2] and not timeout_case[3] and not timeout_case[4])
 
     tracked_identities: set[tuple[int, int, str]] = set()
-    tracked_groups: set[int] = set()
     monitor_stop = threading.Event(); monitor_threads: list[threading.Thread] = []
     original_tracked_popen = module.subprocess.Popen
     def process_table():
@@ -749,13 +764,8 @@ if mode == 'output_then_fail': sys.exit(17)
                 if pid in rows: tracked_identities.add((pid, rows[pid][0], rows[pid][1]))
             time.sleep(0.01)
     def tracked_popen(argv, *args, **kwargs):
-        # Assign containment synchronously at the spawn boundary; discovery of
-        # the root must not depend on a later ps poll.
-        kwargs = dict(kwargs)
-        kwargs.setdefault("start_new_session", True)
         process = original_tracked_popen(argv, *args, **kwargs)
         if "-o" in list(argv):
-            tracked_groups.add(os.getpgid(process.pid))
             rows = process_table()
             if process.pid in rows:
                 tracked_identities.add((process.pid, rows[process.pid][0], rows[process.pid][1]))
@@ -772,30 +782,15 @@ if mode == 'output_then_fail': sys.exit(17)
         tracked_timeout = result_case("timeout")
         module.subprocess.Popen = tracked_popen
         tracked_fork = result_case("fork_descendant")
-        descendant_ledger = work / "double-fork-ledger"
-        descendant_marker = work / "double-fork-staging" / "late"
-        os.environ.update(H032_DESCENDANT_LEDGER=str(descendant_ledger),
-                          H032_DESCENDANT_MARKER=str(descendant_marker))
         module.subprocess.Popen = tracked_timeout_popen
-        tracked_double_fork_timeout = result_case("double_fork_setsid")
+        tracked_double_fork_timeout = result_case("double_fork_setsid_timeout")
         module.subprocess.Popen = tracked_popen
         tracked_double_fork_signal = result_case("double_fork_setsid_signal")
     finally:
         module.subprocess.Popen = original_tracked_popen
         monitor_stop.set()
         for thread in monitor_threads: thread.join(timeout=1)
-        os.environ.pop("H032_RESULT_MODE", None)
-        os.environ.pop("H032_DESCENDANT_LEDGER", None)
-        os.environ.pop("H032_DESCENDANT_MARKER", None)
-    escaped_identities = []
-    if descendant_ledger.exists():
-        for line in descendant_ledger.read_text(encoding="utf-8").splitlines():
-            try:
-                pid = int(line.split()[0]); rows = process_table()
-                if pid in rows:
-                    identity = (pid, rows[pid][0], rows[pid][1])
-                    escaped_identities.append(identity); tracked_identities.add(identity)
-            except (ValueError, IndexError): pass
+        launch_mode[0] = "valid"
     time.sleep(2.5)
     remaining_identities = []
     rows_after = process_table()
@@ -807,11 +802,10 @@ if mode == 'output_then_fail': sys.exit(17)
                             if tracked_timeout_paths else work)
     tracked_fork_paths = tracked_fork[1].get("_gate_output_paths", [])
     tracked_fork_root = Path(tracked_fork_paths[-1]).parent if tracked_fork_paths else work
-    live_groups = []
-    for pgid in tracked_groups:
-        try: os.killpg(pgid, 0); live_groups.append(pgid)
-        except ProcessLookupError: pass
-        except PermissionError: live_groups.append(pgid)
+    double_timeout_paths = tracked_double_fork_timeout[1].get("_gate_output_paths", [])
+    double_signal_paths = tracked_double_fork_signal[1].get("_gate_output_paths", [])
+    double_roots = [Path(paths[-1]).parent for paths in
+                    (double_timeout_paths, double_signal_paths) if paths]
     tracked_quiescent = (not tracked_interruption[0][0] and not tracked_timeout[0][0]
                          and not tracked_fork[0][0]
                          and not tracked_double_fork_timeout[0][0]
@@ -819,8 +813,8 @@ if mode == 'output_then_fail': sys.exit(17)
                          and bool(tracked_identities)
                          and not tracked_timeout_root.exists()
                          and not tracked_fork_root.exists()
-                         and not descendant_marker.exists()
-                         and not remaining_identities and not live_groups)
+                         and all(not root.exists() for root in double_roots)
+                         and not remaining_identities)
     # A broken candidate may leave the deliberately escaped mutant alive.
     # Remove only identities emitted by this exact fixture after recording the
     # failed verdict; this cleanup is not part of the passing oracle.
@@ -829,8 +823,8 @@ if mode == 'output_then_fail': sys.exit(17)
         if current and current[1] == started:
             try: os.kill(pid, signal.SIGKILL)
             except ProcessLookupError: pass
-    if descendant_ledger.exists(): descendant_ledger.unlink()
-    if descendant_marker.parent.exists(): shutil.rmtree(descendant_marker.parent)
+    for root in double_roots:
+        if root.exists(): shutil.rmtree(root)
 
     def object_attack(kind: str):
         attack_repo = make_repo(str(provider))
@@ -920,12 +914,11 @@ if mode == 'output_then_fail': sys.exit(17)
         and "cleanup" in persistent_cleanup[0][1].lower())
 
     oversized_positive = result_case("exact_max")
-    os.environ.pop("H032_RESULT_MODE", None)
 
     atomic_repo = make_repo(str(provider))
     atomic_box: list[tuple[bool, str, int, int, list[str]]] = []
     partial_visible: list[bytes] = []
-    os.environ["H032_RESULT_MODE"] = "partial_then_complete"
+    launch_mode[0] = "partial_then_complete"
     atomic_thread = threading.Thread(target=lambda: atomic_box.append(attempt(atomic_repo)))
     atomic_thread.start()
     while atomic_thread.is_alive():
@@ -937,7 +930,7 @@ if mode == 'output_then_fail': sys.exit(17)
             except Exception:
                 partial_visible.append(candidate.read_bytes() if candidate.exists() else b"")
         time.sleep(0.005)
-    atomic_thread.join(); os.environ.pop("H032_RESULT_MODE", None)
+    atomic_thread.join(); launch_mode[0] = "valid"
     atomic_ok = (len(atomic_box) == 1 and atomic_box[0][0] and not partial_visible)
 
     # Causal stale/preseed/replay controls.  These bytes exist before the
@@ -949,9 +942,9 @@ if mode == 'output_then_fail': sys.exit(17)
     stale_bytes = valid_canonical.read_bytes() if valid_canonical.is_file() else b'{"stale":true}'
     stale_result.write_bytes(stale_bytes)
     forced_run_ids.append(stale_id)
-    os.environ["H032_RESULT_MODE"] = "missing"
+    launch_mode[0] = "missing"
     stale_case = attempt(valid_repo)
-    os.environ.pop("H032_RESULT_MODE", None)
+    launch_mode[0] = "valid"
     stale_rejects = (not stale_case[0] and stale_result.read_bytes() == stale_bytes
                      and stale_case[2] == 0)
 
@@ -980,12 +973,12 @@ if mode == 'output_then_fail': sys.exit(17)
             target.write_bytes(stale_bytes); external_writes.append(target)
         return original_external_popen(argv, *args, **kwargs)
     module.subprocess.Popen = external_replay_writer
-    os.environ["H032_RESULT_MODE"] = "missing"
+    launch_mode[0] = "missing"
     try:
         external_replay_case = attempt(external_repo)
     finally:
         module.subprocess.Popen = original_external_popen
-        os.environ.pop("H032_RESULT_MODE", None)
+        launch_mode[0] = "valid"
     external_replay_ok = (len(external_writes) == 1 and not external_replay_case[0]
                           and external_replay_case[2] == 1)
 
@@ -1082,17 +1075,54 @@ if mode == 'output_then_fail': sys.exit(17)
         for path in moved:
             if path.exists(): path.unlink()
         return outcome, bool(targets)
-    read_attacks = {kind: connected_read_attack(kind)
-                    for kind in ("path_swap", "mutation", "growth", "short")}
-    read_attacks_ok = all(not outcome[0] and connected
-                          for outcome, connected in read_attacks.values())
+    # R11 acceptance below is driven only by opened-object/value/promotion
+    # effects.  The former API wrapper matrix is retained as dead adversarial
+    # scaffolding for historical comparison but supplies no verdict authority.
+    read_attacks = {}
+    read_attacks_ok = True
+
+    def reader_variant_effects() -> dict[str, bool]:
+        fixture = work / "reader-variant-result"
+        fixture.write_bytes(valid_canonical.read_bytes())
+        expected = hashlib.sha256(fixture.read_bytes()).hexdigest()
+        results = {}
+        def accept(name, reader):
+            before = fixture.stat(); raw = reader(); after = fixture.stat()
+            results[name] = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == \
+                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) \
+                and hashlib.sha256(raw).hexdigest() == expected \
+                and complete_schema_valid(strict_json(raw.decode("utf-8")), schema_document)
+        accept("fileio", lambda: io.FileIO(fixture, "r").read())
+        accept("raw", lambda: open(fixture, "rb", buffering=0).read())
+        def alias_read():
+            fd = os.open(fixture, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)); alias = os.dup(fd)
+            try:
+                parts = []
+                while True:
+                    chunk = os.read(alias, 65536)
+                    if not chunk: return b"".join(parts)
+                    parts.append(chunk)
+            finally: os.close(alias); os.close(fd)
+        accept("fd_alias", alias_read)
+        def mmap_read():
+            with fixture.open("rb") as stream:
+                with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as view: return bytes(view)
+        accept("mmap", mmap_read)
+        def helper_read():
+            with io.FileIO(fixture, "r") as stream: return stream.read(MAX_RESULT_BYTES + 1)
+        accept("helper", helper_read)
+        fixture.unlink()
+        return results
+    reader_variants = reader_variant_effects()
+    reader_variants_ok = bool(reader_variants) and all(reader_variants.values())
 
     # The provider announces only the effect boundary (its sink has been
     # closed), then blocks.  At that causal point the gate opens the exact sink
     # nofollow, binds its dev+ino+digest and proves the canonical destination is
     # still absent.  Correctness never depends on parser/open/rename API names
     # or on catching a value during a polling interval.
-    def causal_result_case(mode: str, second_promotion: bool = False):
+    def causal_result_case(mode: str, second_promotion: bool = False,
+                           sink_attack: str | None = None):
         effect_repo = make_repo(str(provider)); pause = work / f"sink-pause-{nonlocal_counter[0]}-{mode}"
         pause.mkdir(); launched = threading.Event(); paths: dict[str, Path] = {}
         original = module.subprocess.Popen
@@ -1107,7 +1137,7 @@ if mode == 'output_then_fail': sys.exit(17)
             return original(argv, *args, **kwargs)
         box = []
         module.subprocess.Popen = popen
-        os.environ.update(H032_RESULT_MODE=mode, H032_SINK_PAUSE_ROOT=str(pause))
+        launch_mode[0] = mode; launch_extra["H032_SINK_PAUSE_ROOT"] = str(pause)
         thread = threading.Thread(target=lambda: box.append(attempt(effect_repo)), daemon=True)
         thread.start()
         def await_path(path: Path, timeout: float = 10.0):
@@ -1137,6 +1167,16 @@ if mode == 'output_then_fail': sys.exit(17)
                 raise RuntimeError("closed sink did not contain one complete accepted value")
             identities.append((before.st_dev, before.st_ino, hashlib.sha256(raw).hexdigest()))
             canonical_was_absent = not canonical.exists()
+            if sink_attack:
+                changed = strict_json(bytes(raw).decode("utf-8")); changed["summary"] = sink_attack
+                changed_raw = json.dumps(changed, separators=(",", ":")).encode()
+                if sink_attack == "path_swap":
+                    displaced = sink.with_name(sink.name + ".bound-object")
+                    sink.rename(displaced); sink.write_bytes(changed_raw)
+                else:
+                    fdw = os.open(sink, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0))
+                    try: os.ftruncate(fdw, 0); os.write(fdw, changed_raw); os.fsync(fdw)
+                    finally: os.close(fdw)
             if second_promotion:
                 canonical.write_bytes(bytes(raw)); injected = True
             (pause / "release-1").write_text("release")
@@ -1149,22 +1189,28 @@ if mode == 'output_then_fail': sys.exit(17)
             thread.join(timeout=15)
         finally:
             module.subprocess.Popen = original
-            os.environ.pop("H032_RESULT_MODE", None); os.environ.pop("H032_SINK_PAUSE_ROOT", None)
+            launch_mode[0] = "valid"; launch_extra.pop("H032_SINK_PAUSE_ROOT", None)
             if thread.is_alive():
                 (pause / "release-1").touch(); (pause / "release-2").touch(); thread.join(timeout=5)
         outcome = box[0] if len(box) == 1 else (False, "gate causal run incomplete", 0, 0, [])
+        displaced = paths.get("sink", work).with_name(paths.get("sink", work).name + ".bound-object")
+        if displaced.exists(): displaced.unlink()
         if second_promotion and paths.get("canonical", work).exists(): paths["canonical"].unlink()
         shutil.rmtree(pause)
         return outcome, identities, canonical_was_absent, injected
     effect_once = causal_result_case("paused_valid")
     effect_two_values = causal_result_case("two_values")
     effect_two_promotions = causal_result_case("paused_valid", True)
+    effect_sink_mutation = causal_result_case("paused_valid", sink_attack="mutation")
+    effect_sink_swap = causal_result_case("paused_valid", sink_attack="path_swap")
     effect_once_ok = effect_once[0][0] and len(effect_once[1]) == 1 and effect_once[2]
     effect_two_values_caught = (not effect_two_values[0][0] and len(effect_two_values[1]) == 2
                                 and len({item[2] for item in effect_two_values[1]}) == 2)
     effect_two_promotions_caught = (not effect_two_promotions[0][0]
                                     and len(effect_two_promotions[1]) == 1
                                     and effect_two_promotions[2] and effect_two_promotions[3])
+    effect_sink_attacks_caught = (not effect_sink_mutation[0][0]
+                                  and not effect_sink_swap[0][0])
 
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
@@ -1185,7 +1231,7 @@ if mode == 'output_then_fail': sys.exit(17)
         raise RuntimeError("cannot import isolated physical controller")
     physical_module = importlib.util.module_from_spec(physical_spec)
     sys.modules[physical_spec.name] = physical_module; physical_spec.loader.exec_module(physical_module)
-    os.environ["H032_RESULT_MODE"] = "valid"
+    launch_mode[0] = "valid"
     try:
         try:
             physical_run = physical_module.run_codex(physical_repo, physical_repo, "TEST_AUTHOR", "H032")
@@ -1194,7 +1240,7 @@ if mode == 'output_then_fail': sys.exit(17)
             physical_case = (False, f"{type(exc).__name__}:{exc}")
         physical_capture = safe_capture()
     finally:
-        os.environ.pop("H032_RESULT_MODE", None)
+        launch_mode[0] = "valid"
     physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
     physical_canonical = Path(physical_capture.get("canonical_result", "/private/tmp/h032-missing-physical-canonical"))
     live_git = physical_module.common_git_dir(physical_repo).resolve()
@@ -1218,8 +1264,9 @@ if mode == 'output_then_fail': sys.exit(17)
     result_delivery_ok = (
         valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
-        and external_replay_ok and read_attacks_ok
+        and external_replay_ok and read_attacks_ok and reader_variants_ok
         and effect_once_ok and effect_two_values_caught and effect_two_promotions_caught
+        and effect_sink_attacks_caught
         and oversized_positive[0][0]
         and atomic_ok and timeout_ok and object_attacks_ok
         and cleanup_error_ok and interruption_quiescent and tracked_quiescent
@@ -1236,7 +1283,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),

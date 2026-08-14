@@ -972,3 +972,12 @@ independent of parser, mmap/FileIO/raw/fd helper, or atomic-publication API choi
 process oracle assigns a session at Popen return and exercises timeout and SIGTERM with
 a rapid double-fork+setsid+exec late writer; delayed success requires absent staging root,
 no live recorded identity or process group, and no late filesystem effect.
+
+R11 removes fixture authority from the imported subject's environment. Mode, capture
+and pause controls live in judge state and are added only by the final provider-child
+interceptor after production has constructed its launch environment. Result acceptance
+uses opened-object dev/inode/value and promotion effects; mmap, FileIO, raw, dup-fd and
+bounded helper reads are positive equivalent routes. The observer does not add or alter
+Popen session kwargs. Its hostile double-fork+setsid child receives no cooperative
+ledger/marker channel and can derive only the real private output parent for its delayed
+external write, which timeout and SIGTERM containment must prevent.
