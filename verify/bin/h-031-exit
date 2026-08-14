@@ -101,6 +101,9 @@ SENSITIVE_MODULE_PROXIES = {
 ALLOWED_SYS_ATTRS = {
     "dont_write_bytecode", "path", "stderr", "stdout", "version", "version_info",
 }
+SENSITIVE_FRAME_ATTRS = {
+    "f_globals", "f_builtins", "f_locals", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
+}
 checks: list[tuple[str, bool, str]] = []
 
 
@@ -269,6 +272,8 @@ def process_shape(text: str) -> dict[str, object]:
                 violations.append((owner, node.lineno, f"private-reflection:{node.attr}"))
         if isinstance(node, ast.Attribute) and node.attr in SENSITIVE_MODULE_PROXIES:
             violations.append((owner, node.lineno, f"sensitive-module-proxy:{node.attr}"))
+        if isinstance(node, ast.Attribute) and node.attr in SENSITIVE_FRAME_ATTRS:
+            violations.append((owner, node.lineno, f"sensitive-frame-reflection:{node.attr}"))
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile"}:
@@ -487,6 +492,10 @@ try:
         "SYS_SETPROFILE_FRAME": "\ndef h031_profile(frame, event, arg):\n    return frame.f_globals['subprocess'].Popen(['/bin/true'])\nsys.setprofile(h031_profile)\n",
         "BUILTIN_BREAKPOINT": "\nbreakpoint()\n",
         "MODULE_LOADER_GLOBAL": "\n__loader__.load_module('ctypes')\n",
+        "GENERATOR_FRAME_GLOBALS": "\ndef h031_gen():\n    yield 1\nh031_gen().gi_frame.f_globals['subprocess'].Popen(['/bin/true'])\n",
+        "COROUTINE_FRAME_GLOBALS": "\nasync def h031_coro():\n    return 1\nh031_coro().cr_frame.f_globals['subprocess'].Popen(['/bin/true'])\n",
+        "ASYNCGEN_FRAME_GLOBALS": "\nasync def h031_asyncgen():\n    yield 1\nh031_asyncgen().ag_frame.f_globals['subprocess'].Popen(['/bin/true'])\n",
+        "TRACEBACK_FRAME_GLOBALS": "\nh031_tb.tb_frame.f_globals['subprocess'].Popen(['/bin/true'])\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",

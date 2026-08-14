@@ -655,3 +655,8 @@ the frame's public globals then exposed subprocess and dynamic import. Direct sy
 the six attributes the current product already uses. Trace, profile, hooks, frames and registries are not
 available to H-031 implementation. Ambient module-loader globals plus builtins that can invoke dynamic
 debug/help machinery also reject on load. Dedicated mutants bind each newly closed capability.
+
+Ninth review recovered globals from public frame carriers without calling sys: generators, coroutines,
+async generators and tracebacks expose frame objects, whose public namespaces contain subprocess and
+builtins. All frame-carrier and frame-namespace attributes are now sensitive reflection and reject in
+the whole module. None exists in current production; four independent mutants bind the carrier family.
