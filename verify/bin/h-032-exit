@@ -558,7 +558,7 @@ if mode == 'output_then_fail': sys.exit(17)
                           ("os","preadv"),("os","fdopen"),("os","dup"),("os","close"),
                       ("os","fsync"),("os","open"),("os","replace"),
                       ("os","lseek"),("os","readlink"),
-                      ("io","FileIO"),("mmap","mmap"),("hashlib","sha256"),
+                      ("io","FileIO"),("io","BytesIO"),("mmap","mmap"),("hashlib","sha256"),
                       ("io","BufferedReader"),("json","loads"),
                       ("stat","S_ISREG"),("stat","S_IMODE")}
             capability_methods = {"read","readinto","read1","readinto1","readall",
@@ -730,8 +730,15 @@ if mode == 'output_then_fail': sys.exit(17)
                         "executable_path","executable_sha256",
                     "code_mode_host_path","code_mode_host_sha256"}}
             origin_names={"_new_run_id","_new_invocation_id"}
-            secrets_imports=[item for item in candidate_tree.body if isinstance(item,ast.Import)
-                for alias in item.names if alias.name=="secrets" and alias.asname is None]
+            secrets_imports=[(item,alias) for item in ast.walk(candidate_tree)
+                if isinstance(item,ast.Import) for alias in item.names if alias.name=="secrets"]
+            secrets_from_imports=[item for item in ast.walk(candidate_tree)
+                if isinstance(item,ast.ImportFrom)
+                and (item.module=="secrets" or (item.module or "").startswith("secrets."))]
+            exact_secrets_import=(len(secrets_imports)==1 and not secrets_from_imports
+                and secrets_imports[0][0] in candidate_tree.body
+                and secrets_imports[0][1].asname is None
+                and len(secrets_imports[0][0].names)==1)
             secrets_rebinds=[item for item in ast.walk(candidate_tree)
                 if isinstance(item,ast.Name) and item.id=="secrets"
                 and isinstance(item.ctx,(ast.Store,ast.Del))]
@@ -790,7 +797,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 origin_body_ok[origin_name]=(origin is not None
                     and ast.dump(origin,include_attributes=False)
                         == ast.dump(expected,include_attributes=False)
-                    and len(secrets_imports)==1 and not secrets_rebinds
+                    and exact_secrets_import and not secrets_rebinds
                     and not entropy_mutations)
             allowed_entropy_calls={id(origin.body[0].value) for origin in
                 (top_functions.get(name) for name in origin_names)
@@ -950,6 +957,14 @@ if mode == 'output_then_fail': sys.exit(17)
                 if fn.args.kwarg is not None:
                     env[fn.args.kwarg.arg]=seeds.get(fn.args.kwarg.arg,frozenset({UNKNOWN}))
                 returns=[]
+                def target_effect(target,env):
+                    if isinstance(target,ast.Starred): return target_effect(target.value,env)
+                    if isinstance(target,(ast.Tuple,ast.List)):
+                        return r17_join(*(target_effect(item,env) for item in target.elts))
+                    if isinstance(target,ast.Attribute): return r17_expr(target.value,env)
+                    if isinstance(target,ast.Subscript):
+                        return r17_join(r17_expr(target.value,env),r17_expr(target.slice,env))
+                    return frozenset()
                 for _ in range(max(2,len(list(runtime_walk_function(fn))))):
                     changed=False;returns=[]
                     for item in runtime_walk_function(fn):
@@ -957,6 +972,9 @@ if mode == 'output_then_fail': sys.exit(17)
                             targets=item.targets if isinstance(item,ast.Assign) else [item.target]
                             value=r17_expr(item.value,env)
                             for target in targets:
+                                target_flow=target_effect(target,env)
+                                if target_flow & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,PROCESS_OBJECT}:
+                                    process_binding_unresolved.append(type(target).__name__)
                                 names=r17_targets(target)
                                 if not names and value & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,
                                                           PROCESS_OBJECT}:
@@ -965,7 +983,8 @@ if mode == 'output_then_fail': sys.exit(17)
                                     joined=r17_join(env.get(name,frozenset()),value)
                                     if joined != env.get(name): env[name]=joined;changed=True
                         elif isinstance(item,ast.AugAssign):
-                            value=r17_join(r17_expr(item.target,env),r17_expr(item.value,env))
+                            value=r17_join(r17_expr(item.value,env),target_effect(item.target,env),
+                                           r17_expr(item.target,env))
                             names=r17_targets(item.target)
                             if not names and value & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,
                                                       PROCESS_OBJECT}:
@@ -973,6 +992,8 @@ if mode == 'output_then_fail': sys.exit(17)
                             for name in names:
                                 joined=r17_join(env.get(name,frozenset()),value)
                                 if joined != env.get(name): env[name]=joined;changed=True
+                        elif isinstance(item,ast.Delete):
+                            for target in item.targets: target_effect(target,env)
                         elif isinstance(item,ast.Return): returns.append(r17_expr(item.value,env))
                         elif isinstance(item,ast.Expr): r17_expr(item.value,env)
                         elif isinstance(item,(ast.If,ast.While,ast.Assert)):
@@ -1221,8 +1242,10 @@ if mode == 'output_then_fail': sys.exit(17)
         ifexp="_r26_entropy = secrets if True else None\n"
         boolop="_r26_entropy = secrets or None\n"
         callable_alias="_r26_entropy = secrets.token_hex\n"
+        import_alias="import secrets as _r27_secrets\n_r27_entropy = _r27_secrets.token_hex(16)\n"
         entropy_rejects=all(not analyze_candidate_tree(r25_tree_with_module(source))["verdict"]
-                            for source in (computed_key,dict_update,ifexp,boolop,callable_alias))
+                            for source in (computed_key,dict_update,ifexp,boolop,callable_alias,
+                                           import_alias))
         def r25_receiver_variant(first,second):
             tree=copy.deepcopy(candidate_tree)
             seam=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
@@ -1247,8 +1270,23 @@ if mode == 'output_then_fail': sys.exit(17)
         aug_run.body=ast.parse("_r26_x = 0\n_r26_x += _r26_spawn(subprocess.Popen)\n").body+aug_run.body
         ast.fix_missing_locations(aug_tree)
         augassign_rejects=not analyze_candidate_tree(aug_tree)["verdict"]
+        def r27_target_mutant(statement):
+            tree=copy.deepcopy(candidate_tree)
+            tree.body.append(ast.parse(
+                "def _r27_spawn(ctor):\n    return ctor(['/usr/bin/true'])\n").body[0])
+            run=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                     and node.name=="run_codex")
+            run.body=ast.parse("_r27_holder = {}\n"+statement).body+run.body
+            ast.fix_missing_locations(tree);return not analyze_candidate_tree(tree)["verdict"]
+        target_effects_reject=(r27_target_mutant(
+                "_r27_holder[_r27_spawn(subprocess.Popen)] = 1\n")
+            and r27_target_mutant(
+                "_r27_spawn(subprocess.Popen).attribute = 1\n")
+            and r27_target_mutant(
+                "del _r27_holder[_r27_spawn(subprocess.Popen)]\n"))
         r25_static_mutants_ok=(entropy_rejects and receiver_rejects
-                               and receiver_positive and augassign_rejects)
+                               and receiver_positive and augassign_rejects
+                               and target_effects_reject)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own

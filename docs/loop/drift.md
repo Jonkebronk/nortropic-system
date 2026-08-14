@@ -1119,3 +1119,11 @@ without mutation. Receiver ordering controls now use an otherwise admitted
 passes while receiver provenance fails. The structured interpreter also evaluates
 augmented-assignment targets and right-hand effects; a helper-mediated
 `x += spawn(Popen)` adds a real process site and rejects.
+
+R27 requires the entropy import itself to be exactly one standalone module-level
+`import secrets`, unaliased, with no `ImportFrom` or other secrets-resolving import
+anywhere. `io.BytesIO` is now explicit in the one shared semantic pure vocabulary,
+so its `read` wrong-receiver controls prove graph admissibility rather than relying
+on an accidental default. Assignment interpretation evaluates RHS and then target
+effects for attributes, subscript values/slices, nested tuple/list/star targets,
+annotated/named forms and deletes; target-side Popen calls therefore count.
