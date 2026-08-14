@@ -180,10 +180,15 @@ def process_shape(text: str) -> dict[str, object]:
         owner = owners.get(node, "<module>")
         if isinstance(node, ast.Import):
             for alias in node.names:
+                if alias.name == "importlib" or alias.name.startswith("importlib."):
+                    violations.append((owner, node.lineno, f"dynamic-import-module:{alias.name}"))
                 if alias.name in PROCESS_ATTRS and alias.asname is not None:
                     violations.append((owner, node.lineno, f"import-alias:{alias.name} as {alias.asname}"))
-        elif isinstance(node, ast.ImportFrom) and node.module in PROCESS_ATTRS:
-            violations.append((owner, node.lineno, f"from-import:{node.module}"))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module in PROCESS_ATTRS:
+                violations.append((owner, node.lineno, f"from-import:{node.module}"))
+            if node.module == "importlib" or (node.module or "").startswith("importlib."):
+                violations.append((owner, node.lineno, f"dynamic-from-import:{node.module}"))
         elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             if isinstance(node.value, ast.Name) and node.value.id in PROCESS_ATTRS:
                 violations.append((owner, node.lineno, f"module-assignment:{node.value.id}"))
@@ -202,6 +207,8 @@ def process_shape(text: str) -> dict[str, object]:
             )
             if not ((isinstance(parent, ast.Attribute) and parent.value is node) or safe_getattr):
                 violations.append((owner, node.lineno, f"bare-process-module:{node.id}"))
+        if isinstance(node, ast.Name) and node.id == "__import__" and isinstance(node.ctx, ast.Load):
+            violations.append((owner, node.lineno, "dynamic-import-builtin"))
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             module, attr = node.value.id, node.attr
             if module in PROCESS_ATTRS and attr == "__dict__":
@@ -223,10 +230,6 @@ def process_shape(text: str) -> dict[str, object]:
                 if (not isinstance(attr, ast.Constant) or not isinstance(attr.value, str)
                         or attr.value in PROCESS_ATTRS[target.id]):
                     violations.append((owner, node.lineno, f"dynamic-process-access:{target.id}"))
-        if (isinstance(node.func, ast.Name) and node.func.id == "__import__" and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and node.args[0].value in PROCESS_ATTRS):
-            violations.append((owner, node.lineno, f"dynamic-import:{node.args[0].value}"))
         if not (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)):
             continue
         module, attr = node.func.value.id, node.func.attr
@@ -286,11 +289,19 @@ def route_observation(argv: list[str]) -> dict[str, object]:
             models.append(argv[i + 1]); i += 2; continue
         if arg.startswith("--model="):
             models.append(arg.split("=", 1)[1])
+        elif arg.startswith("-m="):
+            models.append(arg[3:])
+        elif arg.startswith("-m") and len(arg) > 2:
+            models.append(arg[2:])
         value = None
         if arg in {"-c", "--config"} and i + 1 < len(argv):
             value = argv[i + 1]; i += 2
         elif arg.startswith("--config="):
             value = arg.split("=", 1)[1]; i += 1
+        elif arg.startswith("-c="):
+            value = arg[3:]; i += 1
+        elif arg.startswith("-c") and len(arg) > 2:
+            value = arg[2:]; i += 1
         else:
             i += 1
         if value is not None and "=" in value:
@@ -371,6 +382,9 @@ try:
         "CLASS_METHOD": "\nclass H031Bad:\n    def go(self):\n        return os.posix_spawn('/bin/true', ['/bin/true'], {})\n",
         "GETATTR": "\ngetattr(subprocess, 'Popen')(['/bin/true'])\n",
         "DYNAMIC_GETATTR": "\nh031_name = 'Popen'\ngetattr(subprocess, h031_name)(['/bin/true'])\n",
+        "IMPORTLIB": "\nimport importlib\nimportlib.import_module('subprocess').Popen(['/bin/true'])\n",
+        "IMPORTLIB_FROM": "\nfrom importlib import import_module\nimport_module('subprocess').Popen(['/bin/true'])\n",
+        "COMPUTED_IMPORT": "\nh031_module = 'sub' + 'process'\n__import__(h031_module).Popen(['/bin/true'])\n",
         "PROCESS_DICTIONARY": "\nsubprocess.__dict__['Popen'](['/bin/true'])\n",
         "DYNAMIC_CODE": "\neval(\"__import__('subprocess').Popen(['/bin/true'])\")\n",
     }
@@ -502,20 +516,30 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
                   journal_file.read_bytes(),
                   sorted(path.name for path in runs_dir.iterdir()) if runs_dir.exists() else [])
         unknown_errors = []
-        for invalid_role in ("UNKNOWN_ROLE", "", "builder"):
-            try:
-                with contextlib.redirect_stdout(muted):
-                    module.run_codex(repo, repo, invalid_role,
-                                     f"H031_GATE_ROLE={invalid_role or 'EMPTY'}")
-                unknown_errors.append("NO_ERROR")
-            except Exception as exc:
-                unknown_errors.append(f"{type(exc).__name__}:{exc}")
+        snapshot_attempts = []
+        original_provider_snapshot = module._provider_snapshot
+        def snapshot_tripwire(_repo):
+            snapshot_attempts.append("CALLED")
+            raise RuntimeError("invalid role reached provider snapshot")
+        module._provider_snapshot = snapshot_tripwire
+        try:
+            for invalid_role in ("UNKNOWN_ROLE", "", "builder"):
+                try:
+                    with contextlib.redirect_stdout(muted):
+                        module.run_codex(repo, repo, invalid_role,
+                                         f"H031_GATE_ROLE={invalid_role or 'EMPTY'}")
+                    unknown_errors.append("NO_ERROR")
+                except Exception as exc:
+                    unknown_errors.append(f"{type(exc).__name__}:{exc}")
+        finally:
+            module._provider_snapshot = original_provider_snapshot
         after = (capture.read_bytes() if capture.exists() else b"",
                  journal_file.read_bytes(),
                  sorted(path.name for path in runs_dir.iterdir()) if runs_dir.exists() else [])
         check("K_UNKNOWN_ROLE_PRE_EFFECT_REJECT",
-              all(error != "NO_ERROR" for error in unknown_errors) and before == after,
-              f"errors={unknown_errors} unchanged={before == after}")
+              all(error != "NO_ERROR" for error in unknown_errors)
+              and not snapshot_attempts and before == after,
+              f"errors={unknown_errors} snapshot_attempts={snapshot_attempts} unchanged={before == after}")
 
         original_run = module.subprocess.run
         spawned: list[list[str]] = []
@@ -569,6 +593,9 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
             "PROFILE": valid_route + ["--profile", "hostile"],
             "OSS": valid_route + ["--oss"],
             "CONFIG_MODEL": valid_route + ["-c", 'model="other"'],
+            "ATTACHED_MODEL_EQUALS": valid_route + ["-m=other"],
+            "ATTACHED_MODEL_COMPACT": valid_route + ["-mother"],
+            "ATTACHED_CONFIG_COMPACT": valid_route + ['-cmodel_reasoning_effort="low"'],
         }
         for label, mutant in routing_mutants.items():
             check("J_ROUTE_" + label + "_REJECT", not route_ok(mutant, EXPECTED["ARCHITECT"]),

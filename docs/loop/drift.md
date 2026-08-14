@@ -601,3 +601,11 @@ retains Design B's explicit composition boundary—one Popen site, one generic s
 literal watch clear—while auditing the whole module for methods, lambdas, defaults, containers, aliases,
 dynamic attribute access and dynamic code. It admits ordinary non-provider helpers and harmless role
 call consolidation, so it does not revive the abandoned general Python dataflow evaluator.
+
+Independent review found three gate omissions before publication. Codex accepts attached short model
+and config forms, which can carry competing routing authority; the route oracle now parses and mutates
+those forms. Dynamic `importlib` and computed `__import__` could create an uncounted process boundary,
+so the source-form audit rejects those dispatch mechanisms explicitly. Finally, persistent-state
+comparison alone could miss a provider snapshot created and cleaned before an invalid-role rejection.
+The invalid-role oracle now replaces the production snapshot function with a recording tripwire and
+requires that it is never reached, while retaining the journal, run-directory and provider-effect checks.
