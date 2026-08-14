@@ -705,3 +705,12 @@ The invalid-role execution additionally replaces all available OS/process mutati
 with recording guards that raise before invocation; stdout and stderr are isolated and must stay empty.
 Those guards compose with, rather than replace, the audit hook, process-state snapshot and persistent
 artifact comparisons.
+
+Sixteenth review moved the effect before every previous observation by creating and removing a file at
+module import. It also used the already imported `fcntl.flock` capability and stream objects captured
+before stdout/stderr redirection. Subject import is now inside the same fail-before-operation audit and
+OS/process guard boundary as invalid-role execution, with independent cwd/environment/umask and output
+comparisons. Effectful module-level methods reject structurally. `fcntl.flock` is frozen to its one
+existing lock owner/site and is guarded plus audited at runtime. Direct stdout/stderr objects are frozen
+to the product's exact existing write and error-print forms, so neither stream can be retained for a
+later bypass. Import create-clean, fcntl alias and captured-stream mutants bind each route.

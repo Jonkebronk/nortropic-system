@@ -48,6 +48,7 @@ from __future__ import annotations
 import ast
 import builtins
 import contextlib
+import fcntl
 import hashlib
 import importlib.util
 import io
@@ -128,6 +129,34 @@ EXPECTED_OS_EFFECT_COUNTS = {
     "run_codex:chmod": 5,
 }
 DIRECT_OS_EFFECT_ATTRS = {"chmod", "close", "fdopen", "fsync", "open", "read", "write"}
+EXPECTED_FCNTL_EFFECT_COUNTS = {"acquire_lock:flock": 1}
+EXPECTED_SYS_STREAM_COUNTS = {"main:stderr.print": 4, "run_codex:stdout.write": 1}
+AUDIT_MUTATION_EVENTS = {
+    "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.replace",
+    "os.link", "os.symlink", "os.truncate", "os.chmod",
+    "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp", "os.system",
+    "os.register_at_fork", "os.kill", "os.killpg", "os.chdir", "os.fchdir",
+    "os.putenv", "os.unsetenv", "fcntl.flock",
+    "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "subprocess.Popen",
+}
+GUARDED_OS_NAMES = {
+    "abort", "chdir", "chmod", "chown", "close", "closerange", "dup", "dup2",
+    "execv", "execve", "execvp", "execvpe", "fchdir", "fchmod", "fchown",
+    "fdatasync", "fdopen", "fork", "forkpty", "fsync", "kill", "killpg",
+    "lchown", "link", "lockf", "lseek", "mkdir", "makedirs", "nice", "open",
+    "pipe", "pipe2", "posix_spawn", "posix_spawnp", "putenv", "read", "readv",
+    "remove", "removedirs", "rename", "renames", "replace", "rmdir",
+    "set_blocking", "set_inheritable", "setegid", "seteuid", "setgid", "setgroups",
+    "setpgid", "setpgrp", "setregid", "setresgid", "setresuid", "setreuid",
+    "setsid", "setuid", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv",
+    "spawnve", "spawnvp", "spawnvpe", "symlink", "system", "truncate", "umask",
+    "unlink", "unsetenv", "write", "writev",
+}
+MODULE_EFFECT_METHODS = {
+    "chmod", "close", "flush", "hardlink_to", "mkdir", "open", "rename", "replace",
+    "rmdir", "symlink_to", "touch", "truncate", "unlink", "write", "write_bytes",
+    "write_text", "writelines",
+}
 SENSITIVE_FRAME_ATTRS = {
     "f_globals", "f_builtins", "f_locals", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
 }
@@ -140,6 +169,55 @@ class DuplicateKey(ValueError):
 
 class ProductFailure(RuntimeError):
     pass
+
+
+def effect_guard(effects, name):
+    def reject(*args, **kwargs):
+        effects.append((name, repr(args[:3]), sorted(kwargs)))
+        raise ProductFailure(f"guarded pre-role effect: {name}")
+    return reject
+
+
+def install_effect_guards(effects):
+    saved = []
+    for name in sorted(GUARDED_OS_NAMES):
+        function = getattr(os, name, None)
+        if callable(function):
+            saved.append((os, name, function))
+            setattr(os, name, effect_guard(effects, "os." + name))
+    saved.append((subprocess, "Popen", subprocess.Popen))
+    subprocess.Popen = effect_guard(effects, "subprocess.Popen")
+    saved.append((fcntl, "flock", fcntl.flock))
+    fcntl.flock = effect_guard(effects, "fcntl.flock")
+    return saved
+
+
+def restore_effect_guards(saved):
+    for target, name, function in reversed(saved):
+        setattr(target, name, function)
+
+
+def measure_umask():
+    value = os.umask(0o077)
+    os.umask(value)
+    return value
+
+
+def audit_effect_hook(active, effects):
+    write_flags = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+    def hook(event, args):
+        if not active[0]:
+            return
+        forbidden = event in AUDIT_MUTATION_EVENTS
+        if event == "open":
+            mode = args[1] if len(args) > 1 else None
+            flags = args[2] if len(args) > 2 else 0
+            forbidden = ((isinstance(mode, str) and any(char in mode for char in "wax+"))
+                         or (isinstance(flags, int) and flags & write_flags))
+        if forbidden:
+            effects.append((event, repr(args[:3])))
+            raise ProductFailure(f"forbidden pre-role effect: {event}")
+    return hook
 
 
 def strict_json(raw: str):
@@ -224,6 +302,8 @@ def process_shape(text: str) -> dict[str, object]:
     violations: list[tuple[str, int, str]] = []
     import_inventory: list[str] = []
     os_effect_counts: dict[str, int] = {}
+    fcntl_effect_counts: dict[str, int] = {}
+    sys_stream_counts: dict[str, int] = {}
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
@@ -299,6 +379,51 @@ def process_shape(text: str) -> dict[str, object]:
                 violations.append((owner, node.lineno, "bare-sys-module"))
             elif parent.attr not in ALLOWED_SYS_ATTRS:
                 violations.append((owner, node.lineno, f"unapproved-sys-attribute:sys.{parent.attr}"))
+            elif parent.attr == "stdout":
+                stream_parent = parents.get(parent)
+                stream_grandparent = parents.get(stream_parent)
+                safe_stdout = (
+                    owner == "run_codex"
+                    and isinstance(stream_parent, ast.Attribute)
+                    and stream_parent.value is parent and stream_parent.attr == "write"
+                    and isinstance(stream_grandparent, ast.Call)
+                    and stream_grandparent.func is stream_parent
+                )
+                if safe_stdout:
+                    key = f"{owner}:stdout.write"
+                    sys_stream_counts[key] = sys_stream_counts.get(key, 0) + 1
+                else:
+                    violations.append((owner, node.lineno, "capturable-sys-stdout"))
+            elif parent.attr == "stderr":
+                stream_parent = parents.get(parent)
+                stream_grandparent = parents.get(stream_parent)
+                safe_stderr = (
+                    owner == "main"
+                    and isinstance(stream_parent, ast.keyword) and stream_parent.arg == "file"
+                    and stream_parent.value is parent
+                    and isinstance(stream_grandparent, ast.Call)
+                    and isinstance(stream_grandparent.func, ast.Name)
+                    and stream_grandparent.func.id == "print"
+                )
+                if safe_stderr:
+                    key = f"{owner}:stderr.print"
+                    sys_stream_counts[key] = sys_stream_counts.get(key, 0) + 1
+                else:
+                    violations.append((owner, node.lineno, "capturable-sys-stderr"))
+        if isinstance(node, ast.Name) and node.id == "fcntl" and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            if not (isinstance(parent, ast.Attribute) and parent.value is node):
+                violations.append((owner, node.lineno, "bare-fcntl-module"))
+            elif parent.attr not in {"LOCK_EX", "LOCK_NB", "flock"}:
+                violations.append((owner, node.lineno,
+                                   f"unapproved-fcntl-attribute:fcntl.{parent.attr}"))
+            elif parent.attr == "flock":
+                effect_parent = parents.get(parent)
+                if not (isinstance(effect_parent, ast.Call) and effect_parent.func is parent):
+                    violations.append((owner, node.lineno, "fcntl-effect-reference:fcntl.flock"))
+                else:
+                    key = f"{owner}:flock"
+                    fcntl_effect_counts[key] = fcntl_effect_counts.get(key, 0) + 1
         if isinstance(node, ast.Name) and node.id == "os" and isinstance(node.ctx, ast.Load):
             parent = parents.get(node)
             safe_getattr = (
@@ -359,6 +484,10 @@ def process_shape(text: str) -> dict[str, object]:
             violations.append((owner, node.lineno, f"sensitive-frame-reflection:{node.attr}"))
         if not isinstance(node, ast.Call):
             continue
+        if (owner == "<module>" and isinstance(node.func, ast.Attribute)
+                and node.func.attr in MODULE_EFFECT_METHODS):
+            violations.append((owner, node.lineno,
+                               f"module-import-effect-method:{node.func.attr}"))
         if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile"}:
             violations.append((owner, node.lineno, f"dynamic-code:{node.func.id}"))
         if isinstance(node.func, ast.Name) and node.func.id == "type":
@@ -456,6 +585,10 @@ def process_shape(text: str) -> dict[str, object]:
         violations.append(("<module>", 0, f"import-inventory:{sorted(import_inventory)}"))
     if os_effect_counts != EXPECTED_OS_EFFECT_COUNTS:
         violations.append(("<module>", 0, f"os-effect-inventory:{os_effect_counts}"))
+    if fcntl_effect_counts != EXPECTED_FCNTL_EFFECT_COUNTS:
+        violations.append(("<module>", 0, f"fcntl-effect-inventory:{fcntl_effect_counts}"))
+    if sys_stream_counts != EXPECTED_SYS_STREAM_COUNTS:
+        violations.append(("<module>", 0, f"sys-stream-inventory:{sys_stream_counts}"))
     exact = counts == {"run": 1, "run_codex": 1, "clear": 1}
     return {
         "boundary_ok": exact and not violations,
@@ -642,6 +775,14 @@ try:
         "OS_UNKNOWN_PROCESS_STATE": "\nos.nice(1)\n",
         "OS_WRITE_REFERENCE": "\nh031_write = os.write\n",
         "OS_CLOSE_REFERENCE": "\nh031_close = os.close\n",
+        "FCNTL_FLOCK_REFERENCE": "\nh031_flock = fcntl.flock\n",
+        "SYS_STDOUT_REFERENCE": "\nH031_CAPTURED_STDOUT = sys.stdout\n",
+        "SYS_STDERR_REFERENCE": "\nH031_CAPTURED_STDERR = sys.stderr\n",
+        "MODULE_CREATE_CLEAN": (
+            "\nh031_import_path = Path('/private/tmp/h031-import-mutant')\n"
+            "h031_import_path.write_text('effect', encoding='utf-8')\n"
+            "h031_import_path.unlink()\n"
+        ),
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
@@ -746,10 +887,36 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
             odombart("K_IMPORT", "cannot create production module spec")
         module = importlib.util.module_from_spec(module_spec)
         sys.modules[module_spec.name] = module
+        import_active = [False]
+        import_effects = []
+        import_guarded_effects = []
+        sys.addaudithook(audit_effect_hook(import_active, import_effects))
+        import_before = (os.getcwd(), dict(os.environ), measure_umask())
+        import_output = io.StringIO()
+        import_error = None
+        import_guards = install_effect_guards(import_guarded_effects)
         try:
-            module_spec.loader.exec_module(module)
+            import_active[0] = True
+            with contextlib.redirect_stdout(import_output), contextlib.redirect_stderr(import_output):
+                module_spec.loader.exec_module(module)
         except Exception as exc:
-            raise ProductFailure(f"subject import failed: {type(exc).__name__}:{exc}") from exc
+            import_error = f"{type(exc).__name__}:{exc}"
+        finally:
+            import_active[0] = False
+            restore_effect_guards(import_guards)
+        import_after = (os.getcwd(), dict(os.environ), measure_umask())
+        os.chdir(import_before[0])
+        os.environ.clear()
+        os.environ.update(import_before[1])
+        os.umask(import_before[2])
+        import_output_ok = not import_output.closed and import_output.getvalue() == ""
+        import_ok = (import_error is None and not import_effects and not import_guarded_effects
+                     and import_output_ok and import_before == import_after)
+        check("K_MODULE_IMPORT_PRE_EFFECT", import_ok,
+              f"error={import_error} audit={import_effects} guarded={import_guarded_effects} "
+              f"output_ok={import_output_ok} process_unchanged={import_before == import_after}")
+        if import_error is not None:
+            raise ProductFailure(f"subject import failed: {import_error}")
         seq = [0]
         original_now_id = module.now_id
         def fixture_now_id():
@@ -806,65 +973,13 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
         before = (capture.read_bytes() if capture.exists() else b"",
                   journal_file.read_bytes(),
                   sorted(path.name for path in runs_dir.iterdir()) if runs_dir.exists() else [])
-        def current_umask():
-            value = os.umask(0o077)
-            os.umask(value)
-            return value
-        before_process = (os.getcwd(), dict(os.environ), current_umask())
+        before_process = (os.getcwd(), dict(os.environ), measure_umask())
         unknown_errors = []
         forbidden_effects = []
         guarded_effects = []
         audit_active = [False]
-        write_flags = (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
-        mutation_events = {
-            "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.replace",
-            "os.link", "os.symlink", "os.truncate", "os.chmod",
-            "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp", "os.system",
-            "os.register_at_fork",
-            "os.kill", "os.killpg",
-            "os.chdir", "os.fchdir", "os.putenv", "os.unsetenv",
-            "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "subprocess.Popen",
-        }
-        def audit_hook(event, args):
-            if not audit_active[0]:
-                return
-            if event == "open":
-                mode = args[1] if len(args) > 1 else None
-                flags = args[2] if len(args) > 2 else 0
-                if ((isinstance(mode, str) and any(char in mode for char in "wax+"))
-                        or (isinstance(flags, int) and flags & write_flags)):
-                    forbidden_effects.append((event, repr(args[:3])))
-                    raise ProductFailure(f"forbidden pre-role effect: {event}")
-            elif event in mutation_events:
-                forbidden_effects.append((event, repr(args[:3])))
-                raise ProductFailure(f"forbidden pre-role effect: {event}")
-        sys.addaudithook(audit_hook)
-        guarded_os = {}
-        guarded_os_names = {
-            "abort", "chdir", "chmod", "chown", "close", "closerange", "dup", "dup2",
-            "execv", "execve", "execvp", "execvpe", "fchdir", "fchmod", "fchown",
-            "fdatasync", "fdopen", "fork", "forkpty", "fsync", "kill", "killpg",
-            "lchown", "link", "lockf", "lseek", "mkdir", "makedirs", "nice", "open",
-            "pipe", "pipe2", "posix_spawn", "posix_spawnp", "putenv", "read", "readv",
-            "remove", "removedirs", "rename", "renames", "replace", "rmdir",
-            "set_blocking", "set_inheritable", "setegid", "seteuid", "setgid", "setgroups",
-            "setpgid", "setpgrp", "setregid", "setresgid", "setresuid", "setreuid",
-            "setsid", "setuid", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv",
-            "spawnve", "spawnvp", "spawnvpe", "symlink", "system", "truncate", "umask",
-            "unlink", "unsetenv", "write", "writev",
-        }
-        def effect_guard(name):
-            def reject(*args, **kwargs):
-                guarded_effects.append((name, repr(args[:3]), sorted(kwargs)))
-                raise ProductFailure(f"guarded pre-role effect: {name}")
-            return reject
-        for name in sorted(guarded_os_names):
-            function = getattr(module.os, name, None)
-            if callable(function):
-                guarded_os[name] = function
-                setattr(module.os, name, effect_guard("os." + name))
-        original_popen = module.subprocess.Popen
-        module.subprocess.Popen = effect_guard("subprocess.Popen")
+        sys.addaudithook(audit_effect_hook(audit_active, forbidden_effects))
+        invalid_guards = install_effect_guards(guarded_effects)
         invalid_output = io.StringIO()
         try:
             audit_active[0] = True
@@ -878,11 +993,9 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
                     unknown_errors.append(f"{type(exc).__name__}:{exc}")
         finally:
             audit_active[0] = False
-            module.subprocess.Popen = original_popen
-            for name, function in guarded_os.items():
-                setattr(module.os, name, function)
+            restore_effect_guards(invalid_guards)
         output_ok = not invalid_output.closed and invalid_output.getvalue() == ""
-        after_process = (os.getcwd(), dict(os.environ), current_umask())
+        after_process = (os.getcwd(), dict(os.environ), measure_umask())
         os.chdir(before_process[0])
         os.environ.clear()
         os.environ.update(before_process[1])
