@@ -560,3 +560,11 @@ that reaches the launcher's pre-Seatbelt `/usr/bin/env` step: fixed non-caller P
 caller `PYTHON*` variable. Other provider environment is retained. Dedicated fake PATH and
 launcher-specific `sitecustomize` controls remained silent; the actual provider still ran below the
 real launcher with G20 namespace attacks denied.
+
+Review also demonstrated that a preserved caller `HOME` enabled Python 3.12's user-site
+`usercustomize.py` before the script and therefore before G20. Removing HOME would break the
+provider's credential environment, so the launcher environment instead forces no-user-site and safe
+path startup, disables bytecode emission, strips all caller `PYTHON*`, and explicitly strips Darwin's
+non-PYTHON-prefixed `__PYVENV_LAUNCHER__` framework redirect. HOME and unrelated provider variables
+remain intact. A combined hostile HOME, usercustomize, PATH, PYTHONPATH and pyvenv-launcher run left
+all intercept markers absent and retained the live provider/G20 effects.

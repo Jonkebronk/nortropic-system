@@ -701,8 +701,12 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
     # receives a closed interpreter-selection environment, not caller PATH or
     # Python startup/module injection. Other provider variables are preserved.
     env = {key: value for key, value in os.environ.items()
-           if not key.upper().startswith("PYTHON")}
-    env.update(PATH=CONTROLLER_LAUNCH_PATH, NORTROPIC_TRUST_ROOT=str(snapshot_root))
+           if not key.upper().startswith("PYTHON") and key != "__PYVENV_LAUNCHER__"}
+    env.update(PATH=CONTROLLER_LAUNCH_PATH,
+               PYTHONNOUSERSITE="1",
+               PYTHONSAFEPATH="1",
+               PYTHONDONTWRITEBYTECODE="1",
+               NORTROPIC_TRUST_ROOT=str(snapshot_root))
     thread_id: str | None = None
     try:
         # The final read is deliberately adjacent to the trust transition.
