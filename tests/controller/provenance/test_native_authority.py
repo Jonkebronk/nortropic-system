@@ -225,7 +225,7 @@ class NativeAuthorityTests(unittest.TestCase):
                          self.signal_marker.read_text() if self.signal_marker.exists() else "")
         self.assertEqual(set((self.authority / "evidence").iterdir()), before)
 
-    def test_identity_drop_does_not_require_primary_gid_as_supplementary(self):
+    def test_identity_drop_accepts_implicit_primary_gid_after_clear(self):
         argv = self.producer_args(PROBES[0][0])
         argv[0] = self.darwin_producer
         q = run(argv)

@@ -101,8 +101,9 @@ static int drop_identity(uid_t uid,gid_t gid){
   return uid==getuid()&&gid==getgid();
 #else
   if(setgroups(0,NULL)||setgid(gid)||setuid(uid))return 0;
+  gid_t implicit_group=0;
   return getuid()==uid&&geteuid()==uid&&getgid()==gid&&getegid()==gid&&
-    getgroups(0,NULL)==0;
+    getgroups(1,&implicit_group)==1&&implicit_group==gid;
 #endif
 }
 static int root_fd(void){
