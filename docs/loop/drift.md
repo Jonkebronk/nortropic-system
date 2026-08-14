@@ -953,3 +953,12 @@ capability inventory (mmap/FileIO/dup/raw/buffer/detach absent and the two pre-e
 non-result memoryview sites unchanged). Timeout/SIGTERM monitoring records provider
 families by pid, ppid and process-start identity while alive, then requires every such
 identity gone after delay; the actual staging tree and survivor fd inventories are zero.
+
+R9 removes parser-function, rename-function and raw source-substring authority. A live
+effect observer binds the opened transport's dev/inode and records complete stable
+schema-valid value identities; a second-value provider produces two distinct accepted
+boundaries and is caught. Canonical publication is observed as an absent-to-present
+complete object-identity transition independent of helper API; an injected second inode
+transition is caught. Both timeout and SIGTERM are sampled from spawn, staging roots
+must be absent (not empty), and a fast provider fork/exec descendant that writes late
+residue must be discovered by pid/ppid/start ancestry and rejected after delay.
