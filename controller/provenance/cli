@@ -16,6 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "verify/h034/kernel"
 H034_MANIFEST_SHA256 = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
+SERVICE_SHA256 = "3814cbad8671d835328d6674cf19f82392ab3e3a27868a12329545e6356db44f"
+SERVICE_GIT_PATH = "controller/provenance/dist/h033-service"
 AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
 PROTECTED_KERNEL = AUTHORITY / "bin/h034-kernel"
 PROTECTED_CONSUMER = AUTHORITY / "bin/request-consumer"
@@ -88,7 +90,7 @@ def open_dir_at(parent, name):
     return fd
 
 
-def open_protected_executable(name, repository_fd=None):
+def open_protected_executable(name, exact_bytes=None, require_setuid=False):
     opened = []
     try:
         parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -103,11 +105,14 @@ def open_protected_executable(name, repository_fd=None):
         executable_fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
         opened.append(executable_fd)
         protected = os.fstat(executable_fd)
-        if not root_protected(protected, "file", True):
+        if (not root_protected(protected, "file", True)
+                or (require_setuid and not (protected.st_mode & stat.S_ISUID))):
             fail(2)
-        if repository_fd is not None:
-            repository = os.fstat(repository_fd)
-            if (repository.st_dev, repository.st_ino) != (protected.st_dev, protected.st_ino):
+        if exact_bytes is not None:
+            raw = os.pread(executable_fd, protected.st_size, 0)
+            middle = os.fstat(executable_fd)
+            if (len(raw) != protected.st_size or raw != exact_bytes
+                    or object_identity(protected) != object_identity(middle)):
                 fail(2)
         return opened, executable_fd
     except BaseException:
@@ -117,8 +122,19 @@ def open_protected_executable(name, repository_fd=None):
         raise
 
 
-def open_protected_kernel(repository_fd):
-    return open_protected_executable("h034-kernel", repository_fd)
+def open_protected_kernel():
+    return open_protected_executable("h034-kernel")
+
+
+def exact_git_object(path, digest):
+    try:
+        raw = subprocess.run(["/usr/bin/git", "-C", str(ROOT), "show", "HEAD:" + path],
+                             check=True, capture_output=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        fail(2)
+    if hashlib.sha256(raw).hexdigest() != digest:
+        fail(2)
+    return raw
 
 
 def close_all(fds):
@@ -139,7 +155,8 @@ def process_group_gone(pgid):
 
 def consume_request(v):
     try:
-        protected_fds, service_fd = open_protected_executable("request-consumer")
+        service_object = exact_git_object(SERVICE_GIT_PATH, SERVICE_SHA256)
+        protected_fds, service_fd = open_protected_executable("request-consumer", service_object, True)
         before = [object_identity(os.fstat(fd)) for fd in protected_fds]
     except SystemExit:
         raise
@@ -177,6 +194,43 @@ def consume_request(v):
     if process.returncode == 0:
         return
     fail(1 if process.returncode == 1 else 2)
+
+
+def call_request_service(name, argv, service_object):
+    try:
+        protected_fds, service_fd = open_protected_executable(name, service_object, True)
+        before = [object_identity(os.fstat(fd)) for fd in protected_fds]
+    except SystemExit:
+        raise
+    except (OSError, ValueError):
+        fail(2)
+    executable = AUTHORITY / "bin" / name
+    try:
+        process = subprocess.Popen([str(executable)] + argv, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, start_new_session=True,
+                                   env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                                        "HOME": "/var/empty", "TMPDIR": "/tmp"})
+        try: out, err = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try: os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            process.communicate()
+            clean = process.poll() is not None and process_group_gone(process.pid)
+            close_all(protected_fds)
+            if not clean: fail(2)
+            fail(2)
+        clean = process.poll() is not None and process_group_gone(process.pid)
+        after = [object_identity(os.fstat(fd)) for fd in protected_fds]
+        current = os.stat(name, dir_fd=protected_fds[-2], follow_symlinks=False)
+        stable = (before == after
+                  and (current.st_dev, current.st_ino) ==
+                      (os.fstat(service_fd).st_dev, os.fstat(service_fd).st_ino))
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        close_all(protected_fds); fail(2)
+    close_all(protected_fds)
+    if not clean or not stable:
+        fail(2)
+    return process.returncode, out, err
 
 
 def stable_regular_at(parent, name):
@@ -268,9 +322,16 @@ def kernel_handoff(fds, v, fixture):
             executable = KERNEL
             handoff_fd = kernel_fd
         else:
-            protected_fds, handoff_fd = open_protected_kernel(kernel_fd)
+            protected_fds, handoff_fd = open_protected_kernel()
             executable = PROTECTED_KERNEL
         handoff = os.fstat(handoff_fd)
+        if not fixture:
+            protected_bytes = os.pread(handoff_fd, handoff.st_size, 0)
+            protected_middle = os.fstat(handoff_fd)
+            if (len(protected_bytes) != handoff.st_size or protected_bytes != kernel_object
+                    or hashlib.sha256(protected_bytes).hexdigest() != manifest["artifact_sha256"]
+                    or object_identity(handoff) != object_identity(protected_middle)):
+                fail(2)
         protected_before = [object_identity(os.fstat(fd)) for fd in protected_fds]
     except SystemExit:
         os.close(kernel_fd)
@@ -374,22 +435,23 @@ def request(argv):
         fail()
     # Creation is deliberately delegated to fixed, independently provisioned
     # OS services. Repository code never fabricates producer/root authority.
-    producer = "/Library/Application Support/Nortropic/provenance/bin/request-producer"
-    observer = "/Library/Application Support/Nortropic/provenance/bin/request-observer"
     try:
         account = pwd.getpwnam(PRODUCER)
-        ps, os_ = os.lstat(producer), os.lstat(observer)
-    except (KeyError, OSError):
+    except KeyError:
         fail(2)
-    if account.pw_uid in (0, os.getuid()) or ps.st_uid != 0 or os_.st_uid != 0 or not protected_mode(ps) or not protected_mode(os_):
+    if account.pw_uid in (0, os.getuid()):
         fail(2)
-    request_id = secrets.token_hex(32)
-    common = ["--request-id", request_id, "--task", "h-033", "--candidate", v["candidate"],
+    service_object = exact_git_object(SERVICE_GIT_PATH, SERVICE_SHA256)
+    common = ["--task", "h-033", "--candidate", v["candidate"],
               "--task-spec-sha256", v["task-spec-sha256"], "--gate-sha256", v["gate-sha256"], "--probe", v["probe"]]
-    for executable in (producer, observer):
-        q = subprocess.run([executable] + common, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=5, env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"})
-        if q.returncode: fail(2)
+    returncode, out, err = call_request_service("request-producer", common, service_object)
+    if returncode or err or not out.startswith("REQUEST_ID=") or out.count("\n") != 1:
+        fail(2)
+    request_id = out.removeprefix("REQUEST_ID=").rstrip("\n")
+    if not lower_hex(request_id, 64): fail(2)
+    observer_args = ["--request-id", request_id] + common
+    returncode, out, err = call_request_service("request-observer", observer_args, service_object)
+    if returncode or out or err: fail(2)
     print("REQUEST_ID=" + request_id)
     print("EVIDENCE=" + str(EVIDENCE_ROOT / (request_id + ".json")))
     print("RECEIPT=" + str(RECEIPT_ROOT / (request_id + ".json")))

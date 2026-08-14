@@ -450,3 +450,18 @@ external authority validates the token against its request state and never expos
 repository code. Consumption is deliberately not rolled back after any later kernel failure, so a
 failed first handoff cannot revive the request. Fixture-only differential verification does not
 consume external owner state.
+
+The previously external H-033 authority is now versioned under its frozen production surface without
+claiming that repository ownership supplies root authority. A root-run fixed-destination installer
+copies only reviewed digest-bound native service/probe bytes and the exact H-034 Git object into
+`/Library/Application Support/Nortropic/provenance`; it requires a pre-existing, distinct
+`_nortropic_provenance` OS account and creates root/protected bin, probe, receipt and one-time state
+directories plus a producer-owned evidence directory. The installed service has only three basename
+interfaces. Producer generates the request ID and executes one fixed digest-bound probe after UID/GID
+drop; observer independently verifies the protected allowlist and exact effect before writing its
+receipt/pending token; consumer performs the irreversible pending-to-used atomic rename. Repository
+runtime code cannot select an install root, service, probe, result, destination or command and never
+copies an executable at handoff. The installed H-034 kernel and service bytes must stay identical to
+their exact candidate Git objects across execution. On this unprovisioned owner host, normal H-033
+remains ODÖMBART until the external root ceremony is deliberately executed; no sudo or `/Library`
+mutation occurred during this builder slice.

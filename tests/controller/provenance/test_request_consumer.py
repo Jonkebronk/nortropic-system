@@ -62,15 +62,16 @@ except FileExistsError: raise SystemExit(1)
         values.update(changes)
         return values
 
-    def protected_service(self, name, repository_fd=None):
+    def protected_service(self, name, *authority):
         self.assertEqual(name, "request-consumer")
-        self.assertIsNone(repository_fd)
+        self.assertEqual(authority, (b"service", True))
         parent = os.open(self.bin, os.O_RDONLY | os.O_DIRECTORY)
         leaf = os.open(self.service, os.O_RDONLY)
         return [parent, leaf], leaf
 
     def invoke(self, values):
         with mock.patch.object(self.cli, "PROTECTED_CONSUMER", self.service), \
+             mock.patch.object(self.cli, "exact_git_object", return_value=b"service"), \
              mock.patch.object(self.cli, "open_protected_executable", side_effect=self.protected_service):
             return self.cli.consume_request(values)
 
@@ -118,12 +119,13 @@ except FileExistsError: raise SystemExit(1)
         failed.write_text("#!/bin/sh\nexit 2\n")
         failed.chmod(0o755)
 
-        def protected(name, repository_fd=None):
+        def protected(name, *authority):
             parent = os.open(failed.parent, os.O_RDONLY | os.O_DIRECTORY)
             leaf = os.open(failed, os.O_RDONLY)
             return [parent, leaf], leaf
 
         with mock.patch.object(self.cli, "PROTECTED_CONSUMER", failed), \
+             mock.patch.object(self.cli, "exact_git_object", return_value=b"service"), \
              mock.patch.object(self.cli, "open_protected_executable", side_effect=protected):
             with self.assertRaises(SystemExit) as caught:
                 self.cli.consume_request(self.values())

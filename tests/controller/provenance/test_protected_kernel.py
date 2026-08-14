@@ -40,10 +40,10 @@ class ProtectedKernelTests(unittest.TestCase):
         with mock.patch.object(self.cli.os, "open", side_effect=lambda *a, **k: next(opened)), \
              mock.patch.object(self.cli.os, "fstat", side_effect=lambda fd: stats[fd]), \
              mock.patch.object(self.cli.os, "close") as close:
-            result = self.cli.open_protected_kernel(9)
+            result = self.cli.open_protected_kernel()
         return result, close
 
-    def test_exact_root_protected_same_inode_positive(self):
+    def test_exact_root_protected_installed_leaf_positive(self):
         (opened, kernel_fd), close = self.exercise()
         self.assertEqual(opened, list(range(10, 17)))
         self.assertEqual(kernel_fd, 16)
@@ -61,12 +61,6 @@ class ProtectedKernelTests(unittest.TestCase):
         directories[3] = fs(stat.S_IFDIR | 0o775, 0, 13)
         with self.assertRaises(SystemExit) as caught:
             self.exercise(directories=directories)
-        self.assertEqual(caught.exception.code, 2)
-
-    def test_wrong_kernel_inode_rejects(self):
-        alternate = fs(stat.S_IFREG | 0o755, 0, 100)
-        with self.assertRaises(SystemExit) as caught:
-            self.exercise(protected=alternate)
         self.assertEqual(caught.exception.code, 2)
 
     def test_requester_owned_kernel_rejects(self):
