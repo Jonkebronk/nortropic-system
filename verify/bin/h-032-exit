@@ -735,19 +735,52 @@ if mode == 'output_then_fail': sys.exit(17)
             secrets_rebinds=[item for item in ast.walk(candidate_tree)
                 if isinstance(item,ast.Name) and item.id=="secrets"
                 and isinstance(item.ctx,(ast.Store,ast.Del))]
+            # `secrets` is an exclusive entropy capability, not merely a spelling.
+            # Follow aliases through assignments, containers and helper returns;
+            # every operation on that capability is rejected except the two exact
+            # frozen token_hex calls in the origin bodies below.
+            entropy_aliases={"secrets"};entropy_helpers=set()
+            def entropy_value(node):
+                if node is None: return False
+                if isinstance(node,ast.Name):
+                    return node.id in entropy_aliases
+                if isinstance(node,(ast.Attribute,ast.Subscript)):
+                    return entropy_value(node.value)
+                if isinstance(node,(ast.Tuple,ast.List,ast.Set)):
+                    return any(entropy_value(item) for item in node.elts)
+                if isinstance(node,ast.Dict):
+                    return any(entropy_value(item) for item in node.keys+node.values if item)
+                if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+                    return node.func.id in entropy_helpers
+                return False
+            for _ in range(len(list(ast.walk(candidate_tree)))+1):
+                changed=False
+                for fn in (item for item in candidate_tree.body if isinstance(item,ast.FunctionDef)):
+                    if any(entropy_value(ret.value) for ret in ast.walk(fn)
+                           if isinstance(ret,ast.Return) and ret.value):
+                        if fn.name not in entropy_helpers:
+                            entropy_helpers.add(fn.name);changed=True
+                for item in ast.walk(candidate_tree):
+                    if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
+                    value=item.value
+                    if not entropy_value(value): continue
+                    targets=item.targets if isinstance(item,ast.Assign) else [item.target]
+                    for target in targets:
+                        for name in r17_targets(target):
+                            if name not in entropy_aliases:
+                                entropy_aliases.add(name);changed=True
+                if not changed: break
             entropy_mutations=[]
             for item in ast.walk(candidate_tree):
-                if isinstance(item,ast.Attribute) and item.attr=="token_hex" \
+                if isinstance(item,ast.Attribute) and entropy_value(item.value) \
                         and isinstance(item.ctx,(ast.Store,ast.Del)):
                     entropy_mutations.append("attribute")
-                if isinstance(item,ast.Subscript) and isinstance(item.ctx,(ast.Store,ast.Del)) \
-                        and any(isinstance(part,ast.Constant) and part.value=="token_hex"
-                                for part in ast.walk(item.slice)):
+                if isinstance(item,ast.Subscript) and entropy_value(item.value) \
+                        and isinstance(item.ctx,(ast.Store,ast.Del)):
                     entropy_mutations.append("subscript")
                 if isinstance(item,ast.Call) and isinstance(item.func,ast.Name) \
                         and item.func.id in {"setattr","delattr"} \
-                        and any(isinstance(arg,ast.Constant) and arg.value=="token_hex"
-                                for arg in item.args):
+                        and item.args and entropy_value(item.args[0]):
                     entropy_mutations.append(item.func.id)
             origin_body_ok={}
             for origin_name in origin_names:
@@ -759,6 +792,22 @@ if mode == 'output_then_fail': sys.exit(17)
                         == ast.dump(expected,include_attributes=False)
                     and len(secrets_imports)==1 and not secrets_rebinds
                     and not entropy_mutations)
+            allowed_entropy_calls={id(origin.body[0].value) for origin in
+                (top_functions.get(name) for name in origin_names)
+                if origin is not None and len(origin.body)==1
+                and isinstance(origin.body[0],ast.Return)
+                and isinstance(origin.body[0].value,ast.Call)}
+            for item in (part for part in ast.walk(candidate_tree) if isinstance(part,ast.Call)):
+                receiver=item.func.value if isinstance(item.func,ast.Attribute) else None
+                touches_receiver=entropy_value(receiver)
+                passes_capability=any(entropy_value(arg) for arg in item.args) or any(
+                    entropy_value(keyword.value) for keyword in item.keywords)
+                exact_allowed=(id(item) in allowed_entropy_calls
+                    and isinstance(item.func,ast.Attribute) and item.func.attr=="token_hex"
+                    and len(item.args)==1 and isinstance(item.args[0],ast.Constant)
+                    and item.args[0].value==16 and not item.keywords)
+                if (touches_receiver or passes_capability) and not exact_allowed:
+                    entropy_mutations.append("capability-use")
             capability_calls={"read","readinto","read1","readinto1","readall",
                               "pread","preadv","readv","fdopen","FileIO","mmap",
                               "dup","fileno","raw","buffer","seek","tell"}
@@ -1017,7 +1066,7 @@ if mode == 'output_then_fail': sys.exit(17)
                     identity_escape=any(IDENTITY in value or UNKNOWN in value
                                         for value in sensitive_flow)
                     contexts={consumer.name:seam_seeds};context_queue=[consumer.name]
-                    receiver_ok=True;recursive=False
+                    receiver_ok=receiver_ok and not recursive;recursive=False
                     while context_queue:
                         name=context_queue.pop();node=top_functions[name]
                         child_env,_=r17_interpret(node,contexts[name])
@@ -1034,9 +1083,9 @@ if mode == 'output_then_fail': sys.exit(17)
                             if joined!=prior: contexts[child]=joined;context_queue.append(child)
                     for name,seeds in contexts.items():
                         node=top_functions[name];child_env,_=r17_interpret(node,seeds)
-                    for capability_call in (item for item in runtime_walk_function(node)
-                            if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute)
-                            and item.func.attr in capability_calls):
+                        for capability_call in (item for item in runtime_walk_function(node)
+                                if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute)
+                                and item.func.attr in capability_calls):
                             flow=r17_join(r17_expr(capability_call.func.value,child_env),
                                 *(r17_expr(arg,child_env) for arg in capability_call.args))
                             if SINK not in flow: receiver_ok=False
@@ -1122,6 +1171,32 @@ if mode == 'output_then_fail': sys.exit(17)
     candidate_analysis = analyze_candidate_tree(candidate_tree)
     consumer_architecture_ok = candidate_analysis["verdict"]
     exact_consumer_args = candidate_analysis["exact_consumer_args"]
+    # R25 connected static mutants run once a candidate reaches the frozen
+    # architecture.  They exercise the same analyzer, never a shallow surrogate.
+    r25_static_mutants_ok=True
+    if consumer_architecture_ok:
+        def r25_tree_with_module(statement):
+            tree=copy.deepcopy(candidate_tree)
+            tree.body.extend(ast.parse(statement).body);ast.fix_missing_locations(tree)
+            return tree
+        computed_key=("_r25_entropy = secrets\n"
+                      "_r25_entropy.__dict__['token_' + 'hex'] = lambda n: '0' * n\n")
+        dict_update=("_r25_box = {'cap': secrets}\n"
+                     "_r25_box['cap'].__dict__.update({'token_hex': lambda n: '0' * n})\n")
+        entropy_rejects=all(not analyze_candidate_tree(r25_tree_with_module(source))["verdict"]
+                            for source in (computed_key,dict_update))
+        def r25_receiver_variant(first,second):
+            tree=copy.deepcopy(candidate_tree)
+            seam=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                      and node.name=="_consume_private_result")
+            seam.body=ast.parse(first).body+seam.body+ast.parse(second).body
+            ast.fix_missing_locations(tree);return analyze_candidate_tree(tree)["verdict"]
+        safe="os.pread(sink_fd, 0, 0)\n"
+        unsafe="Path('.').read_bytes()\n"
+        receiver_rejects=(not r25_receiver_variant(unsafe,safe)
+                          and not r25_receiver_variant(safe,unsafe))
+        receiver_positive=r25_receiver_variant(safe,safe)
+        r25_static_mutants_ok=entropy_rejects and receiver_rejects and receiver_positive
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -2087,7 +2162,8 @@ if mode == 'output_then_fail': sys.exit(17)
     # conforming candidate exposes a positive finite integer timeout value;
     # absence is part of the intended prebuilder RED, never a rig error.
     timeout_seam = getattr(module, "CODEX_RUN_TIMEOUT_SECONDS", None)
-    timeout_variant_ok = (timeout_seam == 86400 and consumer_architecture_ok)
+    timeout_variant_ok = (timeout_seam == 86400 and consumer_architecture_ok
+                          and r25_static_mutants_ok)
     # Owner-authorized admissibility variants replace only the frozen seam
     # FunctionDef body.  The outer run_codex, authority, Popen topology and all
     # other candidate bytes remain AST-identical.  They never credit the exact

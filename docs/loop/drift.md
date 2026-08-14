@@ -1102,3 +1102,11 @@ definition time but dormant bodies do not; class bases, keywords and decorators 
 then the class body executes. A dormant nested Popen body is therefore a legitimate
 positive until called, while decorator/default/class-body/helper constructor effects are
 recorded with their actual context and count against the sole process site.
+
+R25 treats `secrets` as an exclusive capability rather than a single-attribute
+blocklist. Only the two exact `secrets.token_hex(16)` origin calls are admissible;
+module aliases carried through containers/helper returns and every attribute,
+subscript, computed `__dict__`, update-method or reflective mutation are rejected.
+Capability-reader provenance is accumulated monotonically across every reachable
+context, so neither safe/unsafe traversal order can erase an unsafe receiver while
+all-safe contexts remain admissible.
