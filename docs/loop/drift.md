@@ -1177,3 +1177,11 @@ remain both-match conservative. Matching uses the runtime builtin hierarchy via
 `issubclass`: Exception excludes KeyboardInterrupt/SystemExit/GeneratorExit, while
 BaseException and bare handlers catch all. Alias, hierarchy, tuple/helper and unknown
 shadow controls verify both definite catches and retained escaping paths.
+
+R34 makes handler bindings flow- and context-sensitive at the actual program point.
+Sequential assignment overwrites rather than unions; unknown branches join distinct
+alternatives. Tuple/list catch-sets, dict keys, constant subscripts and helper returns
+retain structure. A handler MAY match if any alternative catches the raised type but
+is DEFINITE only if every alternative catches it; a tuple literal is one alternative
+whose members are disjunctive catches. Reassignment order, branch alternatives,
+actual tuple, dict-key and helper controls prevent cross-scope/global-union credit.

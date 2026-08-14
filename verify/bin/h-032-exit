@@ -566,66 +566,62 @@ if mode == 'output_then_fail': sys.exit(17)
             return True,frozenset({"UNKNOWN"})
         builtin_exceptions={name:value for name,value in vars(builtins).items()
             if isinstance(value,type) and issubclass(value,BaseException)}
-        shadowed_exception_names={item.id for item in ast.walk(candidate_tree)
-            if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del))
-            and item.id in builtin_exceptions}
-        exception_bindings={name:frozenset({name}) for name in builtin_exceptions
-                            if name not in shadowed_exception_names}
-        exception_helpers=set()
-        def r33_exception_value(node):
-            if node is None: return frozenset({"UNKNOWN"})
-            if isinstance(node,ast.Name):
-                return exception_bindings.get(node.id,frozenset({"UNKNOWN"}))
+        exception_functions={fn.name:fn for fn in ast.walk(candidate_tree)
+                             if isinstance(fn,ast.FunctionDef)}
+        def r34_initial_env():
+            return {name:(frozenset({name}),) for name in builtin_exceptions}
+        def r34_value(node,env,active=frozenset()):
+            unknown=(frozenset({"UNKNOWN"}),)
+            if node is None: return unknown
+            if isinstance(node,ast.Name): return env.get(node.id,unknown)
             if isinstance(node,(ast.Tuple,ast.List,ast.Set)):
-                return frozenset().union(*(r33_exception_value(part) for part in node.elts))
+                alternatives=[r34_value(part,env,active) for part in node.elts]
+                products=[frozenset()]
+                for values in alternatives:
+                    products=[left|right for left in products for right in values]
+                return tuple(dict.fromkeys(products)) or unknown
             if isinstance(node,ast.Dict):
-                return frozenset().union(*(r33_exception_value(part)
-                    for part in node.keys+node.values if part))
-            if isinstance(node,ast.Subscript): return r33_exception_value(node.value)
+                mapping={}
+                for key,value in zip(node.keys,node.values):
+                    known,literal=r29_literal(key)
+                    if not known: return unknown
+                    mapping[literal]=r34_value(value,env,active)
+                return mapping
+            if isinstance(node,ast.Subscript):
+                base=r34_value(node.value,env,active);known,key=r29_literal(node.slice)
+                if isinstance(base,dict) and known: return base.get(key,unknown)
+                return base if isinstance(base,tuple) else unknown
             if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
-                if node.func.id in exception_helpers:
-                    return exception_bindings.get(node.func.id,frozenset({"UNKNOWN"}))
-                return exception_bindings.get(node.func.id,frozenset({"UNKNOWN"}))
-            return frozenset({"UNKNOWN"})
-        for _ in range(len(list(ast.walk(candidate_tree)))+1):
-            changed=False
-            for fn in (item for item in ast.walk(candidate_tree) if isinstance(item,ast.FunctionDef)):
-                returns=[r33_exception_value(ret.value) for ret in ast.walk(fn)
-                         if isinstance(ret,ast.Return) and ret.value]
-                if returns:
-                    value=frozenset().union(*returns)
-                    if value!=exception_bindings.get(fn.name):
-                        exception_helpers.add(fn.name);exception_bindings[fn.name]=value;changed=True
-            for item in ast.walk(candidate_tree):
-                if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
-                targets=item.targets if isinstance(item,ast.Assign) else [item.target]
-                value=r33_exception_value(item.value)
-                for target in targets:
-                    if isinstance(target,ast.Name):
-                        prior=exception_bindings.get(target.id,frozenset())
-                        joined=prior|value
-                        if joined!=prior: exception_bindings[target.id]=joined;changed=True
-            if not changed: break
-        def r32_raise_types(node):
+                fn=exception_functions.get(node.func.id)
+                if fn is not None and fn.name not in active:
+                    returns=[ret.value for ret in runtime_walk_function(fn)
+                             if isinstance(ret,ast.Return) and ret.value]
+                    values=[r34_value(value,env,active|{fn.name}) for value in returns]
+                    return tuple(dict.fromkeys(item for value in values
+                                               for item in value)) if values else unknown
+                return env.get(node.func.id,unknown)
+            return unknown
+        def r32_raise_types(node,env=None):
+            env=env or r34_initial_env()
             if node is None: return frozenset({"UNKNOWN"})
-            value=r33_exception_value(node)
-            return value if value!=frozenset({"UNKNOWN"}) else (
-                r31_expr_flow(node)[1] or value)
-        def r32_handler_types(node):
-            if node is None: return {"BaseException"},True
-            types=set(r33_exception_value(node))
-            return types,types=={"BaseException"}
+            alternatives=r34_value(node,env)
+            if isinstance(alternatives,dict): return frozenset({"UNKNOWN"})
+            value=frozenset().union(*alternatives)
+            return value if value!=frozenset({"UNKNOWN"}) else (r31_expr_flow(node)[1] or value)
+        def r32_handler_types(node,env=None):
+            if node is None: return (frozenset({"BaseException"}),)
+            value=r34_value(node,env or r34_initial_env())
+            return value if isinstance(value,tuple) else (frozenset({"UNKNOWN"}),)
         def r32_may_match(exc,types):
             if "UNKNOWN" in types or exc=="UNKNOWN": return True
             exc_type=builtin_exceptions.get(exc)
             return any(exc_type is not None and handler in builtin_exceptions
                        and issubclass(exc_type,builtin_exceptions[handler]) for handler in types)
-        def r32_definitely_caught(exc,types,catch_all):
-            if catch_all: return True
-            if exc=="UNKNOWN" or "UNKNOWN" in types: return False
-            return r32_may_match(exc,types)
-        def r30_stmt_flow(statement):
-            if isinstance(statement,ast.Raise): return False,r32_raise_types(statement.exc)
+        def r32_definitely_caught(exc,alternatives):
+            return bool(alternatives) and all("UNKNOWN" not in types
+                and r32_may_match(exc,types) for types in alternatives)
+        def r30_stmt_flow(statement,env):
+            if isinstance(statement,ast.Raise): return False,r32_raise_types(statement.exc,env)
             if isinstance(statement,(ast.Return,ast.Break,ast.Continue)):
                 return False,r31_expr_flow(getattr(statement,"value",None))[1]
             if isinstance(statement,ast.Assert):
@@ -635,31 +631,40 @@ if mode == 'output_then_fail': sys.exit(17)
             if isinstance(statement,ast.If):
                 known,value=r29_literal(statement.test)
                 branches=[statement.body] if known and value else [statement.orelse] if known else [statement.body,statement.orelse]
-                flows=[r30_block_flow(branch) for branch in branches]
+                branch_envs=[dict(env) for branch in branches]
+                flows=[r30_block_flow(branch,branch_env) for branch,branch_env in zip(branches,branch_envs)]
+                for name in set().union(*(set(value) for value in branch_envs)):
+                    choices=[]
+                    for branch_env in branch_envs:
+                        value=branch_env.get(name,(frozenset({"UNKNOWN"}),))
+                        if isinstance(value,tuple): choices.extend(value)
+                    if choices: env[name]=tuple(dict.fromkeys(choices))
                 test_normal,test_raise=r31_expr_flow(statement.test)
                 return (test_normal and any(x[0] for x in flows),
                         test_raise|frozenset().union(*(x[1] for x in flows)))
             if isinstance(statement,(ast.Try,ast.TryStar)):
-                body_normal,body_raises=r30_block_flow(statement.body)
+                body_env=dict(env);body_normal,body_raises=r30_block_flow(statement.body,body_env)
                 normal=False;raises=frozenset()
                 if body_normal:
-                    else_normal,else_raise=r30_block_flow(statement.orelse)
+                    else_normal,else_raise=r30_block_flow(statement.orelse,body_env)
                     normal|=else_normal;raises|=else_raise
                 remaining=set(body_raises)
                 for handler in statement.handlers:
-                    types,catch_all=r32_handler_types(handler.type)
-                    possible={exc for exc in remaining if r32_may_match(exc,types)}
+                    alternatives=r32_handler_types(handler.type,body_env)
+                    possible={exc for exc in remaining if any(
+                        r32_may_match(exc,types) for types in alternatives)}
                     if possible:
                         type_normal,type_raises=((True,frozenset())
-                            if "UNKNOWN" not in types else r31_expr_flow(handler.type))
+                            if all("UNKNOWN" not in types for types in alternatives)
+                            else r31_expr_flow(handler.type))
                         raises|=type_raises
-                        handler_normal,handler_raise=r30_block_flow(handler.body)
+                        handler_normal,handler_raise=r30_block_flow(handler.body,dict(body_env))
                         normal|=type_normal and handler_normal;raises|=handler_raise
                         remaining={exc for exc in remaining
-                                   if not r32_definitely_caught(exc,types,catch_all)}
+                                   if not r32_definitely_caught(exc,alternatives)}
                 raises|=frozenset(remaining)
                 if statement.finalbody:
-                    final_normal,final_raise=r30_block_flow(statement.finalbody)
+                    final_normal,final_raise=r30_block_flow(statement.finalbody,dict(env))
                     raises=final_raise | (raises if final_normal else frozenset())
                     normal=final_normal and normal
                 return normal,raises
@@ -679,13 +684,19 @@ if mode == 'output_then_fail': sys.exit(17)
             flows=[r31_expr_flow(child) for child in expressions]
             return (all(flow[0] for flow in flows),frozenset().union(
                 *(flow[1] for flow in flows)))
-        def r30_block_flow(statements):
+        def r30_block_flow(statements,env=None):
+            if env is None: env=r34_initial_env()
             may_normal=True;may_raise=frozenset()
             for statement in statements:
                 if not may_normal: break
-                stmt_normal,stmt_raise=r30_stmt_flow(statement)
+                stmt_normal,stmt_raise=r30_stmt_flow(statement,env)
                 may_raise=may_raise|stmt_raise
                 may_normal=may_normal and stmt_normal
+                if isinstance(statement,(ast.Assign,ast.AnnAssign)):
+                    targets=statement.targets if isinstance(statement,ast.Assign) else [statement.target]
+                    value=r34_value(statement.value,env)
+                    for target in targets:
+                        if isinstance(target,ast.Name): env[target.id]=value
             return may_normal,may_raise
         def runtime_walk_function(fn):
             def walk(node,root=False):
@@ -719,18 +730,27 @@ if mode == 'output_then_fail': sys.exit(17)
                     return
                 if isinstance(node,(ast.Try,ast.TryStar)):
                     for statement in node.body: yield from walk(statement)
-                    may_normal,may_raise=r30_block_flow(node.body)
+                    point_env=r34_initial_env()
+                    for prior in fn.body:
+                        if prior is node: break
+                        if isinstance(prior,(ast.Assign,ast.AnnAssign)):
+                            targets=prior.targets if isinstance(prior,ast.Assign) else [prior.target]
+                            value=r34_value(prior.value,point_env)
+                            for target in targets:
+                                if isinstance(target,ast.Name): point_env[target.id]=value
+                    may_normal,may_raise=r30_block_flow(node.body,dict(point_env))
                     if may_normal:
                         for statement in node.orelse: yield from walk(statement)
                     if may_raise:
                         remaining=set(may_raise)
                         for handler in node.handlers:
-                            types,catch_all=r32_handler_types(handler.type)
-                            possible={exc for exc in remaining if r32_may_match(exc,types)}
+                            alternatives=r32_handler_types(handler.type,point_env)
+                            possible={exc for exc in remaining if any(
+                                r32_may_match(exc,types) for types in alternatives)}
                             if possible: yield from walk(handler)
                             remaining={exc for exc in remaining
                                 if not (possible and r32_definitely_caught(
-                                    exc,types,catch_all))}
+                                    exc,alternatives))}
                     for statement in node.finalbody: yield from walk(statement)
                     return
                 for child in ast.iter_child_nodes(node): yield from walk(child)
@@ -1621,6 +1641,26 @@ if mode == 'output_then_fail': sys.exit(17)
             "E = repo.r33_unknown_exception\n"
             "try:\n    raise RuntimeError('x')\n"
             "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
+        reassigned_to_valueerror_negative=not r28_control(
+            "E = RuntimeError\nE = ValueError\n"
+            "try:\n    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        reassigned_to_runtime_positive=r28_control(
+            "E = ValueError\nE = RuntimeError\n"
+            "try:\n    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        branch_alternative_negative=not r28_control(
+            "if repo:\n    E = RuntimeError\nelse:\n    E = ValueError\n"
+            "try:\n    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        dict_key_positive=r28_control(
+            "M = {'runtime': RuntimeError}\nE = M['runtime']\n"
+            "try:\n    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
         r25_static_mutants_ok=(entropy_rejects and receiver_rejects
                                and receiver_positive and augassign_rejects
                                and target_effects_reject and match_process_rejects
@@ -1638,7 +1678,10 @@ if mode == 'output_then_fail': sys.exit(17)
                                and keyboardinterrupt_outer_negative
                                and runtime_exception_outer_positive
                                and tuple_alias_outer_positive and helper_alias_outer_positive
-                               and shadowed_unknown_negative)
+                               and shadowed_unknown_negative
+                               and reassigned_to_valueerror_negative
+                               and reassigned_to_runtime_positive
+                               and branch_alternative_negative and dict_key_positive)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
