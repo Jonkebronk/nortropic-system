@@ -709,10 +709,22 @@ if mode == 'output_then_fail': sys.exit(17)
                 return {"__sequence__":[r38_assignment_value(item,env) for item in node.elts],
                         "__kind__":"tuple" if isinstance(node,ast.Tuple) else "list"}
             if isinstance(node,ast.Constant): return {"__literal__":node.value}
+            if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+                    and isinstance(node.func.value,ast.Name)
+                    and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
+                return {"__attrs__":{kw.arg:r38_assignment_value(kw.value,env)
+                                     for kw in node.keywords if kw.arg}}
             return r34_value(node,env)
         def r39_store_flow(target,env,delete=False):
-            if isinstance(target,ast.Name): return True,frozenset()
+            if isinstance(target,ast.Name):
+                if delete and target.id not in env: return False,frozenset({"NameError"})
+                return True,frozenset()
             if isinstance(target,ast.Attribute):
+                base=r34_value(target.value,env)
+                if isinstance(base,dict) and "__attrs__" in base:
+                    if delete and target.attr not in base["__attrs__"]:
+                        return False,frozenset({"AttributeError"})
+                    return True,frozenset()
                 return True,frozenset({"UNKNOWN"})
             if isinstance(target,ast.Subscript):
                 base=r34_value(target.value,env);known,key=r29_literal(target.slice)
@@ -747,6 +759,10 @@ if mode == 'output_then_fail': sys.exit(17)
             updated=dict(env)
             if normal:
                 if isinstance(target,ast.Name): updated[target.id]=value
+                elif isinstance(target,ast.Attribute):
+                    base=r34_value(target.value,updated)
+                    if isinstance(base,dict) and "__attrs__" in base:
+                        base["__attrs__"][target.attr]=value
                 elif isinstance(target,ast.Starred):
                     return r37_store_target(target.value,value,updated)
                 elif isinstance(target,(ast.Tuple,ast.List)):
@@ -826,7 +842,16 @@ if mode == 'output_then_fail': sys.exit(17)
                                 one_normal=one_normal and store_normal;one_raises=one_raises|store_raises
                             exceptions.extend((exc,dict(env)) for exc in one_raises)
                             target_normal=target_normal and one_normal
+                            if one_normal and isinstance(target,ast.Name): env.pop(target.id,None)
+                            if one_normal and isinstance(target,ast.Attribute):
+                                base=r34_value(target.value,env)
+                                if isinstance(base,dict) and "__attrs__" in base:
+                                    base["__attrs__"].pop(target.attr,None)
                         if target_normal: next_normals.append(dict(env))
+                    elif isinstance(statement,ast.Expr):
+                        expr_normal,expr_raises=r38_expr_flow(statement.value,env)
+                        exceptions.extend((exc,dict(env)) for exc in expr_raises)
+                        if expr_normal: next_normals.append(dict(env))
                     elif isinstance(statement,ast.Raise):
                         exceptions.extend((exc,dict(env)) for exc in r32_raise_types(statement.exc,env))
                     elif isinstance(statement,(ast.Return,ast.Break,ast.Continue)):
@@ -1915,6 +1940,23 @@ if mode == 'output_then_fail': sys.exit(17)
             "holder = [1]\ntry:\n    holder[0] = 2\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n",
             "holder = {'x': 1}\ntry:\n    del holder['x']\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n",
             "x = 1\ntry:\n    x += 1\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n"))
+        delete_absent_negative=not r28_control(
+            "try:\n    del r40_absent\n"
+            "except NameError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        delete_then_read_negative=not r28_control(
+            "x = 1\ntry:\n    del x\n    x\n"
+            "except NameError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        bound_delete_positive=r28_control(
+            "x = 1\ntry:\n    del x\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        namespace_controls=(r28_control(
+            "import types\nholder = types.SimpleNamespace(value=1)\n"
+            "try:\n    holder.value = 2\n    del holder.value\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+            and not r28_control(
+            "import types\nholder = types.SimpleNamespace()\n"
+            "try:\n    del holder.missing\n"
+            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True))
         helper_multikey_positive=r28_control(
             "def _r36_types():\n    return {'runtime': RuntimeError, 'value': ValueError}\n"
             "try:\n    M = _r36_types()\n    E = M['runtime']\n"
@@ -1959,7 +2001,9 @@ if mode == 'output_then_fail': sys.exit(17)
                                and augassign_target_first_negative
                                and tuple_store_negative and augassign_zero_negative
                                and attribute_store_negative and attribute_delete_negative
-                               and safe_store_delete_positive)
+                               and safe_store_delete_positive
+                               and delete_absent_negative and delete_then_read_negative
+                               and bound_delete_positive and namespace_controls)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
