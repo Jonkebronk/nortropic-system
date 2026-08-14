@@ -1057,3 +1057,12 @@ also pass the gate's semantic source-admissibility vocabulary before its connect
 runtime effect can count. Import/ImportFrom subprocess origins and process constructor/
 object values are inventoried through aliases and supported stores; unresolved process-
 relevant stores or calls reject before the sole-site timeout CFG can pass.
+
+R20 makes semantic origins non-sanitizing: journal/run/invocation tags union all operand
+tags, while the five seam arguments must equal the exact singleton provenance sequence
+SINK/CANONICAL/INVOCATION/RUN/ROLE. Call binding implements Python positional-only,
+positional, keyword, keyword-only, default, varargs and kwargs rules with duplicate or
+missing bindings fail-closed. Attribute/subscript stores join into their owning heap
+object, so container and helper laundering cannot erase process or identity tags. The
+same complete tree-analysis entry point is invoked for the exact candidate and every
+generated exact-body reader variant before connected runtime evidence is considered.
