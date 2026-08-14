@@ -478,491 +478,498 @@ if mode == 'output_then_fail': sys.exit(17)
     if spec is None or spec.loader is None: raise RuntimeError("cannot import subject")
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
     candidate_tree = ast.parse(source.read_text(encoding="utf-8"))
-    def r20_complete_tree_analysis(tree):
-        consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
-                   and node.name=="_consume_private_result"]
-        runs=[node for node in tree.body if isinstance(node,ast.FunctionDef)
-              and node.name=="run_codex"]
-        if len(consumers)!=1 or len(runs)!=1: return False
-        if [arg.arg for arg in consumers[0].args.args] != [
-                "sink_fd","canonical_destination","invocation_id","run_id","role"]:
-            return False
-        forbidden={"eval","exec","compile","__import__","globals","locals",
-                   "vars","getattr","setattr"}
-        if any(isinstance(call.func,ast.Name) and call.func.id in forbidden
-               for call in ast.walk(consumers[0]) if isinstance(call,ast.Call)): return False
-        process_imports=[]
-        for item in ast.walk(tree):
-            if isinstance(item,ast.Import):
-                process_imports.extend(alias for alias in item.names if alias.name=="subprocess")
-            elif isinstance(item,ast.ImportFrom) and item.module=="subprocess":
-                process_imports.extend(alias for alias in item.names if alias.name=="Popen")
-        return len(process_imports)>=1
-    consume_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
-                     and node.name == "_consume_private_result"]
-    exact_consumer_args = ["sink_fd", "canonical_destination", "invocation_id", "run_id", "role"]
-    consumer_calls = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Call)
-                      and isinstance(node.func, ast.Name)
-                      and node.func.id == "_consume_private_result"]
-    run_codex_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
-                       and node.name == "run_codex"]
-    timeout_assignments = [node for node in candidate_tree.body if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "CODEX_RUN_TIMEOUT_SECONDS"
-                for target in node.targets)]
-    timeout_loads = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Name)
-                     and isinstance(node.ctx, ast.Load)
-                     and node.id == "CODEX_RUN_TIMEOUT_SECONDS"]
-    consumer_architecture_ok = False
-    if len(consume_nodes) == 1 and len(run_codex_nodes) == 1:
-        consumer = consume_nodes[0]
-        loaded_globals = {node.id for node in ast.walk(consumer)
-                          if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
-        tainted = {name for name in loaded_globals
-                   if any(token in name.casefold() for token in
-                          ("provider", "host", "authority", "fixture"))}
-        run_calls = [node for node in ast.walk(run_codex_nodes[0]) if isinstance(node, ast.Call)
-                     and isinstance(node.func, ast.Name)
-                     and node.func.id == "_consume_private_result"]
-        top_functions = {node.name:node for node in candidate_tree.body
-                         if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
-        pure_names = {"len","min","max","isinstance","type","bytes","bytearray",
-                      "memoryview","range","enumerate","all","any","bool","str","int"}
-        pure_attrs = {("os","fstat"),("os","read"),("os","pread"),("os","readv"),
-                      ("os","preadv"),("os","fdopen"),("os","dup"),("os","close"),
-                      ("os","fsync"),("os","open"),("os","replace"),
-                      ("io","FileIO"),("mmap","mmap"),("hashlib","sha256"),
-                      ("json","loads"),("stat","S_ISREG"),("stat","S_IMODE")}
-        capability_methods = {"read","readinto","read1","readinto1","readall",
-                              "seek","tell","fileno","close","flush"}
-        forbidden_dynamic = {"globals","locals","vars","getattr","setattr","eval","exec",
-                             "compile","__import__","import_module","open"}
-        graph_nodes=[];graph_ok=True;pending=[consumer.name];seen=set()
-        while pending:
-            name=pending.pop()
-            if name in seen: continue
-            seen.add(name);node=top_functions.get(name)
-            if node is None: graph_ok=False;continue
-            graph_nodes.append(node)
-            for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)):
-                if isinstance(call.func,ast.Name):
-                    called=call.func.id
-                    if called in top_functions: pending.append(called)
-                    elif called not in pure_names: graph_ok=False
-                    if called in forbidden_dynamic: graph_ok=False
-                elif isinstance(call.func,ast.Attribute) and isinstance(call.func.value,ast.Name):
-                    if ((call.func.value.id,call.func.attr) not in pure_attrs
-                            and call.func.attr not in capability_methods): graph_ok=False
-                else: graph_ok=False
-        graph_loaded={item.id for node in graph_nodes for item in ast.walk(node)
-                      if isinstance(item,ast.Name) and isinstance(item.ctx,ast.Load)}
-        graph_tainted={name for name in graph_loaded if any(token in name.casefold()
-                       for token in ("provider","host","authority","fixture"))}
-        helper_identities=set(seen)|{"_consume_private_result"}
-        rebound=[]
-        for node in graph_nodes:
-            for item in ast.walk(node):
-                if isinstance(item,(ast.Import,ast.ImportFrom,ast.ClassDef,ast.Global,ast.Nonlocal)):
-                    rebound.append(type(item).__name__)
-                if isinstance(item,ast.NamedExpr): rebound.append("NamedExpr")
-                if isinstance(item,ast.ExceptHandler) and item.name: rebound.append("ExceptName")
+    def analyze_candidate_tree(candidate_tree):
+        def r20_complete_tree_analysis(tree):
+            consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
+                       and node.name=="_consume_private_result"]
+            runs=[node for node in tree.body if isinstance(node,ast.FunctionDef)
+                  and node.name=="run_codex"]
+            if len(consumers)!=1 or len(runs)!=1: return False
+            if [arg.arg for arg in consumers[0].args.args] != [
+                    "sink_fd","canonical_destination","invocation_id","run_id","role"]:
+                return False
+            forbidden={"eval","exec","compile","__import__","globals","locals",
+                       "vars","getattr","setattr"}
+            if any(isinstance(call.func,ast.Name) and call.func.id in forbidden
+                   for call in ast.walk(consumers[0]) if isinstance(call,ast.Call)): return False
+            process_imports=[]
+            for item in ast.walk(tree):
+                if isinstance(item,ast.Import):
+                    process_imports.extend(alias for alias in item.names if alias.name=="subprocess")
+                elif isinstance(item,ast.ImportFrom) and item.module=="subprocess":
+                    process_imports.extend(alias for alias in item.names if alias.name=="Popen")
+            return len(process_imports)>=1
+        consume_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
+                         and node.name == "_consume_private_result"]
+        exact_consumer_args = ["sink_fd", "canonical_destination", "invocation_id", "run_id", "role"]
+        consumer_calls = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Call)
+                          and isinstance(node.func, ast.Name)
+                          and node.func.id == "_consume_private_result"]
+        run_codex_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
+                           and node.name == "run_codex"]
+        timeout_assignments = [node for node in candidate_tree.body if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "CODEX_RUN_TIMEOUT_SECONDS"
+                    for target in node.targets)]
+        timeout_loads = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Name)
+                         and isinstance(node.ctx, ast.Load)
+                         and node.id == "CODEX_RUN_TIMEOUT_SECONDS"]
+        consumer_architecture_ok = False
+        if len(consume_nodes) == 1 and len(run_codex_nodes) == 1:
+            consumer = consume_nodes[0]
+            loaded_globals = {node.id for node in ast.walk(consumer)
+                              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+            tainted = {name for name in loaded_globals
+                       if any(token in name.casefold() for token in
+                              ("provider", "host", "authority", "fixture"))}
+            run_calls = [node for node in ast.walk(run_codex_nodes[0]) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Name)
+                         and node.func.id == "_consume_private_result"]
+            top_functions = {node.name:node for node in candidate_tree.body
+                             if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
+            pure_names = {"len","min","max","isinstance","type","bytes","bytearray",
+                          "memoryview","range","enumerate","all","any","bool","str","int"}
+            pure_attrs = {("os","fstat"),("os","read"),("os","pread"),("os","readv"),
+                          ("os","preadv"),("os","fdopen"),("os","dup"),("os","close"),
+                          ("os","fsync"),("os","open"),("os","replace"),
+                          ("io","FileIO"),("mmap","mmap"),("hashlib","sha256"),
+                          ("json","loads"),("stat","S_ISREG"),("stat","S_IMODE")}
+            capability_methods = {"read","readinto","read1","readinto1","readall",
+                                  "seek","tell","fileno","close","flush"}
+            forbidden_dynamic = {"globals","locals","vars","getattr","setattr","eval","exec",
+                                 "compile","__import__","import_module","open"}
+            graph_nodes=[];graph_ok=True;pending=[consumer.name];seen=set()
+            while pending:
+                name=pending.pop()
+                if name in seen: continue
+                seen.add(name);node=top_functions.get(name)
+                if node is None: graph_ok=False;continue
+                graph_nodes.append(node)
+                for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)):
+                    if isinstance(call.func,ast.Name):
+                        called=call.func.id
+                        if called in top_functions: pending.append(called)
+                        elif called not in pure_names: graph_ok=False
+                        if called in forbidden_dynamic: graph_ok=False
+                    elif isinstance(call.func,ast.Attribute) and isinstance(call.func.value,ast.Name):
+                        if ((call.func.value.id,call.func.attr) not in pure_attrs
+                                and call.func.attr not in capability_methods): graph_ok=False
+                    else: graph_ok=False
+            graph_loaded={item.id for node in graph_nodes for item in ast.walk(node)
+                          if isinstance(item,ast.Name) and isinstance(item.ctx,ast.Load)}
+            graph_tainted={name for name in graph_loaded if any(token in name.casefold()
+                           for token in ("provider","host","authority","fixture"))}
+            helper_identities=set(seen)|{"_consume_private_result"}
+            rebound=[]
+            for node in graph_nodes:
+                for item in ast.walk(node):
+                    if isinstance(item,(ast.Import,ast.ImportFrom,ast.ClassDef,ast.Global,ast.Nonlocal)):
+                        rebound.append(type(item).__name__)
+                    if isinstance(item,ast.NamedExpr): rebound.append("NamedExpr")
+                    if isinstance(item,ast.ExceptHandler) and item.name: rebound.append("ExceptName")
+                    if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del)) \
+                            and item.id in set(exact_consumer_args)|{"_consume_private_result"}:
+                        rebound.append(item.id)
+                    if isinstance(item,ast.Subscript) and isinstance(item.ctx,ast.Store):
+                        rebound.append("SubscriptStore")
+                    if isinstance(item,ast.Call) and isinstance(item.func,ast.Name) \
+                            and item.func.id=="setattr": rebound.append("setattr")
+            for item in ast.walk(candidate_tree):
                 if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del)) \
-                        and item.id in set(exact_consumer_args)|{"_consume_private_result"}:
-                    rebound.append(item.id)
-                if isinstance(item,ast.Subscript) and isinstance(item.ctx,ast.Store):
-                    rebound.append("SubscriptStore")
-                if isinstance(item,ast.Call) and isinstance(item.func,ast.Name) \
-                        and item.func.id=="setattr": rebound.append("setattr")
-        for item in ast.walk(candidate_tree):
-            if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del)) \
-                    and item.id in helper_identities:
-                rebound.append("module-binding:"+item.id)
-            if isinstance(item,(ast.Import,ast.ImportFrom)):
-                for alias in item.names:
-                    if (alias.asname or alias.name.split(".")[0]) in helper_identities:
-                        rebound.append("import-binding")
-            if isinstance(item,ast.ClassDef) and item.name in helper_identities:
-                rebound.append("class-binding")
-        helper_loads=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Name)
-                      and isinstance(item.ctx,ast.Load) and item.id in helper_identities]
-        helper_direct=all(isinstance(getattr(item,"_r15_parent",None),ast.Call)
-                          and getattr(item,"_r15_parent").func is item for item in helper_loads)
-        seam_loads=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Name)
-                    and isinstance(item.ctx,ast.Load) and item.id=="_consume_private_result"]
-        exact_call_args=(len(run_calls)==1 and not run_calls[0].keywords
-                         and [arg.id for arg in run_calls[0].args if isinstance(arg,ast.Name)]
-                             == exact_consumer_args
-                         and len(run_calls[0].args)==len(exact_consumer_args))
-        provenance_values={}
-        for item in ast.walk(run_codex_nodes[0]):
-            if isinstance(item,(ast.Assign,ast.AnnAssign)):
-                targets=item.targets if isinstance(item,ast.Assign) else [item.target]
-                for target in targets:
-                    if isinstance(target,ast.Name) and target.id in exact_consumer_args:
-                        provenance_values.setdefault(target.id,[]).append(item.value)
-        sink_values=provenance_values.get("sink_fd",[])
-        sink_nofollow=(len(sink_values)==1 and isinstance(sink_values[0],ast.Call)
-                       and any(isinstance(item,ast.Attribute) and item.attr=="O_NOFOLLOW"
-                               for item in ast.walk(sink_values[0])))
-        binding_provenance=(sink_nofollow
-            and len(provenance_values.get("canonical_destination",[]))==1
-            and not isinstance(provenance_values["canonical_destination"][0],ast.Constant)
-            and len(provenance_values.get("invocation_id",[]))==1
-            and not isinstance(provenance_values["invocation_id"][0],ast.Constant)
-            and len(provenance_values.get("run_id",[]))==1
-            and not isinstance(provenance_values["run_id"][0],ast.Constant)
-            and "role" in [arg.arg for arg in run_codex_nodes[0].args.args])
-        parent_map={child:parent for parent in ast.walk(candidate_tree)
-                    for child in ast.iter_child_nodes(parent)}
-        for child,parent in parent_map.items(): setattr(child,"_r15_parent",parent)
-        helper_direct=all(isinstance(parent_map.get(item),ast.Call)
-                          and parent_map[item].func is item for item in helper_loads)
-        all_popen_sites=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Call)
-            and isinstance(item.func,ast.Attribute) and isinstance(item.func.value,ast.Name)
-            and (item.func.value.id,item.func.attr)==("subprocess","Popen")]
-        popen_assignments=[]
-        for item in ast.walk(run_codex_nodes[0]):
-            if isinstance(item,ast.Assign) and isinstance(item.value,ast.Call) \
-                    and isinstance(item.value.func,ast.Attribute) \
-                    and isinstance(item.value.func.value,ast.Name) \
-                    and (item.value.func.value.id,item.value.func.attr)==("subprocess","Popen"):
-                names=[target.id for target in item.targets if isinstance(target,ast.Name)]
-                popen_assignments.extend(names)
-        timeout_calls=[]
-        for item in ast.walk(run_codex_nodes[0]):
-            if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute) \
-                    and isinstance(item.func.value,ast.Name) \
-                    and item.func.value.id in popen_assignments \
-                    and item.func.attr in {"wait","communicate"}:
-                kws=[kw for kw in item.keywords if kw.arg=="timeout"
-                     and isinstance(kw.value,ast.Name)
-                     and kw.value.id=="CODEX_RUN_TIMEOUT_SECONDS"]
-                if len(kws)==1: timeout_calls.append(item)
-        popen_reassign=[item for item in ast.walk(run_codex_nodes[0])
-                        if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del))
-                        and item.id in popen_assignments]
-        successful_returns=[item for item in ast.walk(run_codex_nodes[0])
-                            if isinstance(item,ast.Return)]
-        timeout_dominates=(len(timeout_calls)==1 and all(
-            timeout_calls[0].lineno < item.lineno for item in successful_returns))
-        ancestor=parent_map.get(timeout_calls[0]) if timeout_calls else None
-        timeout_reachable=True
-        while ancestor is not None and ancestor is not run_codex_nodes[0]:
-            if isinstance(ancestor,ast.If) and isinstance(ancestor.test,ast.Constant) \
-                    and ancestor.test.value is False: timeout_reachable=False
-            ancestor=parent_map.get(ancestor)
-        consumer_architecture_ok = (
-            [arg.arg for arg in consumer.args.args] == exact_consumer_args
-            and consumer.args.vararg is None and consumer.args.kwarg is None
-            and not consumer.args.kwonlyargs and not consumer.decorator_list
-            and len(consumer_calls) == len(run_calls) == len(seam_loads) == 1
-            and exact_call_args and binding_provenance and helper_direct
-            and not tainted and not graph_tainted
-            and graph_ok and not rebound
-            and len(timeout_assignments) == 1
-            and isinstance(timeout_assignments[0].value, ast.Constant)
-            and timeout_assignments[0].value.value == 86400
-            and len(timeout_loads) == 1 and len(all_popen_sites)==1
-            and len(popen_assignments)==1 and len(popen_reassign)==1
-            and len(timeout_calls)==1 and timeout_dominates and timeout_reachable)
+                        and item.id in helper_identities:
+                    rebound.append("module-binding:"+item.id)
+                if isinstance(item,(ast.Import,ast.ImportFrom)):
+                    for alias in item.names:
+                        if (alias.asname or alias.name.split(".")[0]) in helper_identities:
+                            rebound.append("import-binding")
+                if isinstance(item,ast.ClassDef) and item.name in helper_identities:
+                    rebound.append("class-binding")
+            helper_loads=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Name)
+                          and isinstance(item.ctx,ast.Load) and item.id in helper_identities]
+            helper_direct=all(isinstance(getattr(item,"_r15_parent",None),ast.Call)
+                              and getattr(item,"_r15_parent").func is item for item in helper_loads)
+            seam_loads=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Name)
+                        and isinstance(item.ctx,ast.Load) and item.id=="_consume_private_result"]
+            exact_call_args=(len(run_calls)==1 and not run_calls[0].keywords
+                             and [arg.id for arg in run_calls[0].args if isinstance(arg,ast.Name)]
+                                 == exact_consumer_args
+                             and len(run_calls[0].args)==len(exact_consumer_args))
+            provenance_values={}
+            for item in ast.walk(run_codex_nodes[0]):
+                if isinstance(item,(ast.Assign,ast.AnnAssign)):
+                    targets=item.targets if isinstance(item,ast.Assign) else [item.target]
+                    for target in targets:
+                        if isinstance(target,ast.Name) and target.id in exact_consumer_args:
+                            provenance_values.setdefault(target.id,[]).append(item.value)
+            sink_values=provenance_values.get("sink_fd",[])
+            sink_nofollow=(len(sink_values)==1 and isinstance(sink_values[0],ast.Call)
+                           and any(isinstance(item,ast.Attribute) and item.attr=="O_NOFOLLOW"
+                                   for item in ast.walk(sink_values[0])))
+            binding_provenance=(sink_nofollow
+                and len(provenance_values.get("canonical_destination",[]))==1
+                and not isinstance(provenance_values["canonical_destination"][0],ast.Constant)
+                and len(provenance_values.get("invocation_id",[]))==1
+                and not isinstance(provenance_values["invocation_id"][0],ast.Constant)
+                and len(provenance_values.get("run_id",[]))==1
+                and not isinstance(provenance_values["run_id"][0],ast.Constant)
+                and "role" in [arg.arg for arg in run_codex_nodes[0].args.args])
+            parent_map={child:parent for parent in ast.walk(candidate_tree)
+                        for child in ast.iter_child_nodes(parent)}
+            for child,parent in parent_map.items(): setattr(child,"_r15_parent",parent)
+            helper_direct=all(isinstance(parent_map.get(item),ast.Call)
+                              and parent_map[item].func is item for item in helper_loads)
+            all_popen_sites=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Call)
+                and isinstance(item.func,ast.Attribute) and isinstance(item.func.value,ast.Name)
+                and (item.func.value.id,item.func.attr)==("subprocess","Popen")]
+            popen_assignments=[]
+            for item in ast.walk(run_codex_nodes[0]):
+                if isinstance(item,ast.Assign) and isinstance(item.value,ast.Call) \
+                        and isinstance(item.value.func,ast.Attribute) \
+                        and isinstance(item.value.func.value,ast.Name) \
+                        and (item.value.func.value.id,item.value.func.attr)==("subprocess","Popen"):
+                    names=[target.id for target in item.targets if isinstance(target,ast.Name)]
+                    popen_assignments.extend(names)
+            timeout_calls=[]
+            for item in ast.walk(run_codex_nodes[0]):
+                if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute) \
+                        and isinstance(item.func.value,ast.Name) \
+                        and item.func.value.id in popen_assignments \
+                        and item.func.attr in {"wait","communicate"}:
+                    kws=[kw for kw in item.keywords if kw.arg=="timeout"
+                         and isinstance(kw.value,ast.Name)
+                         and kw.value.id=="CODEX_RUN_TIMEOUT_SECONDS"]
+                    if len(kws)==1: timeout_calls.append(item)
+            popen_reassign=[item for item in ast.walk(run_codex_nodes[0])
+                            if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del))
+                            and item.id in popen_assignments]
+            successful_returns=[item for item in ast.walk(run_codex_nodes[0])
+                                if isinstance(item,ast.Return)]
+            timeout_dominates=(len(timeout_calls)==1 and all(
+                timeout_calls[0].lineno < item.lineno for item in successful_returns))
+            ancestor=parent_map.get(timeout_calls[0]) if timeout_calls else None
+            timeout_reachable=True
+            while ancestor is not None and ancestor is not run_codex_nodes[0]:
+                if isinstance(ancestor,ast.If) and isinstance(ancestor.test,ast.Constant) \
+                        and ancestor.test.value is False: timeout_reachable=False
+                ancestor=parent_map.get(ancestor)
+            consumer_architecture_ok = (
+                [arg.arg for arg in consumer.args.args] == exact_consumer_args
+                and consumer.args.vararg is None and consumer.args.kwarg is None
+                and not consumer.args.kwonlyargs and not consumer.decorator_list
+                and len(consumer_calls) == len(run_calls) == len(seam_loads) == 1
+                and exact_call_args and binding_provenance and helper_direct
+                and not tainted and not graph_tainted
+                and graph_ok and not rebound
+                and len(timeout_assignments) == 1
+                and isinstance(timeout_assignments[0].value, ast.Constant)
+                and timeout_assignments[0].value.value == 86400
+                and len(timeout_loads) == 1 and len(all_popen_sites)==1
+                and len(popen_assignments)==1 and len(popen_reassign)==1
+                and len(timeout_calls)==1 and timeout_dominates and timeout_reachable)
 
-        # R17 semantic overlay.  The earlier syntax inventory remains a useful
-        # closed-language check, but it never grants PASS by itself.  This
-        # monotone def-use analysis attaches security types to values and
-        # propagates them through aliases, containers, parameters and returns.
-        IDENTITY="IDENTITY"; SINK="SINK"; CANONICAL="CANONICAL"
-        INVOCATION="INVOCATION"; RUN="RUN"; ROLE="ROLE"; UNKNOWN="UNKNOWN"
-        MODULE_SUBPROCESS="MODULE_SUBPROCESS"; PROCESS_CONSTRUCTOR="PROCESS_CONSTRUCTOR"
-        PROCESS_OBJECT="PROCESS_OBJECT"
-        module_bindings={};process_binding_unresolved=[]
-        for imported in (item for item in ast.walk(candidate_tree)
-                         if isinstance(item,(ast.Import,ast.ImportFrom))):
-            if isinstance(imported,ast.Import):
-                for alias in imported.names:
-                    if alias.name=="subprocess":
-                        module_bindings[alias.asname or alias.name]=frozenset({MODULE_SUBPROCESS})
-            elif imported.module=="subprocess":
-                for alias in imported.names:
-                    if alias.name=="Popen":
-                        module_bindings[alias.asname or alias.name]=frozenset({PROCESS_CONSTRUCTOR})
-        def r17_targets(node):
-            if isinstance(node,ast.Name): return {node.id}
-            if isinstance(node,(ast.Tuple,ast.List)):
-                return set().union(*(r17_targets(item) for item in node.elts)) if node.elts else set()
-            if isinstance(node,(ast.Attribute,ast.Subscript)):
-                return r17_targets(node.value)
-            return set()
-        def r17_join(*values): return frozenset().union(*values) if values else frozenset()
-        helper_summaries={name:frozenset() for name in top_functions}
-        identity_helpers={name for name,node in top_functions.items()
-            if {part.value for part in ast.walk(node) if isinstance(part,ast.Constant)
-                and isinstance(part.value,str)} & {
-                    "config/codex-provider-identity.json","codex-provider-identity.json"}
-            or {part.value for part in ast.walk(node) if isinstance(part,ast.Constant)
-                and isinstance(part.value,str)} >= {
-                    "executable_path","executable_sha256",
-                    "code_mode_host_path","code_mode_host_sha256"}}
-        capability_calls={"read","readinto","read1","readinto1","readall",
-                          "pread","preadv","readv","fdopen","FileIO","mmap",
-                          "dup","fileno","raw","buffer","seek","tell"}
-        r17_active=set()
-        def r17_expr(node,env):
-            if node is None: return frozenset()
-            if isinstance(node,ast.Name):
-                if node.id in module_bindings: return module_bindings[node.id]
-                if node.id in pure_names|{"os","io","mmap","json","hashlib","stat",
-                                         "Path","Stop","MAX_RESULT_BYTES"}:
-                    return frozenset()
-                return env.get(node.id,frozenset({UNKNOWN}))
-            if isinstance(node,ast.Constant): return frozenset()
-            if isinstance(node,(ast.List,ast.Tuple,ast.Set)):
-                return r17_join(*(r17_expr(item,env) for item in node.elts))
-            if isinstance(node,ast.Dict):
-                return r17_join(*(r17_expr(item,env) for item in node.keys+node.values if item))
-            if isinstance(node,ast.Subscript): return r17_expr(node.value,env)
-            if isinstance(node,ast.Attribute):
-                base=r17_expr(node.value,env)
-                if node.attr=="Popen" and MODULE_SUBPROCESS in base:
-                    return frozenset({PROCESS_CONSTRUCTOR})
-                return base
-            if isinstance(node,ast.Call):
-                transferred=r17_join(*(r17_expr(item,env) for item in
-                    list(node.args)+[kw.value for kw in node.keywords]))
-                if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
-                    return r17_join(transferred,frozenset({CANONICAL}))
-                if isinstance(node.func,ast.Name) and node.func.id=="now_id":
-                    return r17_join(transferred,frozenset({RUN,INVOCATION}))
-                callable_tags=r17_expr(node.func,env)
-                if PROCESS_CONSTRUCTOR in callable_tags: return frozenset({PROCESS_OBJECT})
-                if isinstance(node.func,ast.Name) and node.func.id in identity_helpers:
-                    return r17_join(transferred,frozenset({IDENTITY}))
-                if isinstance(node.func,ast.Name) and node.func.id in helper_summaries:
-                    helper=top_functions[node.func.id]
-                    if node.func.id in r17_active: return frozenset({UNKNOWN})
-                    seeds,valid=r20_bind_call(helper,node,env)
-                    if not valid: return frozenset({UNKNOWN})
-                    r17_active.add(node.func.id)
-                    try: returned=r17_interpret(helper,seeds)[1]
-                    finally: r17_active.remove(node.func.id)
-                    return r17_join(transferred,returned)
-                if isinstance(node.func,ast.Attribute) and node.func.attr in capability_calls:
-                    return r17_join(transferred,r17_expr(node.func.value,env))
-                return transferred
-            return r17_join(*(r17_expr(item,env) for item in ast.iter_child_nodes(node)))
-        def r20_bind_call(fn,call,env):
-            positional=list(fn.args.posonlyargs)+list(fn.args.args)
-            names=[arg.arg for arg in positional]
-            kwonly=[arg.arg for arg in fn.args.kwonlyargs]
-            bound={};valid=True
-            if len(call.args)>len(positional) and fn.args.vararg is None: valid=False
-            for index,arg in enumerate(call.args[:len(positional)]):
-                bound[names[index]]=r17_expr(arg,env)
-            if len(call.args)>len(positional) and fn.args.vararg is not None:
-                bound[fn.args.vararg.arg]=r17_join(*(r17_expr(arg,env)
-                    for arg in call.args[len(positional):]))
-            for kw in call.keywords:
-                if kw.arg is None:
-                    if fn.args.kwarg is None: valid=False
-                    else: bound[fn.args.kwarg.arg]=r17_join(
+            # R17 semantic overlay.  The earlier syntax inventory remains a useful
+            # closed-language check, but it never grants PASS by itself.  This
+            # monotone def-use analysis attaches security types to values and
+            # propagates them through aliases, containers, parameters and returns.
+            IDENTITY="IDENTITY"; SINK="SINK"; CANONICAL="CANONICAL"
+            INVOCATION="INVOCATION"; RUN="RUN"; ROLE="ROLE"; UNKNOWN="UNKNOWN"
+            MODULE_SUBPROCESS="MODULE_SUBPROCESS"; PROCESS_CONSTRUCTOR="PROCESS_CONSTRUCTOR"
+            PROCESS_OBJECT="PROCESS_OBJECT"
+            module_bindings={};process_binding_unresolved=[]
+            for imported in (item for item in ast.walk(candidate_tree)
+                             if isinstance(item,(ast.Import,ast.ImportFrom))):
+                if isinstance(imported,ast.Import):
+                    for alias in imported.names:
+                        if alias.name=="subprocess":
+                            module_bindings[alias.asname or alias.name]=frozenset({MODULE_SUBPROCESS})
+                elif imported.module=="subprocess":
+                    for alias in imported.names:
+                        if alias.name=="Popen":
+                            module_bindings[alias.asname or alias.name]=frozenset({PROCESS_CONSTRUCTOR})
+            def r17_targets(node):
+                if isinstance(node,ast.Name): return {node.id}
+                if isinstance(node,(ast.Tuple,ast.List)):
+                    return set().union(*(r17_targets(item) for item in node.elts)) if node.elts else set()
+                if isinstance(node,(ast.Attribute,ast.Subscript)):
+                    return r17_targets(node.value)
+                return set()
+            def r17_join(*values): return frozenset().union(*values) if values else frozenset()
+            helper_summaries={name:frozenset() for name in top_functions}
+            identity_helpers={name for name,node in top_functions.items()
+                if {part.value for part in ast.walk(node) if isinstance(part,ast.Constant)
+                    and isinstance(part.value,str)} & {
+                        "config/codex-provider-identity.json","codex-provider-identity.json"}
+                or {part.value for part in ast.walk(node) if isinstance(part,ast.Constant)
+                    and isinstance(part.value,str)} >= {
+                        "executable_path","executable_sha256",
+                        "code_mode_host_path","code_mode_host_sha256"}}
+            capability_calls={"read","readinto","read1","readinto1","readall",
+                              "pread","preadv","readv","fdopen","FileIO","mmap",
+                              "dup","fileno","raw","buffer","seek","tell"}
+            r17_active=set()
+            def r17_expr(node,env):
+                if node is None: return frozenset()
+                if isinstance(node,ast.Name):
+                    if node.id in module_bindings: return module_bindings[node.id]
+                    if node.id in pure_names|{"os","io","mmap","json","hashlib","stat",
+                                             "Path","Stop","MAX_RESULT_BYTES"}:
+                        return frozenset()
+                    return env.get(node.id,frozenset({UNKNOWN}))
+                if isinstance(node,ast.Constant): return frozenset()
+                if isinstance(node,(ast.List,ast.Tuple,ast.Set)):
+                    return r17_join(*(r17_expr(item,env) for item in node.elts))
+                if isinstance(node,ast.Dict):
+                    return r17_join(*(r17_expr(item,env) for item in node.keys+node.values if item))
+                if isinstance(node,ast.Subscript): return r17_expr(node.value,env)
+                if isinstance(node,ast.Attribute):
+                    base=r17_expr(node.value,env)
+                    if node.attr=="Popen" and MODULE_SUBPROCESS in base:
+                        return frozenset({PROCESS_CONSTRUCTOR})
+                    return base
+                if isinstance(node,ast.Call):
+                    transferred=r17_join(*(r17_expr(item,env) for item in
+                        list(node.args)+[kw.value for kw in node.keywords]))
+                    if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
+                        return r17_join(transferred,frozenset({CANONICAL}))
+                    if isinstance(node.func,ast.Name) and node.func.id=="now_id":
+                        return r17_join(transferred,frozenset({RUN,INVOCATION}))
+                    callable_tags=r17_expr(node.func,env)
+                    if PROCESS_CONSTRUCTOR in callable_tags: return frozenset({PROCESS_OBJECT})
+                    if isinstance(node.func,ast.Name) and node.func.id in identity_helpers:
+                        return r17_join(transferred,frozenset({IDENTITY}))
+                    if isinstance(node.func,ast.Name) and node.func.id in helper_summaries:
+                        helper=top_functions[node.func.id]
+                        if node.func.id in r17_active: return frozenset({UNKNOWN})
+                        seeds,valid=r20_bind_call(helper,node,env)
+                        if not valid: return frozenset({UNKNOWN})
+                        r17_active.add(node.func.id)
+                        try: returned=r17_interpret(helper,seeds)[1]
+                        finally: r17_active.remove(node.func.id)
+                        return r17_join(transferred,returned)
+                    if isinstance(node.func,ast.Attribute) and node.func.attr in capability_calls:
+                        return r17_join(transferred,r17_expr(node.func.value,env))
+                    return transferred
+                return r17_join(*(r17_expr(item,env) for item in ast.iter_child_nodes(node)))
+            def r20_bind_call(fn,call,env):
+                positional=list(fn.args.posonlyargs)+list(fn.args.args)
+                names=[arg.arg for arg in positional]
+                kwonly=[arg.arg for arg in fn.args.kwonlyargs]
+                bound={};valid=True
+                if len(call.args)>len(positional) and fn.args.vararg is None: valid=False
+                for index,arg in enumerate(call.args[:len(positional)]):
+                    bound[names[index]]=r17_expr(arg,env)
+                if len(call.args)>len(positional) and fn.args.vararg is not None:
+                    bound[fn.args.vararg.arg]=r17_join(*(r17_expr(arg,env)
+                        for arg in call.args[len(positional):]))
+                for kw in call.keywords:
+                    if kw.arg is None:
+                        if fn.args.kwarg is None: valid=False
+                        else: bound[fn.args.kwarg.arg]=r17_join(
+                            bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(kw.value,env))
+                        continue
+                    if kw.arg in bound: valid=False;continue
+                    if kw.arg in names or kw.arg in kwonly: bound[kw.arg]=r17_expr(kw.value,env)
+                    elif fn.args.kwarg is not None: bound[fn.args.kwarg.arg]=r17_join(
                         bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(kw.value,env))
-                    continue
-                if kw.arg in bound: valid=False;continue
-                if kw.arg in names or kw.arg in kwonly: bound[kw.arg]=r17_expr(kw.value,env)
-                elif fn.args.kwarg is not None: bound[fn.args.kwarg.arg]=r17_join(
-                    bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(kw.value,env))
-                else: valid=False
-            defaults=dict(zip(names[len(names)-len(fn.args.defaults):],fn.args.defaults))
-            kwdefaults=dict(zip(kwonly,fn.args.kw_defaults))
-            for name in names:
-                if name not in bound:
-                    if name in defaults: bound[name]=r17_expr(defaults[name],env)
-                    else: valid=False;bound[name]=frozenset({UNKNOWN})
-            for name in kwonly:
-                if name not in bound:
-                    default=kwdefaults.get(name)
-                    if default is not None: bound[name]=r17_expr(default,env)
-                    else: valid=False;bound[name]=frozenset({UNKNOWN})
-            if fn.args.vararg is not None: bound.setdefault(fn.args.vararg.arg,frozenset())
-            if fn.args.kwarg is not None: bound.setdefault(fn.args.kwarg.arg,frozenset())
-            return bound,valid
-        def r17_interpret(fn,seeds):
-            env={arg.arg:seeds.get(arg.arg,frozenset({UNKNOWN})) for arg in fn.args.args}
-            returns=[]
-            for _ in range(max(2,len(list(ast.walk(fn))))):
-                changed=False;returns=[]
-                for item in ast.walk(fn):
-                    if isinstance(item,(ast.Assign,ast.AnnAssign,ast.NamedExpr)):
+                    else: valid=False
+                defaults=dict(zip(names[len(names)-len(fn.args.defaults):],fn.args.defaults))
+                kwdefaults=dict(zip(kwonly,fn.args.kw_defaults))
+                for name in names:
+                    if name not in bound:
+                        if name in defaults: bound[name]=r17_expr(defaults[name],env)
+                        else: valid=False;bound[name]=frozenset({UNKNOWN})
+                for name in kwonly:
+                    if name not in bound:
+                        default=kwdefaults.get(name)
+                        if default is not None: bound[name]=r17_expr(default,env)
+                        else: valid=False;bound[name]=frozenset({UNKNOWN})
+                if fn.args.vararg is not None: bound.setdefault(fn.args.vararg.arg,frozenset())
+                if fn.args.kwarg is not None: bound.setdefault(fn.args.kwarg.arg,frozenset())
+                return bound,valid
+            def r17_interpret(fn,seeds):
+                env={arg.arg:seeds.get(arg.arg,frozenset({UNKNOWN})) for arg in fn.args.args}
+                returns=[]
+                for _ in range(max(2,len(list(ast.walk(fn))))):
+                    changed=False;returns=[]
+                    for item in ast.walk(fn):
+                        if isinstance(item,(ast.Assign,ast.AnnAssign,ast.NamedExpr)):
+                            targets=item.targets if isinstance(item,ast.Assign) else [item.target]
+                            value=r17_expr(item.value,env)
+                            for target in targets:
+                                names=r17_targets(target)
+                                if not names and value & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,
+                                                          PROCESS_OBJECT}:
+                                    process_binding_unresolved.append(type(target).__name__)
+                                for name in names:
+                                    joined=r17_join(env.get(name,frozenset()),value)
+                                    if joined != env.get(name): env[name]=joined;changed=True
+                        elif isinstance(item,ast.Return): returns.append(r17_expr(item.value,env))
+                    if not changed: break
+                return env,r17_join(*returns)
+            for name in identity_helpers: helper_summaries[name]=frozenset({IDENTITY})
+            for _ in range(len(top_functions)+2):
+                prior=dict(helper_summaries)
+                for name in seen:
+                    _,helper_summaries[name]=r17_interpret(top_functions[name],{})
+                if prior==helper_summaries: break
+            seam_seeds={"sink_fd":frozenset({SINK}),
+                        "canonical_destination":frozenset({CANONICAL}),
+                        "invocation_id":frozenset({INVOCATION}),"run_id":frozenset({RUN}),
+                        "role":frozenset({ROLE})}
+            seam_env,_=r17_interpret(consumer,seam_seeds)
+            # Context-sensitive call-site propagation.  Formal tags are the union
+            # of actual tags at each reachable call; recursion is rejected rather
+            # than widened optimistically.
+            contexts={consumer.name:seam_seeds};context_queue=[consumer.name];recursive=False
+            while context_queue:
+                name=context_queue.pop();node=top_functions[name]
+                env,_=r17_interpret(node,contexts[name])
+                for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)
+                             and isinstance(item.func,ast.Name) and item.func.id in seen):
+                    child=call.func.id
+                    if child==name: recursive=True;continue
+                    seeds,valid=r20_bind_call(top_functions[child],call,env)
+                    if not valid: recursive=True;continue
+                    prior=contexts.get(child,{})
+                    joined={key:r17_join(prior.get(key,frozenset()),value)
+                            for key,value in seeds.items()}
+                    if joined!=prior: contexts[child]=joined;context_queue.append(child)
+            receiver_ok=not recursive
+            for name,seeds in contexts.items():
+                node=top_functions[name];env,_=r17_interpret(node,seeds)
+                for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)
+                             and isinstance(item.func,ast.Attribute)
+                             and item.func.attr in capability_calls):
+                    flow=r17_join(r17_expr(item.func.value,env),
+                                  *(r17_expr(arg,env) for arg in call.args))
+                    if SINK not in flow: receiver_ok=False
+            sensitive_nodes=[item.test for item in ast.walk(consumer)
+                             if isinstance(item,(ast.If,ast.While,ast.Assert))]
+            sensitive_nodes += [item.value for item in ast.walk(consumer)
+                                if isinstance(item,ast.Return)]
+            sensitive_nodes += [arg for item in ast.walk(consumer) if isinstance(item,ast.Call)
+                                for arg in list(item.args)+[kw.value for kw in item.keywords]]
+            sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
+            identity_escape=any(IDENTITY in value or UNKNOWN in value
+                                for value in sensitive_flow)
+
+            # Exact capability provenance is established at the producer call, not
+            # by a conveniently named local.  The open must use O_RDONLY and
+            # O_NOFOLLOW as actual flag operands; the resulting value then seeds
+            # def-use propagation into the direct seam call.
+            def r17_open(node):
+                if not (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+                        and isinstance(node.func.value,ast.Name)
+                        and (node.func.value.id,node.func.attr)==("os","open")): return False
+                flags=node.args[1] if len(node.args)>1 else next((kw.value for kw in node.keywords
+                                                                  if kw.arg=="flags"),None)
+                attrs={(part.value.id,part.attr) for part in ast.walk(flags)
+                       if isinstance(part,ast.Attribute) and isinstance(part.value,ast.Name)} if flags else set()
+                return {("os","O_RDONLY"),("os","O_NOFOLLOW")} <= attrs
+            semantic_call_ok=False
+            if len(run_calls)==1:
+                call=run_calls[0];env={arg.arg:(frozenset({ROLE}) if arg.arg=="role"
+                                               else frozenset({CANONICAL}) if arg.arg=="repo"
+                                               else frozenset({UNKNOWN}))
+                                          for arg in run_codex_nodes[0].args.args}
+                # Fixed-point assignments, with semantic origins attached to the
+                # operation that creates each authority rather than its target name.
+                for _ in range(max(2,len(list(ast.walk(run_codex_nodes[0]))))):
+                    changed=False
+                    for item in ast.walk(run_codex_nodes[0]):
+                        if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
                         targets=item.targets if isinstance(item,ast.Assign) else [item.target]
                         value=r17_expr(item.value,env)
+                        if r17_open(item.value): value=frozenset({SINK})
                         for target in targets:
-                            names=r17_targets(target)
-                            if not names and value & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,
-                                                      PROCESS_OBJECT}:
-                                process_binding_unresolved.append(type(target).__name__)
-                            for name in names:
+                            for name in r17_targets(target):
                                 joined=r17_join(env.get(name,frozenset()),value)
                                 if joined != env.get(name): env[name]=joined;changed=True
-                    elif isinstance(item,ast.Return): returns.append(r17_expr(item.value,env))
-                if not changed: break
-            return env,r17_join(*returns)
-        for name in identity_helpers: helper_summaries[name]=frozenset({IDENTITY})
-        for _ in range(len(top_functions)+2):
-            prior=dict(helper_summaries)
-            for name in seen:
-                _,helper_summaries[name]=r17_interpret(top_functions[name],{})
-            if prior==helper_summaries: break
-        seam_seeds={"sink_fd":frozenset({SINK}),
-                    "canonical_destination":frozenset({CANONICAL}),
-                    "invocation_id":frozenset({INVOCATION}),"run_id":frozenset({RUN}),
-                    "role":frozenset({ROLE})}
-        seam_env,_=r17_interpret(consumer,seam_seeds)
-        # Context-sensitive call-site propagation.  Formal tags are the union
-        # of actual tags at each reachable call; recursion is rejected rather
-        # than widened optimistically.
-        contexts={consumer.name:seam_seeds};context_queue=[consumer.name];recursive=False
-        while context_queue:
-            name=context_queue.pop();node=top_functions[name]
-            env,_=r17_interpret(node,contexts[name])
-            for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)
-                         and isinstance(item.func,ast.Name) and item.func.id in seen):
-                child=call.func.id
-                if child==name: recursive=True;continue
-                seeds,valid=r20_bind_call(top_functions[child],call,env)
-                if not valid: recursive=True;continue
-                prior=contexts.get(child,{})
-                joined={key:r17_join(prior.get(key,frozenset()),value)
-                        for key,value in seeds.items()}
-                if joined!=prior: contexts[child]=joined;context_queue.append(child)
-        receiver_ok=not recursive
-        for name,seeds in contexts.items():
-            node=top_functions[name];env,_=r17_interpret(node,seeds)
-            for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)
-                         and isinstance(item.func,ast.Attribute)
-                         and item.func.attr in capability_calls):
-                flow=r17_join(r17_expr(item.func.value,env),
-                              *(r17_expr(arg,env) for arg in call.args))
-                if SINK not in flow: receiver_ok=False
-        sensitive_nodes=[item.test for item in ast.walk(consumer)
-                         if isinstance(item,(ast.If,ast.While,ast.Assert))]
-        sensitive_nodes += [item.value for item in ast.walk(consumer)
-                            if isinstance(item,ast.Return)]
-        sensitive_nodes += [arg for item in ast.walk(consumer) if isinstance(item,ast.Call)
-                            for arg in list(item.args)+[kw.value for kw in item.keywords]]
-        sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
-        identity_escape=any(IDENTITY in value or UNKNOWN in value
-                            for value in sensitive_flow)
+                    if not changed: break
+                actual=[r17_expr(arg,env) for arg in call.args]
+                exact_actual=(frozenset({SINK}),frozenset({CANONICAL}),
+                              frozenset({INVOCATION}),frozenset({RUN}),frozenset({ROLE}))
+                semantic_call_ok=(len(actual)==5 and tuple(actual)==exact_actual)
+                # The consumer receives exactly the proven call-site tag sets; no
+                # clean re-seeding may launder helper/container aliases.
+                if semantic_call_ok:
+                    seam_seeds=dict(zip(exact_consumer_args,actual))
+                    seam_env,_=r17_interpret(consumer,seam_seeds)
+                    sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
+                    identity_escape=any(IDENTITY in value or UNKNOWN in value
+                                        for value in sensitive_flow)
+                    contexts={consumer.name:seam_seeds};context_queue=[consumer.name]
+                    receiver_ok=True;recursive=False
+                    while context_queue:
+                        name=context_queue.pop();node=top_functions[name]
+                        child_env,_=r17_interpret(node,contexts[name])
+                        for helper_call in (item for item in ast.walk(node)
+                            if isinstance(item,ast.Call) and isinstance(item.func,ast.Name)
+                            and item.func.id in seen):
+                            child=helper_call.func.id
+                            if child==name: recursive=True;continue
+                            seeds,valid=r20_bind_call(top_functions[child],helper_call,child_env)
+                            if not valid: recursive=True;continue
+                            prior=contexts.get(child,{})
+                            joined={key:r17_join(prior.get(key,frozenset()),value)
+                                    for key,value in seeds.items()}
+                            if joined!=prior: contexts[child]=joined;context_queue.append(child)
+                    for name,seeds in contexts.items():
+                        node=top_functions[name];child_env,_=r17_interpret(node,seeds)
+                        for capability_call in (item for item in ast.walk(node)
+                            if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute)
+                            and item.func.attr in capability_calls):
+                            flow=r17_join(r17_expr(capability_call.func.value,child_env),
+                                *(r17_expr(arg,child_env) for arg in capability_call.args))
+                            if SINK not in flow: receiver_ok=False
+                    receiver_ok=receiver_ok and not recursive
 
-        # Exact capability provenance is established at the producer call, not
-        # by a conveniently named local.  The open must use O_RDONLY and
-        # O_NOFOLLOW as actual flag operands; the resulting value then seeds
-        # def-use propagation into the direct seam call.
-        def r17_open(node):
-            if not (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
-                    and isinstance(node.func.value,ast.Name)
-                    and (node.func.value.id,node.func.attr)==("os","open")): return False
-            flags=node.args[1] if len(node.args)>1 else next((kw.value for kw in node.keywords
-                                                              if kw.arg=="flags"),None)
-            attrs={(part.value.id,part.attr) for part in ast.walk(flags)
-                   if isinstance(part,ast.Attribute) and isinstance(part.value,ast.Name)} if flags else set()
-            return {("os","O_RDONLY"),("os","O_NOFOLLOW")} <= attrs
-        semantic_call_ok=False
-        if len(run_calls)==1:
-            call=run_calls[0];env={arg.arg:(frozenset({ROLE}) if arg.arg=="role"
-                                           else frozenset({CANONICAL}) if arg.arg=="repo"
-                                           else frozenset({UNKNOWN}))
-                                      for arg in run_codex_nodes[0].args.args}
-            # Fixed-point assignments, with semantic origins attached to the
-            # operation that creates each authority rather than its target name.
-            for _ in range(max(2,len(list(ast.walk(run_codex_nodes[0]))))):
-                changed=False
-                for item in ast.walk(run_codex_nodes[0]):
-                    if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
-                    targets=item.targets if isinstance(item,ast.Assign) else [item.target]
-                    value=r17_expr(item.value,env)
-                    if r17_open(item.value): value=frozenset({SINK})
-                    for target in targets:
-                        for name in r17_targets(target):
-                            joined=r17_join(env.get(name,frozenset()),value)
-                            if joined != env.get(name): env[name]=joined;changed=True
-                if not changed: break
-            actual=[r17_expr(arg,env) for arg in call.args]
-            exact_actual=(frozenset({SINK}),frozenset({CANONICAL}),
-                          frozenset({INVOCATION}),frozenset({RUN}),frozenset({ROLE}))
-            semantic_call_ok=(len(actual)==5 and tuple(actual)==exact_actual)
-            # The consumer receives exactly the proven call-site tag sets; no
-            # clean re-seeding may launder helper/container aliases.
-            if semantic_call_ok:
-                seam_seeds=dict(zip(exact_consumer_args,actual))
-                seam_env,_=r17_interpret(consumer,seam_seeds)
-                sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
-                identity_escape=any(IDENTITY in value or UNKNOWN in value
-                                    for value in sensitive_flow)
-                contexts={consumer.name:seam_seeds};context_queue=[consumer.name]
-                receiver_ok=True;recursive=False
-                while context_queue:
-                    name=context_queue.pop();node=top_functions[name]
-                    child_env,_=r17_interpret(node,contexts[name])
-                    for helper_call in (item for item in ast.walk(node)
-                        if isinstance(item,ast.Call) and isinstance(item.func,ast.Name)
-                        and item.func.id in seen):
-                        child=helper_call.func.id
-                        if child==name: recursive=True;continue
-                        seeds,valid=r20_bind_call(top_functions[child],helper_call,child_env)
-                        if not valid: recursive=True;continue
-                        prior=contexts.get(child,{})
-                        joined={key:r17_join(prior.get(key,frozenset()),value)
-                                for key,value in seeds.items()}
-                        if joined!=prior: contexts[child]=joined;context_queue.append(child)
-                for name,seeds in contexts.items():
-                    node=top_functions[name];child_env,_=r17_interpret(node,seeds)
-                    for capability_call in (item for item in ast.walk(node)
-                        if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute)
-                        and item.func.attr in capability_calls):
-                        flow=r17_join(r17_expr(capability_call.func.value,child_env),
-                            *(r17_expr(arg,child_env) for arg in capability_call.args))
-                        if SINK not in flow: receiver_ok=False
-                receiver_ok=receiver_ok and not recursive
+            # Resolve constructor values (module aliases, attributes, containers and
+            # helper returns) with the same value interpreter before building CFG.
+            run_flow_env,_=r17_interpret(run_codex_nodes[0],{
+                arg.arg:(frozenset({ROLE}) if arg.arg=="role"
+                         else frozenset({CANONICAL}) if arg.arg=="repo"
+                         else frozenset({UNKNOWN}))
+                for arg in run_codex_nodes[0].args.args})
+            resolved_popen=[item for item in ast.walk(candidate_tree)
+                if isinstance(item,ast.Call)
+                and PROCESS_CONSTRUCTOR in r17_expr(item.func,run_flow_env)]
 
-        # Resolve constructor values (module aliases, attributes, containers and
-        # helper returns) with the same value interpreter before building CFG.
-        run_flow_env,_=r17_interpret(run_codex_nodes[0],{
-            arg.arg:(frozenset({ROLE}) if arg.arg=="role"
-                     else frozenset({CANONICAL}) if arg.arg=="repo"
-                     else frozenset({UNKNOWN}))
-            for arg in run_codex_nodes[0].args.args})
-        resolved_popen=[item for item in ast.walk(candidate_tree)
-            if isinstance(item,ast.Call)
-            and PROCESS_CONSTRUCTOR in r17_expr(item.func,run_flow_env)]
-
-        # Conservative structured CFG.  A wait nested in any conditional,
-        # loop, with or exception region cannot dominate the success exits.
-        # This rejects bypass edges rather than guessing from line numbers.
-        cfg_ok=False
-        if len(timeout_calls)==1 and len(resolved_popen)==1:
-            call=timeout_calls[0];ancestor=parent_map.get(call);guarded=False
-            while ancestor is not None and ancestor is not run_codex_nodes[0]:
-                if isinstance(ancestor,(ast.If,ast.For,ast.AsyncFor,ast.While,ast.Try,
-                                        ast.TryStar,ast.ExceptHandler,ast.With,ast.AsyncWith)):
-                    guarded=True
-                ancestor=parent_map.get(ancestor)
-            top={node:index for index,node in enumerate(run_codex_nodes[0].body)}
-            stmt=call
-            while parent_map.get(stmt) is not run_codex_nodes[0]: stmt=parent_map[stmt]
-            call_index=top.get(stmt,-1);return_indices=[]
-            for ret in successful_returns:
-                stmt=ret
+            # Conservative structured CFG.  A wait nested in any conditional,
+            # loop, with or exception region cannot dominate the success exits.
+            # This rejects bypass edges rather than guessing from line numbers.
+            cfg_ok=False
+            if len(timeout_calls)==1 and len(resolved_popen)==1:
+                call=timeout_calls[0];ancestor=parent_map.get(call);guarded=False
+                while ancestor is not None and ancestor is not run_codex_nodes[0]:
+                    if isinstance(ancestor,(ast.If,ast.For,ast.AsyncFor,ast.While,ast.Try,
+                                            ast.TryStar,ast.ExceptHandler,ast.With,ast.AsyncWith)):
+                        guarded=True
+                    ancestor=parent_map.get(ancestor)
+                top={node:index for index,node in enumerate(run_codex_nodes[0].body)}
+                stmt=call
                 while parent_map.get(stmt) is not run_codex_nodes[0]: stmt=parent_map[stmt]
-                return_indices.append(top.get(stmt,-1))
-            cfg_ok=(not guarded and call_index>=0
-                    and all(index>call_index for index in return_indices))
-        unresolved_process_calls=[call for call in ast.walk(candidate_tree)
-            if isinstance(call,ast.Call) and UNKNOWN in r17_expr(call.func,run_flow_env)
-            and any(isinstance(part,ast.Name) and part.id in module_bindings
-                    for part in ast.walk(call.func))]
-        consumer_architecture_ok=(consumer_architecture_ok and semantic_call_ok
-                                  and receiver_ok and not identity_escape and cfg_ok
-                                  and len(resolved_popen)==1 and not process_binding_unresolved
-                                  and not unresolved_process_calls
-                                  and r20_complete_tree_analysis(candidate_tree))
+                call_index=top.get(stmt,-1);return_indices=[]
+                for ret in successful_returns:
+                    stmt=ret
+                    while parent_map.get(stmt) is not run_codex_nodes[0]: stmt=parent_map[stmt]
+                    return_indices.append(top.get(stmt,-1))
+                cfg_ok=(not guarded and call_index>=0
+                        and all(index>call_index for index in return_indices))
+            unresolved_process_calls=[call for call in ast.walk(candidate_tree)
+                if isinstance(call,ast.Call) and UNKNOWN in r17_expr(call.func,run_flow_env)
+                and any(isinstance(part,ast.Name) and part.id in module_bindings
+                        for part in ast.walk(call.func))]
+            consumer_architecture_ok=(consumer_architecture_ok and semantic_call_ok
+                                      and receiver_ok and not identity_escape and cfg_ok
+                                      and len(resolved_popen)==1 and not process_binding_unresolved
+                                      and not unresolved_process_calls
+                                      and r20_complete_tree_analysis(candidate_tree))
+        return {"verdict": consumer_architecture_ok,
+                "exact_consumer_args": exact_consumer_args,
+                "tree_shape": r20_complete_tree_analysis}
+    candidate_analysis = analyze_candidate_tree(candidate_tree)
+    consumer_architecture_ok = candidate_analysis["verdict"]
+    exact_consumer_args = candidate_analysis["exact_consumer_args"]
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -1970,7 +1977,7 @@ if mode == 'output_then_fail': sys.exit(17)
             node.body=[ast.Pass()]
         if ast.dump(baseline,include_attributes=False)!=ast.dump(candidate,include_attributes=False):
             raise RuntimeError("R17 reader variant escaped consumer body")
-        variant_source_admissible[family]=r20_complete_tree_analysis(tree)
+        variant_source_admissible[family]=candidate_analysis["tree_shape"](tree)
         path=work/f"r17-reader-{family}.py";path.write_text(ast.unparse(tree)+"\n",encoding="utf-8")
         return path
     if consumer_architecture_ok:
