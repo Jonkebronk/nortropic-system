@@ -840,3 +840,7 @@ R8 seeds snapshot dev/inode identities from the observed exact private family at
 not from pathname-open spelling. Connected corruption covers high-level buffered variants plus os.read,
 pread, readv and preadv, with actual all-openat and positional-read subject controls. Production remains
 unchanged.
+
+R9 always wraps fdopen handles and resolves their live fileno identity on every buffered read, allowing
+identity seeding to occur later at protection. A connected pre-protection openat-to-fdopen subject path
+proves corruption precedes its actual final complete verification. Production remains unchanged.
