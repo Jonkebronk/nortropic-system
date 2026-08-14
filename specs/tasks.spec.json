@@ -434,6 +434,30 @@
       "max_added_lines": 3200
     },
     {
+      "id": "h-032",
+      "slice": "H032_EXACT_CODEX_PROVIDER_IDENTITY",
+      "authority_class": "ordinary",
+      "title": "Exact Codex provider identity at the process boundary",
+      "summary": "The provider launch boundary freshly reads one owner-frozen exact authority document, binds the actual OpenAI Codex vendor Mach-O through one safely opened regular executable object and SHA-256, materializes and finally rehashes a private snapshot, and executes only that absolute snapshot under the already frozen G20 containment boundary. H-033 remains the upstream authenticated provenance authority; H-032 neither changes nor reinterprets its protected allowlist, receipts or H-034 handoff.",
+      "allowed_write": [
+        "scripts/nortropic-codex-autopilot.py",
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
+      "owner_author_allowed_write": [],
+      "exit_test": "verify/bin/h-032-exit",
+      "exit_criterion": "LIFECYCLE AND UPSTREAM AUTHORITY: H-032 is exactly one ordinary task, depends exactly on published H-033 and uses canonical verify/bin/h-032-exit. H-033's frozen task, gate and protected installed provenance authority remain unchanged and green; H-032 does not add a probe, receipt format, verifier or parallel state store. OWNER-FROZEN PROVIDER AUTHORITY: config/codex-provider-identity.json is outside builder allowed_write and is one duplicate-free UTF-8 JSON object with exactly schema_version=1, provider=openai-codex, the measured absolute native vendor executable_path and lowercase executable_sha256. Missing, extra, duplicate, reordered-type-independent, malformed, wrong-type, empty, relative-path or non-lowercase/non-64-hex authority rejects. The authority is reread coherently for every provider launch; neither a prior successful validation nor a prior snapshot authorizes a later launch. EXECUTED IDENTITY: the actual provider process is the vendor Mach-O, not the Homebrew symlink, JavaScript wrapper, Node process, basename, PATH result, model prose or caller override. The boundary opens the authority path no-follow and binds fstat regular/executable identity, complete bounded read and SHA-256 to that same opened object. It copies only those verified bytes to a new private execution root, verifies final snapshot bytes again against the owner digest, and passes the absolute snapshot path as argv[0]. A valid byte-identical executable under an arbitrary basename is admitted; hard links are not rejected merely for being hard links. Relative paths, symlinks, directories, non-executable files, hash drift, PATH shadows, source pathname replacement, stale path-stat, source reopen, snapshot mutation, malformed authority and authority/provider drift reject before provider process and before AGENT_START. G20 CONTAINMENT: final rehash through absolute-path exec and runtime occurs under the existing controller/launch/cli Seatbelt boundary with the private execution root as controller-owned trust root. The untrusted provider and descendants cannot write, chmod, unlink, rename or replace the snapshot, create a replacement, or rename its parent root. The gate proves those effects on the real macOS owner runner; a nested host that cannot install Seatbelt is ODÖMBART, never PASS or product FAIL. Arbitrary unsandboxed same-UID processes with independent authority over the controller root remain outside this contract. CLEANUP AND PROCESS EFFECTS: successful and failed post-snapshot paths remove every private snapshot/root; cleanup or bounded process-group termination inability is ODÖMBART. Non-provider Git/GitHub/controller subprocesses remain available through the existing audited generic process boundary. Every identity rejection produces zero provider execution, zero AGENT_START and no leaked snapshot. Disposable one-defect controls reject PATH-only selection, basename trust, path-stat/reopen, no final rehash, cached success, malformed authority and disconnected containment while preserving legitimate refactors. The frozen pre-builder RED is exactly PROVIDER_IDENTITY_BOUNDARY_ABSENT. MATERIAL_PROPERTIES_JUDGE_ONLY=NONE.",
+      "docs_impact": [
+        "docs/05-beslutslogg.md",
+        "docs/loop/drift.md"
+      ],
+      "depends_on": [
+        "h-033"
+      ],
+      "max_changed_files": 6,
+      "max_added_lines": 1200
+    },
+    {
       "id": "h-034",
       "slice": "H034_NATIVE_FINITE_VERIFIER_KERNEL",
       "authority_class": "owner_authority",

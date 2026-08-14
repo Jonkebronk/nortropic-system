@@ -488,3 +488,28 @@ requires successful clearing before GID-before-UID transition and exact real/eff
 it does not reinterpret the OS-resolved account's membership list. A linked Darwin-semantics control
 reproduces the eight-entry result, while independent mutants prove setgroups failure and wrong IDs still
 reject before evidence. Diagnostic logging is absent from production, and live authority is unchanged.
+
+## 2026-08-14 — Fresh H-032 exact provider identity after H-033
+
+Authoritative main `5baee0e` closes H-033 and is the only base for the new H-032 contract. The old
+`1cf2caf..878445b` H-032 line remains forensic evidence only. Its useful physical findings survive:
+macOS has no portable descriptor-exec primitive for this Python boundary, so one safely opened source
+object is copied to a private snapshot, the snapshot is finally rehashed, and absolute-path execution
+is protected by the already frozen controller G20/Seatbelt trust root. The impossible claim that a
+pathname alone is race-free against every same-UID process is not revived.
+
+The measured provider authority is the actual OpenAI Codex vendor Mach-O, not `/opt/homebrew/bin/codex`
+or its JavaScript/Node delegation layer. Its current absolute path and SHA-256 are frozen in
+`config/codex-provider-identity.json`; SHA-256 is the exact-byte authority, while the observed Developer
+ID signature remains corroborating context rather than a second acceptance system. Every start must
+reread one duplicate-free authority document and revalidate a no-follow opened regular executable,
+copy only those bytes, rehash the private executable, and pass that absolute snapshot as argv[0]. PATH,
+basename, caller configuration, a prior successful validation and a stale snapshot grant no authority.
+
+H-032 depends exactly on H-033. It does not alter H-033's fixed probe allowlist or reinterpret a generic
+PASS probe as provider identity. Instead the frozen H-033 gate and protected owner installation are a
+fresh upstream provenance prerequisite, while H-032 owns only the downstream executable identity effect.
+The G20 containment probe remains independently candidate/spec/gate/launcher-bound because H-033 does
+not replace H-017's runtime namespace authority. Nested sandbox denial is ODÖMBART; the owner runner is
+required for the actual H-033 and Seatbelt effects. Before builder implementation the only legitimate
+product RED is the absent provider-identity boundary in `scripts/nortropic-codex-autopilot.py`.
