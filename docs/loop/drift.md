@@ -990,3 +990,13 @@ whose process topology is AST-identical. The timeout variant changes only the un
 86400 constant to one second. Its uncooperative double-fork+setsid survivor loops on
 the actual sink indefinitely, forcing bounded causal containment instead of a finite
 observation-window success.
+
+R13 reserves one real owner-provider model call for the final owner-host phase only
+after the entire deterministic boundary is green. Prebuilder and builder RED iterations
+therefore make no live call. The invocation binds candidate/source/spec/gate, exact
+provider and host paths/digests, production role/route/argv and the complete schema;
+timeout, auth, network or sandbox unavailability is ODÖMBART. The deterministic sink
+oracle retains its nofollow descriptor through before/after fstat, read and mutation or
+swap injection, then requires exact canonical digest/schema and total staging cleanup.
+Literal source-expression variants are removed; timeout acceleration is a semantic
+candidate seam whose absence is ordinary RED.

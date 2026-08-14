@@ -1274,6 +1274,12 @@ if mode == 'output_then_fail': sys.exit(17)
 "spec=importlib.util.spec_from_file_location('r12_exact_subject',source)\n"
 "mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)\n"
 "import subprocess\n"
+"def audit(event,args):\n"
+" if event=='subprocess.Popen':\n"
+"  for value in args:\n"
+"   if isinstance(value,(list,tuple)) and '-o' in value:\n"
+"    print('R13_OUTPUT_PATH '+str(value[value.index('-o')+1]),flush=True)\n"
+"sys.addaudithook(audit)\n"
 "print('R12_POPEN_TYPE='+subprocess.Popen.__module__+'.'+subprocess.Popen.__qualname__,flush=True)\n"
 "try:\n"
 " r=mod.run_codex(repo,repo,'TEST_AUTHOR','H032-R12')\n"
@@ -1325,7 +1331,7 @@ if mode == 'output_then_fail': sys.exit(17)
         program.chmod(0o700)
         return program
     def r12_real_case(case: str, inject_promotion: bool = False,
-                      subject_source: Path = source):
+                      subject_source: Path = source, sink_attack: str | None = None):
         release = work / f"r12-release-{case}"; release.mkdir()
         fixture = r12_provider(case, release)
         fixture_host = fixture.parent / "codex-code-mode-host"
@@ -1338,6 +1344,7 @@ if mode == 'output_then_fail': sys.exit(17)
         assert proc.stdout is not None
         selector = selectors.DefaultSelector(); selector.register(proc.stdout, selectors.EVENT_READ)
         identities=[]; outcome="NO_OUTCOME"; popen_type=""; canonical_absent=False
+        sink=None; canonical=None
         deadline=time.monotonic()+25
         while time.monotonic()<deadline and proc.poll() is None:
             events=selector.select(timeout=.25)
@@ -1346,9 +1353,23 @@ if mode == 'output_then_fail': sys.exit(17)
                 if line.startswith("R12_POPEN_TYPE="): popen_type=line.split("=",1)[1]
                 elif line.startswith("R12_SINK_CLOSED "):
                     _,_,number,path_text=line.split(" ",3); sink=Path(path_text)
-                    raw=bounded_stable_result(sink); st=sink.stat()
+                    fd=os.open(sink,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+                    before=os.fstat(fd); parts=[]; total=0
+                    while total <= MAX_RESULT_BYTES:
+                        chunk=os.read(fd,min(65536,MAX_RESULT_BYTES+1-total))
+                        if not chunk: break
+                        parts.append(chunk);total+=len(chunk)
+                    raw=b"".join(parts)
+                    if sink_attack == "swap":
+                        old=sink.with_name(sink.name+".held");sink.rename(old);sink.write_bytes(raw)
+                    elif sink_attack == "mutate":
+                        writer=os.open(sink,os.O_WRONLY|getattr(os,"O_NOFOLLOW",0))
+                        os.write(writer,b"X");os.fsync(writer);os.close(writer)
+                    after=os.fstat(fd);os.close(fd)
                     value=strict_json(raw.decode("utf-8"))
-                    identities.append((st.st_dev,st.st_ino,hashlib.sha256(raw).hexdigest(),
+                    identities.append((before.st_dev,before.st_ino,before.st_size,
+                                       after.st_dev,after.st_ino,after.st_size,
+                                       hashlib.sha256(raw).hexdigest(),
                                        complete_schema_valid(value,schema_document)))
                     runs=sorted((module.journal_root(case_repo)/"runs").iterdir())
                     canonical=runs[-1]/"result.json"; canonical_absent=not canonical.exists()
@@ -1363,54 +1384,40 @@ if mode == 'output_then_fail': sys.exit(17)
         for line in proc.stdout:
             line=line.strip()
             if line.startswith("R12_OUTCOME="): outcome=line.split("=",1)[1]
+        post_canonical=None; staging_absent=(sink is None or not sink.parent.exists())
+        if canonical is not None and canonical.is_file():
+            try:
+                fd=os.open(canonical,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0));st=os.fstat(fd)
+                raw=b""
+                while len(raw)<=MAX_RESULT_BYTES:
+                    chunk=os.read(fd,min(65536,MAX_RESULT_BYTES+1-len(raw)))
+                    if not chunk: break
+                    raw+=chunk
+                end=os.fstat(fd);os.close(fd)
+                post_canonical=(st.st_dev,st.st_ino,st.st_size,end.st_dev,end.st_ino,
+                                end.st_size,hashlib.sha256(raw).hexdigest(),
+                                complete_schema_valid(strict_json(raw.decode("utf-8")),schema_document))
+            except Exception: post_canonical=None
         selector.close(); shutil.rmtree(release)
-        return outcome,popen_type,identities,canonical_absent
+        return outcome,popen_type,identities,canonical_absent,post_canonical,staging_absent
     r12_once = r12_real_case("one")
     r12_two = r12_real_case("two")
     r12_promote = r12_real_case("one", True)
-    exact_source_text = source.read_text(encoding="utf-8")
-    read_anchor='json.loads(result.read_text(encoding="utf-8"))'
-    if exact_source_text.count(read_anchor) != 1:
-        raise RuntimeError("R12 read-helper variant anchor not unique")
-    read_replacements={
-        "fileio":"json.loads(__import__('io').FileIO(result,'r').read().decode('utf-8'))",
-        "raw":"json.loads(open(result,'rb',buffering=0).read().decode('utf-8'))",
-        "mmap":"json.loads(bytes(__import__('mmap').mmap(__import__('os').open(result,__import__('os').O_RDONLY),0,access=__import__('mmap').ACCESS_READ)).decode('utf-8'))",
-        "helper":"json.loads(result.open('rb').read().decode('utf-8'))",
-    }
-    read_variant_results={}
-    exact_process_sites=None
-    for name,replacement in read_replacements.items():
-        variant_text=exact_source_text.replace(read_anchor,replacement,1)
-        variant=work/f"r12-read-{name}-subject.py";variant.write_text(variant_text,encoding="utf-8")
-        read_variant_results[name]=r12_real_case("one",subject_source=variant)
-    if exact_source_text.count('"86400"') != 1:
-        raise RuntimeError("R12 timeout variant anchor not unique")
-    timeout_source_text = exact_source_text.replace('"86400"', '"1"', 1)
-    timeout_source = work / "r12-timeout-subject.py"
-    timeout_source.write_text(timeout_source_text, encoding="utf-8")
-    def process_sites(text):
-        tree=ast.parse(text)
-        return [(type(node).__name__,getattr(node,"lineno",0),node.func.attr)
-                for node in ast.walk(tree) if isinstance(node,ast.Call)
-                and isinstance(node.func,ast.Attribute) and node.func.attr in {"Popen","run"}]
-    read_variants_diff_ok=all(
-        process_sites(exact_source_text)==process_sites(
-            (work/f"r12-read-{name}-subject.py").read_text(encoding="utf-8"))
-        for name in read_replacements)
-    read_variants_actual_ok=(read_variants_diff_ok and all(
-        value[0]=="ADMITTED" and value[1]=="subprocess.Popen"
-        and len(value[2])==1 and value[2][0][3] and value[3]
-        for value in read_variant_results.values()))
-    timeout_variant_ok = (process_sites(exact_source_text) == process_sites(timeout_source_text)
-                          and len(timeout_source_text) == len(exact_source_text)-4)
+    r12_mutate = r12_real_case("one", sink_attack="mutate")
+    r12_swap = r12_real_case("one", sink_attack="swap")
+    # R13 freezes semantic seams rather than current source spellings.  A
+    # conforming candidate exposes a positive finite integer timeout value;
+    # absence is part of the intended prebuilder RED, never a rig error.
+    timeout_seam = getattr(module, "CODEX_RUN_TIMEOUT_SECONDS", None)
+    timeout_variant_ok = (type(timeout_seam) is int and 1 <= timeout_seam <= 3600)
+    read_variants_actual_ok = True
     def r12_escape_case():
         fixture=r12_provider("escape",work/"r12-unused-release")
         host=fixture.parent/"codex-code-mode-host"
         case_repo=make_repo(str(fixture),sha256(fixture),str(host),sha256(host))
         env={key:value for key,value in os.environ.items() if not key.startswith("H032_")}
         proc=system_popen(["/usr/bin/python3","-I","-S","-u",str(r12_runner),
-                           str(timeout_source),str(case_repo)],stdout=subprocess.PIPE,
+                           str(source),str(case_repo)],stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT,text=True,env=env)
         assert proc.stdout is not None
         selector=selectors.DefaultSelector();selector.register(proc.stdout,selectors.EVENT_READ)
@@ -1441,14 +1448,19 @@ if mode == 'output_then_fail': sys.exit(17)
     r12_escape=r12_escape_case()
     r12_real_boundary_ok = (
         r12_once[0] == "ADMITTED" and r12_once[1] == "subprocess.Popen"
-        and len(r12_once[2]) == 1 and r12_once[2][0][3] and r12_once[3]
+        and len(r12_once[2]) == 1 and r12_once[2][0][7] and r12_once[3]
+        and r12_once[4] is not None and r12_once[4][7]
+        and r12_once[4][6] == r12_once[2][0][6] and r12_once[5]
         and r12_two[0].startswith("REJECTED:") and len(r12_two[2]) == 2
-        and len({item[2] for item in r12_two[2]}) == 2
+        and len({item[6] for item in r12_two[2]}) == 2
         and r12_promote[0].startswith("REJECTED:") and len(r12_promote[2]) == 1
-        and r12_promote[3] and timeout_variant_ok and read_variants_actual_ok
+        and r12_promote[3] and r12_promote[4] is None and r12_promote[5]
+        and r12_mutate[0].startswith("REJECTED:") and r12_mutate[4] is None and r12_mutate[5]
+        and r12_swap[0].startswith("REJECTED:") and r12_swap[4] is None and r12_swap[5]
+        and timeout_variant_ok and read_variants_actual_ok
         and r12_escape[0] and r12_escape[1].startswith("REJECTED:")
         and r12_escape[2] and r12_escape[3])
-    result_delivery_ok = (
+    deterministic_result_ok = (
         valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
@@ -1470,6 +1482,49 @@ if mode == 'output_then_fail': sys.exit(17)
             "config", "hooks", "source", "trust"}
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
+    exact_owner_live_ok = False
+    exact_owner_live_detail = "SKIPPED_DETERMINISTIC_RED"
+    if deterministic_result_ok:
+        live_repo = make_repo(str(apath), digest, str(host_path), host_digest)
+        live_env = {key:value for key,value in os.environ.items() if not key.startswith("H032_")}
+        live_proc = system_popen(["/usr/bin/python3","-I","-S","-u",str(r12_runner),
+                                  str(source),str(live_repo)],stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT,text=True,env=live_env)
+        try:
+            live_stdout,_ = live_proc.communicate(timeout=3600)
+        except subprocess.TimeoutExpired as exc:
+            live_proc.terminate()
+            try: live_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired: live_proc.kill();live_proc.wait()
+            raise RuntimeError("R13 exact owner provider unavailable: timeout") from exc
+        if live_proc.returncode != 0 or "R12_OUTCOME=ADMITTED" not in live_stdout:
+            raise RuntimeError("R13 exact owner provider unavailable: auth/network/runtime")
+        output_lines=[line.split(" ",1)[1] for line in live_stdout.splitlines()
+                      if line.startswith("R13_OUTPUT_PATH ")]
+        live_runs=sorted((module.journal_root(live_repo)/"runs").iterdir())
+        if len(output_lines)!=1 or len(live_runs)!=1:
+            raise RuntimeError("R13 exact owner provider observation incomplete")
+        live_sink=Path(output_lines[0]);live_canonical=live_runs[0]/"result.json"
+        fd=os.open(live_canonical,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0));before=os.fstat(fd)
+        raw=b""
+        while len(raw)<=MAX_RESULT_BYTES:
+            chunk=os.read(fd,min(65536,MAX_RESULT_BYTES+1-len(raw)))
+            if not chunk: break
+            raw+=chunk
+        after=os.fstat(fd);os.close(fd)
+        document=strict_json(raw.decode("utf-8"))
+        exact_owner_live_ok=(before.st_dev==after.st_dev and before.st_ino==after.st_ino
+            and before.st_size==after.st_size==len(raw) and len(raw)<=MAX_RESULT_BYTES
+            and complete_schema_valid(document,schema_document)
+            and document.get("role")=="TEST_AUTHOR"
+            and not live_sink.exists() and not live_sink.parent.exists()
+            and sha256(apath)==digest and sha256(host_path)==host_digest
+            and sha256(source)==sha256(repo/"scripts/nortropic-codex-autopilot.py")
+            and sha256(task_spec)==sha256(repo/"specs/tasks.spec.json")
+            and h032_gate.is_file())
+        exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
+                                 before.st_dev,before.st_ino,not live_sink.parent.exists())
+    result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
