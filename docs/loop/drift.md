@@ -1030,3 +1030,13 @@ spelling. There is exactly one assigned Popen object, no reassignment or extra s
 its reachable timeout wait/communicate precedes every successful return. Rename-source
 capture is bounded to MAX+1, destination dev/inode must equal the retained source, and
 all post-transition canonical open/unlink/rename events reject.
+
+R17 replaces the remaining name and line-order claims with semantic value flow. A
+monotone abstract interpreter propagates identity, sink, canonical and invocation/run/
+role tags across aliases, containers, helper parameters and returns. Capability reader
+families transfer authority only from a tagged descriptor/receiver; an exact
+`os.open(..., O_RDONLY|O_NOFOLLOW)` is the only sink-tag source. Popen aliases are
+resolved before inventory, and the structured control-flow check rejects branch, loop,
+context-manager or exception bypass around the sole timeout-bearing wait/communicate.
+Atomic same-object promotion, bounded retained-source verification and live-phase skip
+semantics remain unchanged.
