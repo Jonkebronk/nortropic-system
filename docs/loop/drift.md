@@ -922,3 +922,11 @@ LIVE_ROOT/LIVE_GIT. Path construction, helper and bounded read APIs remain free 
 refactor. Cleanup faults are now injected against the observed result transport itself,
 with transient retry and persistent-exhaustion outcomes separated, while delayed signal
 quiescence inventories object type/content/dev-inode/mode plus process and descriptor state.
+
+R6 binds the observed private staging root itself: current uid, exact 0700 mode,
+nofollow identity, exactly one result leaf during provider output, and complete parent
+cleanup. FIFO, Unix socket and parent-swap join symlink/directory/hardlink attacks with
+a one-second fail-safe. A fresh admitted invocation has an API-neutral audit count of
+exactly one canonical result read before causal external-writer replay, and hostile
+provider attempts now cover global events, envelope, sibling run, refs, config, hooks,
+source and trust paths, all mechanically confined beneath the gate's disposable root.
