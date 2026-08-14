@@ -849,3 +849,8 @@ R10 preserves that live identity observation transitively when a pre-protection 
 its readable opened object through detach() or the public raw chain. Separate connected openat-to-fdopen
 detach and raw subject controls require corruption before their complete final verification read and do
 not accept the launch fallback. Ownership remains single-close and production remains unchanged.
+
+R11 removes all historical integer-descriptor fallback from connected read classification. Every read
+receives snapshot credit only from its current live fstat identity; a delegated pre-seed handle must also
+match the same live opened object. A close-and-forced-number-reuse control proves an unrelated read stays
+unchanged before the genuine duplicate/fdopen snapshot reader triggers pre-verification corruption.
