@@ -385,7 +385,9 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         residue_paths = {Path(value) for value in created if Path(value).exists()}
         residue_paths.update(path for path in arena.rglob("*")
                              if str(path.absolute()) not in arena_before)
-        residue = sorted(str(path) for path in residue_paths if path != arena)
+        expected_runs = module.journal_root(repo) / "runs"
+        residue = sorted(str(path) for path in residue_paths if path != arena
+                         and path != expected_runs and expected_runs not in path.parents)
         return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before), residue
 
     valid_repo = make_repo(str(provider))
@@ -396,7 +398,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     argv0 = Path(cap.get("argv0", ""))
     host_snapshot = Path(cap.get("host_path", "/private/tmp/h032-missing-host-snapshot"))
     family_effect_ok = (
-        valid[0] and valid[2] == 1 and valid[3] == 1
+        valid[0] and valid[2] == 1 and valid[3] == 1 and not valid[4]
         and argv0.name == "provider" and host_snapshot.name == "codex-code-mode-host"
         and argv0.parent == host_snapshot.parent
         and cap.get("sha256") == good_hash
@@ -752,6 +754,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     trace_verdict: list[bool] = []
     fd_paths: dict[int, Path] = {}
     fd_bytes: dict[int, bytearray] = {}
+    writable_fds: set[int] = set()
+    writable_handles: set[int] = set()
     originals = (builtins.open, io.open, os.open, os.read, os.close,
                  os.chmod, os.fchmod, subprocess.Popen)
     original_builtin_open, original_io_open, original_os_open, original_os_read, original_os_close, original_chmod, original_fchmod, original_popen = originals
@@ -787,8 +791,10 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         def name(self): return self._hash.name
     def traced_sha256(data=b""): return TracedHash(data)
     class TracedFile:
-        def __init__(self, handle, path: Path):
+        def __init__(self, handle, path: Path, writable: bool = False):
             self._handle, self._path, self._payload = handle, path, bytearray()
+            self._writer = writable
+            if writable: writable_handles.add(id(self))
             try: self._from_zero = handle.tell() == 0
             except Exception: self._from_zero = False
         def read(self, *args, **kwargs):
@@ -800,20 +806,24 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 if complete: record_complete(self._path, bytes(self._payload)); self._from_zero = False
             return data
         def __enter__(self): return self
-        def __exit__(self, *args): return self._handle.__exit__(*args)
+        def close(self): writable_handles.discard(id(self)); return self._handle.close()
+        def __exit__(self, *args): writable_handles.discard(id(self)); return self._handle.__exit__(*args)
         def __iter__(self): return iter(self._handle)
         def __getattr__(self, name): return getattr(self._handle, name)
     def traced_open(original, file, *args, **kwargs):
         handle = original(file, *args, **kwargs)
         path = member_path(file)
         mode = args[0] if args else kwargs.get("mode", "r")
-        return TracedFile(handle, path) if path is not None and "r" in str(mode) else handle
+        writable = any(token in str(mode) for token in ("w", "a", "+", "x"))
+        return TracedFile(handle, path, writable) if path is not None else handle
     def traced_builtin_open(file, *args, **kwargs): return traced_open(original_builtin_open, file, *args, **kwargs)
     def traced_io_open(file, *args, **kwargs): return traced_open(original_io_open, file, *args, **kwargs)
     def traced_os_open(file, flags, *args, **kwargs):
         fd = original_os_open(file, flags, *args, **kwargs); path = member_path(file)
         if path is not None and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
             fd_paths[fd], fd_bytes[fd] = path, bytearray()
+        if path is not None and ((flags & os.O_WRONLY) or (flags & os.O_RDWR)):
+            writable_fds.add(fd)
         return fd
     def traced_os_read(fd, size):
         data = original_os_read(fd, size)
@@ -823,7 +833,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 record_complete(fd_paths[fd], bytes(fd_bytes[fd])); fd_paths.pop(fd, None); fd_bytes.pop(fd, None)
         return data
     def traced_os_close(fd):
-        fd_paths.pop(fd, None); fd_bytes.pop(fd, None); return original_os_close(fd)
+        fd_paths.pop(fd, None); fd_bytes.pop(fd, None); writable_fds.discard(fd); return original_os_close(fd)
     def relevant_transition(path: Path) -> bool:
         return path.name in expected_by_name or (path.is_dir()
             and (path / "provider").exists() and (path / "codex-code-mode-host").exists())
@@ -850,7 +860,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 fresh = all(complete_reads[name] and complete_reads[name][-1] > last_transition
                             and complete_hashes[name] and complete_hashes[name][-1] > last_transition
                             for name in expected_by_name)
-                trace_verdict.append(protected and fresh)
+                trace_verdict.append(protected and fresh and not writable_fds and not writable_handles)
         return original_popen(argv, *args, **kwargs)
     builtins.open, io.open, os.open, os.read, os.close, os.chmod, os.fchmod, subprocess.Popen = (
         traced_builtin_open, traced_io_open, traced_os_open, traced_os_read, traced_os_close,
@@ -863,15 +873,78 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         hashlib.sha256 = original_sha256
     trace_ok = (trace_result[0] and trace_result[2] == 1 and trace_verdict == [True])
     check("K_FINAL_SNAPSHOT_REHASH", family_absent or trace_ok,
-          f"trace={trace_verdict} transitions={transitions} reads={complete_reads} hashes={complete_hashes} result={trace_result}")
+          f"trace={trace_verdict} transitions={transitions} reads={complete_reads} hashes={complete_hashes} writable_fds={writable_fds} writable_handles={writable_handles} result={trace_result}")
     check("K_CODE_MODE_HOST_FINAL_REHASH", family_absent or trace_ok,
           f"host_reads={complete_reads['codex-code-mode-host']} trace={trace_verdict}")
     check("K_PROVIDER_LAUNCH_ADJACENT_FINAL_REHASH", family_absent or trace_ok,
           f"provider_reads={complete_reads['provider']} trace={trace_verdict}")
-    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or trace_ok,
+    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (trace_ok and not trace_result[4]),
           f"successful_trace={trace_ok} success_artifacts={trace_result[4]}")
-    check("K_PROVIDER_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or trace_ok,
+    check("K_PROVIDER_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (trace_ok and not trace_result[4]),
           f"successful_trace={trace_ok} success_artifacts={trace_result[4]}")
+
+    # R5-GR05-01: connected physical corruption, independently for each
+    # member. Mutation occurs after protection and immediately before the
+    # first final read of that same snapshot. If no such read exists, Popen is
+    # the fallback mutation point. Cached bytes, ceremonial hashes or ignored
+    # comparisons therefore execute a capture marker and fail this oracle.
+    def connected_corruption(target_name: str, marker: Path):
+        provider.write_bytes(good_bytes); provider.chmod(0o700)
+        code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+        target_repo = make_repo(str(provider))
+        changed, targets = [False], []
+        original_builtin, original_io, original_os, original_popen_local = (
+            builtins.open, io.open, os.open, subprocess.Popen)
+        bad = (f"#!/bin/sh\nprintf 'bad\\n' >'{marker}'\nexit 0\n").encode()
+        def candidate(value):
+            try: path = Path(value)
+            except Exception: return None
+            root = path.parent
+            return path if (path.name == target_name and path != provider
+                and (root / "provider").exists() and (root / "codex-code-mode-host").exists()
+                and (root.stat().st_mode & 0o222) == 0) else None
+        def mutate(path: Path):
+            original_chmod(path, 0o700)
+            with original_io(path, "wb") as handle: handle.write(bad)
+            targets.append(path); changed[0] = True
+        def wrap_open(original, file, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            path = candidate(file)
+            if path is not None and "r" in str(mode) and not changed[0]: mutate(path)
+            return original(file, *args, **kwargs)
+        def wrap_builtin(file, *args, **kwargs): return wrap_open(original_builtin, file, *args, **kwargs)
+        def wrap_io(file, *args, **kwargs): return wrap_open(original_io, file, *args, **kwargs)
+        def wrap_os(file, flags, *args, **kwargs):
+            path = candidate(file)
+            if path is not None and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR) and not changed[0]: mutate(path)
+            return original_os(file, flags, *args, **kwargs)
+        def wrap_popen(argv, *args, **kwargs):
+            if not changed[0]:
+                items = argv if isinstance(argv, (list, tuple)) else [argv]
+                for item in items:
+                    if isinstance(item, (str, os.PathLike)) and Path(item).name == "provider":
+                        path = Path(item).parent / target_name
+                        if path.exists(): mutate(path); break
+            return original_popen_local(argv, *args, **kwargs)
+        builtins.open, io.open, os.open, subprocess.Popen = wrap_builtin, wrap_io, wrap_os, wrap_popen
+        try: result = attempt(target_repo)
+        finally: builtins.open, io.open, os.open, subprocess.Popen = original_builtin, original_io, original_os, original_popen_local
+        residue = [str(path) for path in targets if path.exists() or path.parent.exists()]
+        return changed[0], result, marker.exists(), residue
+    bad_provider_marker = work / "BAD_PROVIDER_CONNECTED"
+    bad_host_marker = work / "BAD_HOST_CONNECTED"
+    connected_provider = connected_corruption("provider", bad_provider_marker)
+    connected_host = connected_corruption("codex-code-mode-host", bad_host_marker)
+    check("K_R5_PROVIDER_CONNECTED_POST_PROTECTION_CORRUPTION", family_absent or (
+          connected_provider[0] and not connected_provider[1][0]
+          and connected_provider[1][2] == 0 and not connected_provider[2]
+          and not connected_provider[3] and not connected_provider[1][4]),
+          f"connected={connected_provider}")
+    check("K_R5_HOST_CONNECTED_POST_PROTECTION_CORRUPTION", family_absent or (
+          connected_host[0] and not connected_host[1][0]
+          and connected_host[1][2] == 0 and not connected_host[2]
+          and not connected_host[3] and not connected_host[1][4]),
+          f"connected={connected_host}")
 
     # Authority is one byte observation: replacing the document immediately
     # after its read handle is returned must not mix old path with new digest.
@@ -1018,6 +1091,20 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           "protect/read/unprotect/reprotect requires new reads after final transition")
     check("J_R4_GR05_FCHMOD_EQUIVALENT_POSITIVE", fchmod_final_admits,
           "fchmod transition shares the ordered protection oracle")
+    retained_snapshot = jc / "retained-writable-provider"
+    retained_snapshot.write_bytes(b"trusted")
+    retained_fd = os.open(retained_snapshot, os.O_RDWR)
+    try:
+        retained_snapshot.chmod(0o500)
+        before_retained = hashlib.sha256(retained_snapshot.read_bytes()).hexdigest()
+        os.lseek(retained_fd, 0, os.SEEK_SET); os.write(retained_fd, b"changed")
+        os.ftruncate(retained_fd, len(b"changed")); os.fsync(retained_fd)
+        after_retained = hashlib.sha256(retained_snapshot.read_bytes()).hexdigest()
+        check("J_R5_GR05_RETAINED_WRITABLE_FD_MUTANT_REJECT",
+              before_retained != after_retained,
+              "protected pathname changed through retained writable fd after early hash")
+    finally:
+        os.close(retained_fd); retained_snapshot.chmod(0o700); retained_snapshot.unlink()
 
     direct_parent, provider_parent = 100, 200
     check("J_R3_GR06_CONTROLLER_DIRECT_HOST_REJECT",
@@ -1034,13 +1121,19 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           not helper_specific_inventory and bool(tree_inventory),
           f"helper={helper_specific_inventory} tree={[str(p) for p in tree_inventory]}")
     shutil.rmtree(semantic_cleanup)
-    fixed_outside = Path("/private/tmp") / f"h032-fixed-root-{work.name}"
+    # Outside every attempt arena but still beneath the shell trap-owned WORK.
+    fixed_outside = work / "fixed-root-outside-attempt-arena"
     outside_was_absent = not fixed_outside.exists()
-    os.mkdir(fixed_outside); (fixed_outside / "provider").write_bytes(b"partial")
-    outside_residue_seen = outside_was_absent and fixed_outside.exists()
-    check("J_R4_GR07_FIXED_PRIVATE_TMP_RESIDUE_REJECT", outside_residue_seen,
-          f"path={fixed_outside} observed={outside_residue_seen}")
-    shutil.rmtree(fixed_outside)
+    outside_residue_seen = False
+    try:
+        os.mkdir(fixed_outside); (fixed_outside / "provider").write_bytes(b"partial")
+        outside_residue_seen = outside_was_absent and fixed_outside.exists()
+        check("J_R5_GR07_FIXED_ROOT_RESIDUE_REJECT", outside_residue_seen,
+              f"path={fixed_outside} observed={outside_residue_seen}")
+    finally:
+        if fixed_outside.exists(): shutil.rmtree(fixed_outside)
+    check("J_R5_GR07_FIXED_ROOT_SELF_CLEANUP", not fixed_outside.exists(),
+          f"residue={fixed_outside.exists()}")
 
     check("J_R4_GR08_UNBOUNDED_PROVIDER_EFFECT", provider_fixture_effect,
           "digest-coherent oversized provider executes and captures without the bound")

@@ -819,3 +819,9 @@ fchmod, complete member reads and actual Popen; both fresh reads must follow the
 Cleanup now retains every audited absent-at-event path anywhere and uses exact pre-seeding for system
 noise rather than location or basename exclusions. Both 256 MiB + 1 fixtures are valid executable
 programs whose unbounded capture effects are run and proven. No production byte is changed.
+
+R5 adds independent connected physical corruption for provider and host, rejects cached or ignored
+digest comparisons through actual capture effects, and requires no writable family descriptor at spawn.
+Expected journal paths are classified exactly; every other audit-observed success or failure residue is
+forbidden. The alternate-root cleanup fixture is now trap-owned and finally-cleaned. Production remains
+untouched and the sole intended RED is unchanged.

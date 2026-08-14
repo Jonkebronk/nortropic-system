@@ -438,7 +438,7 @@
       "slice": "H032_EXACT_CODEX_PROVIDER_IDENTITY",
       "authority_class": "ordinary",
       "title": "Exact Codex provider identity at the process boundary",
-      "summary": "The provider launch boundary freshly reads one owner-frozen schema-v2 authority document and binds the actual OpenAI Codex vendor Mach-O plus its required codex-code-mode-host sibling as one execution family. Both safely opened regular executable objects are bounded-read, hashed, copied under exact required basenames into one private root, protected by the same G20 boundary and freshly completely rehashed after every final root/member mode transition; the controller invokes only provider, while exactly one verified host execution is its descendant. H-033 remains the upstream authenticated provenance authority.",
+      "summary": "The provider launch boundary freshly reads one owner-frozen schema-v2 authority document and binds the actual OpenAI Codex vendor Mach-O plus its required codex-code-mode-host sibling as one execution family. Both safely opened regular executable objects are bounded-read, hashed, copied under exact required basenames into one private root, protected by the same G20 boundary and freshly rehashed from the physical snapshots after all output descriptors close and every final root/member mode transition; the controller invokes only provider, while exactly one verified host execution is its descendant. H-033 remains the upstream authenticated provenance authority.",
       "allowed_write": [
         "scripts/nortropic-codex-autopilot.py",
         "docs/05-beslutslogg.md",
