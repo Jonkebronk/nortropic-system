@@ -1256,7 +1256,11 @@ if not failed:
     print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
     print("H031_GATE_RESULT=PASS")
     raise SystemExit(0)
-if failed == EXPECTED_PREBUILDER_RED:
+if (failed == {"K_H032_FRESH_UPSTREAM", "K_PRODUCT_EXECUTION"}
+        and "CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT"
+            in getattr(locals().get("upstream"), "stdout", "")):
+    print("CURRENT_RED_REASON=UPSTREAM_CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
+elif failed == EXPECTED_PREBUILDER_RED:
     print("CURRENT_RED_REASON=EXPLICIT_ROLE_MODEL_ROUTING_ABSENT")
 else:
     print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(failed)))
