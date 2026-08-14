@@ -1144,3 +1144,12 @@ no-raise, explicit raise and unknown effects before traversing handler types/bod
 Thus a Popen class-pattern, a guard behind a known nonmatch and a handler after
 `try: pass` are legitimate, while a matching guard call or explicit-raise handler-type
 call remains a recorded extra process site and rejects.
+
+R30 replaces the last `ast.walk` raise-state shortcut with structured abstract
+execution returning may-normal/may-raise for statement sequences. Constant `if`
+branches, dormant definitions, return/raise, loops and try/except/else/finally now
+control which regions are reachable, with uncertain effects remaining conservative.
+Sequence patterns support exactly one star by matching prefix/suffix and requiring
+subject length at least the nonstar count; unsupported patterns remain MAY_MATCH.
+Controls cover reachable try-else calls, dormant nested raises, a matching `[*rest]`
+guard and a known nonmatching fixed-length sequence.
