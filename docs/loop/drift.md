@@ -1093,3 +1093,12 @@ interpreter now evaluates bare expressions, conditions, iterators, with-contexts
 asserts, raises and comprehension inputs/filters, so bare helper-mediated process
 constructor effects cannot disappear. Literal `**` keys targeting positional-only
 parameters reject exactly like direct keywords.
+
+R24 protects the entropy primitive itself: direct or aliased attribute stores, token_hex
+subscripts/`__dict__` writes, reflection and binding deletion/replacement reject across
+the whole module. The analyzer replaces ast.walk reachability with structured Python
+runtime traversal. Function/lambda decorators, defaults and annotations execute at
+definition time but dormant bodies do not; class bases, keywords and decorators execute,
+then the class body executes. A dormant nested Popen body is therefore a legitimate
+positive until called, while decorator/default/class-body/helper constructor effects are
+recorded with their actual context and count against the sole process site.
