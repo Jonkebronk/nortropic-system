@@ -1169,3 +1169,11 @@ known Exception subclasses, and specific/tuple handlers remove only definitely
 caught types. UNKNOWN remains conservative unless caught by a true catch-all.
 Handler-body exceptions, normal handler paths, orelse and finally override are joined.
 Nested definite-catch, uncaught-type, ordered, tuple and bare controls bind the model.
+
+R33 resolves handler type expressions semantically rather than trusting Name spelling.
+Unshadowed builtin exception classes seed a binding graph propagated through aliases,
+tuples/containers, subscripts and admitted helper returns; shadowed or unknown values
+remain both-match conservative. Matching uses the runtime builtin hierarchy via
+`issubclass`: Exception excludes KeyboardInterrupt/SystemExit/GeneratorExit, while
+BaseException and bare handlers catch all. Alias, hierarchy, tuple/helper and unknown
+shadow controls verify both definite catches and retained escaping paths.

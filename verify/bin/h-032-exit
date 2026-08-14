@@ -564,30 +564,66 @@ if mode == 'output_then_fail': sys.exit(17)
             # Unknown names/attributes/subscripts/operators and every dynamic call
             # may either complete or raise; never use absence of Call as proof.
             return True,frozenset({"UNKNOWN"})
+        builtin_exceptions={name:value for name,value in vars(builtins).items()
+            if isinstance(value,type) and issubclass(value,BaseException)}
+        shadowed_exception_names={item.id for item in ast.walk(candidate_tree)
+            if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del))
+            and item.id in builtin_exceptions}
+        exception_bindings={name:frozenset({name}) for name in builtin_exceptions
+                            if name not in shadowed_exception_names}
+        exception_helpers=set()
+        def r33_exception_value(node):
+            if node is None: return frozenset({"UNKNOWN"})
+            if isinstance(node,ast.Name):
+                return exception_bindings.get(node.id,frozenset({"UNKNOWN"}))
+            if isinstance(node,(ast.Tuple,ast.List,ast.Set)):
+                return frozenset().union(*(r33_exception_value(part) for part in node.elts))
+            if isinstance(node,ast.Dict):
+                return frozenset().union(*(r33_exception_value(part)
+                    for part in node.keys+node.values if part))
+            if isinstance(node,ast.Subscript): return r33_exception_value(node.value)
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
+                if node.func.id in exception_helpers:
+                    return exception_bindings.get(node.func.id,frozenset({"UNKNOWN"}))
+                return exception_bindings.get(node.func.id,frozenset({"UNKNOWN"}))
+            return frozenset({"UNKNOWN"})
+        for _ in range(len(list(ast.walk(candidate_tree)))+1):
+            changed=False
+            for fn in (item for item in ast.walk(candidate_tree) if isinstance(item,ast.FunctionDef)):
+                returns=[r33_exception_value(ret.value) for ret in ast.walk(fn)
+                         if isinstance(ret,ast.Return) and ret.value]
+                if returns:
+                    value=frozenset().union(*returns)
+                    if value!=exception_bindings.get(fn.name):
+                        exception_helpers.add(fn.name);exception_bindings[fn.name]=value;changed=True
+            for item in ast.walk(candidate_tree):
+                if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
+                targets=item.targets if isinstance(item,ast.Assign) else [item.target]
+                value=r33_exception_value(item.value)
+                for target in targets:
+                    if isinstance(target,ast.Name):
+                        prior=exception_bindings.get(target.id,frozenset())
+                        joined=prior|value
+                        if joined!=prior: exception_bindings[target.id]=joined;changed=True
+            if not changed: break
         def r32_raise_types(node):
             if node is None: return frozenset({"UNKNOWN"})
-            if isinstance(node,ast.Name): return frozenset({node.id})
-            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
-                return frozenset({node.func.id})
-            return r31_expr_flow(node)[1] or frozenset({"UNKNOWN"})
+            value=r33_exception_value(node)
+            return value if value!=frozenset({"UNKNOWN"}) else (
+                r31_expr_flow(node)[1] or value)
         def r32_handler_types(node):
             if node is None: return {"BaseException"},True
-            if isinstance(node,ast.Name): return {node.id},node.id=="BaseException"
-            if isinstance(node,ast.Tuple):
-                names={part.id for part in node.elts if isinstance(part,ast.Name)}
-                if len(names)!=len(node.elts): return {"UNKNOWN"},False
-                return names,"BaseException" in names
-            return {"UNKNOWN"},False
+            types=set(r33_exception_value(node))
+            return types,types=={"BaseException"}
         def r32_may_match(exc,types):
             if "UNKNOWN" in types or exc=="UNKNOWN": return True
-            if "BaseException" in types: return True
-            if "Exception" in types and exc!="BaseException": return True
-            return exc in types
+            exc_type=builtin_exceptions.get(exc)
+            return any(exc_type is not None and handler in builtin_exceptions
+                       and issubclass(exc_type,builtin_exceptions[handler]) for handler in types)
         def r32_definitely_caught(exc,types,catch_all):
             if catch_all: return True
             if exc=="UNKNOWN" or "UNKNOWN" in types: return False
-            if "Exception" in types and exc!="BaseException": return True
-            return exc in types
+            return r32_may_match(exc,types)
         def r30_stmt_flow(statement):
             if isinstance(statement,ast.Raise): return False,r32_raise_types(statement.exc)
             if isinstance(statement,(ast.Return,ast.Break,ast.Continue)):
@@ -1559,6 +1595,32 @@ if mode == 'output_then_fail': sys.exit(17)
             "try:\n    try:\n        raise RuntimeError('x')\n"
             "    except:\n        pass\n"
             "except BaseException:\n    _r28_spawn(subprocess.Popen)\n",True)
+        alias_handler_negative=not r28_control(
+            "E = RuntimeError\ntry:\n    raise RuntimeError('x')\n"
+            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
+        keyboardinterrupt_outer_negative=not r28_control(
+            "try:\n    try:\n        raise KeyboardInterrupt()\n"
+            "    except Exception:\n        pass\n"
+            "except BaseException:\n    _r28_spawn(subprocess.Popen)\n",True)
+        runtime_exception_outer_positive=r28_control(
+            "try:\n    try:\n        raise RuntimeError('x')\n"
+            "    except Exception:\n        pass\n"
+            "except BaseException:\n    _r28_spawn(subprocess.Popen)\n",True)
+        tuple_alias_outer_positive=r28_control(
+            "E = (ValueError, RuntimeError)\n"
+            "try:\n    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        helper_alias_outer_positive=r28_control(
+            "def _r33_error_type():\n    return RuntimeError\n"
+            "E = _r33_error_type()\n"
+            "try:\n    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        shadowed_unknown_negative=not r28_control(
+            "E = repo.r33_unknown_exception\n"
+            "try:\n    raise RuntimeError('x')\n"
+            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
         r25_static_mutants_ok=(entropy_rejects and receiver_rejects
                                and receiver_positive and augassign_rejects
                                and target_effects_reject and match_process_rejects
@@ -1572,7 +1634,11 @@ if mode == 'output_then_fail': sys.exit(17)
                                and arithmetic_safe_positive and unknown_attribute_conservative
                                and definite_inner_catch_positive and uncaught_inner_negative
                                and ordered_handler_positive and tuple_handler_positive
-                               and bare_handler_positive)
+                               and bare_handler_positive and alias_handler_negative
+                               and keyboardinterrupt_outer_negative
+                               and runtime_exception_outer_positive
+                               and tuple_alias_outer_positive and helper_alias_outer_positive
+                               and shadowed_unknown_negative)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
