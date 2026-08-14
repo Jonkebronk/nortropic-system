@@ -666,3 +666,10 @@ Tenth review demonstrated that a synchronous before/after oracle can be outrun b
 for threading, signal, exit handlers, schedulers, futures and finalizers now join process/import/FFI
 modules in the sensitive set. Timer, signal, atexit and weakref-finalizer mutants bind this asynchronous
 effect class; current production uses none of those proxy capabilities.
+
+Eleventh review found two delayed paths without module proxies. An atfork callback combined with
+`preexec_fn` fired on a later legitimate Popen, and cyclic `__del__`/yield-finally objects deferred work
+to GC. Atfork is now a prohibited process callback; admitted process sites reject pre-exec, shell,
+executable substitution and expanded keyword dictionaries. Since production contains no asynchronous
+function, yield or await, those language forms and `__del__` are also excluded from the bounded source
+envelope. In-place Popen mutants prove the one legitimate site itself remains constrained.

@@ -80,7 +80,7 @@ EXPECTED_PREBUILDER_RED = {
 }
 PROCESS_ATTRS = {
     "subprocess": {"Popen", "run", "call", "check_call", "check_output", "getoutput", "getstatusoutput"},
-    "os": {"system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
+    "os": {"system", "popen", "fork", "forkpty", "register_at_fork", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
     "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
     "pty": {"spawn"},
 }
@@ -200,6 +200,12 @@ def process_shape(text: str) -> dict[str, object]:
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
+        if isinstance(node, ast.AsyncFunctionDef):
+            violations.append((owner, node.lineno, f"deferred-async-function:{node.name}"))
+        if isinstance(node, ast.FunctionDef) and node.name == "__del__":
+            violations.append((owner, node.lineno, "deferred-finalizer:__del__"))
+        if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Await)):
+            violations.append((owner, node.lineno, f"deferred-language-node:{type(node).__name__}"))
         if isinstance(node, ast.Import):
             for alias in node.names:
                 import_inventory.append(f"I:{alias.name}:{alias.asname or ''}")
@@ -316,6 +322,13 @@ def process_shape(text: str) -> dict[str, object]:
         module, attr = node.func.value.id, node.func.attr
         if module not in PROCESS_ATTRS or attr not in PROCESS_ATTRS[module]:
             continue
+        unsafe_keywords = sorted(
+            "**" if keyword.arg is None else keyword.arg
+            for keyword in node.keywords
+            if keyword.arg is None or keyword.arg in {"shell", "executable", "preexec_fn"}
+        )
+        if unsafe_keywords:
+            violations.append((owner, node.lineno, f"unsafe-process-keywords:{unsafe_keywords}"))
         literal = ""
         if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
             literal = node.args[0].value
@@ -501,6 +514,9 @@ try:
         "SUBPROCESS_SIGNAL_CALLBACK": "\nsubprocess.signal.signal(1, run_codex)\n",
         "SUBPROCESS_ATEXIT_CALLBACK": "\nsubprocess.atexit.register(run_codex)\n",
         "SUBPROCESS_WEAKREF_CALLBACK": "\nsubprocess.weakref.finalize(object(), run_codex)\n",
+        "OS_ATFORK_CALLBACK": "\nos.register_at_fork(before=run_codex)\n",
+        "LANGUAGE_FINALIZER": "\nclass H031Finalizer:\n    def __del__(self):\n        run_codex(None, None, 'BUILDER', 'late')\n",
+        "GENERATOR_FINALIZER": "\ndef h031_deferred():\n    try:\n        yield 1\n    finally:\n        run_codex(None, None, 'BUILDER', 'late')\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
@@ -515,6 +531,18 @@ try:
     for label, suffix in shape_mutants.items():
         mutant_shape = process_shape(source_text + suffix)
         check("J_PROCESS_" + label + "_REJECT", not mutant_shape["boundary_ok"],
+              str(mutant_shape["detail"]))
+    popen_anchor = "stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)"
+    for label, keyword in (
+        ("PREEXEC", "preexec_fn=lambda: None"),
+        ("SHELL", "shell=True"),
+        ("EXECUTABLE", "executable='/bin/sh'"),
+    ):
+        mutant = source_text.replace(
+            popen_anchor, popen_anchor[:-1] + ", " + keyword + ")", 1)
+        mutant_shape = process_shape(mutant)
+        check("J_PROCESS_POPEN_" + label + "_REJECT",
+              mutant != source_text and not mutant_shape["boundary_ok"],
               str(mutant_shape["detail"]))
     harmless = process_shape(source_text + "\ndef h031_harmless(repo, wt, role, prompt):\n    return run_codex(repo, wt, role, prompt)\n")
     check("J_HARMLESS_ROLE_CONSOLIDATION", bool(harmless["boundary_ok"]), str(harmless["detail"]))
@@ -647,6 +675,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
             "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.replace",
             "os.link", "os.symlink", "os.truncate", "os.chmod",
             "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp", "os.system",
+            "os.register_at_fork",
             "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "subprocess.Popen",
         }
         def audit_hook(event, args):
