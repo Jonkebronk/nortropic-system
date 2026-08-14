@@ -643,3 +643,9 @@ Sixth review found two native process constructors omitted from both layers: `os
 the parent cannot rely on the child's recorded events. Both APIs are now prohibited process sites in
 the whole-module source envelope, and their audit events are also forbidden before role validation.
 Direct fork/forkpty mutants prevent the omission from recurring.
+
+Seventh review confirmed the parent-side fork observation, but found that modules already loaded can
+publicly re-export other module objects. A Name-rooted matcher therefore missed `subprocess.os.fork()`
+and equivalent chains. Attribute access to sensitive process, import and FFI module proxies is now
+forbidden independently of the root object, while direct approved modules remain governed by the exact
+import inventory and their enumerated process APIs. Proxy fork/spawn/registry mutants bind the closure.

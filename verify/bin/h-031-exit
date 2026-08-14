@@ -94,6 +94,10 @@ EXPECTED_IMPORT_INVENTORY = sorted([
     "F:0:core:AuthorityError:", "F:0:core:canonical_path:",
     "F:0:core:permits:", "F:0:core:strict_json_bytes:",
 ])
+SENSITIVE_MODULE_PROXIES = {
+    "os", "sys", "subprocess", "builtins", "ctypes", "importlib", "pty",
+    "asyncio", "multiprocessing", "posix", "_posixsubprocess",
+}
 checks: list[tuple[str, bool, str]] = []
 
 
@@ -257,6 +261,8 @@ def process_shape(text: str) -> dict[str, object]:
             )
             if not safe_super_init:
                 violations.append((owner, node.lineno, f"private-reflection:{node.attr}"))
+        if isinstance(node, ast.Attribute) and node.attr in SENSITIVE_MODULE_PROXIES:
+            violations.append((owner, node.lineno, f"sensitive-module-proxy:{node.attr}"))
         if not isinstance(node, ast.Call):
             continue
         if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "compile"}:
@@ -468,6 +474,9 @@ try:
         "CTYPES_LIBC": "\nimport ctypes\nctypes.CDLL(None).system(b'/usr/bin/true')\n",
         "OS_FORK": "\nh031_pid = os.fork()\n",
         "OS_FORKPTY": "\nh031_pid, h031_fd = os.forkpty()\n",
+        "SUBPROCESS_OS_FORK": "\nh031_pid = subprocess.os.fork()\n",
+        "SHUTIL_OS_SPAWN": "\nshutil.os.posix_spawn('/bin/true', ['/bin/true'], {})\n",
+        "SUBPROCESS_SYS_REGISTRY": "\nsubprocess.sys.modules['subprocess'].Popen(['/bin/true'])\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
