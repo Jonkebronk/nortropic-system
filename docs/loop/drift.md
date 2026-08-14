@@ -890,3 +890,11 @@ run, role, route and process/thread context, validates one complete strict schem
 publishes it and cleans transport state on success and every failure interval. Preseed, replay, wrong
 binding, partial/multiple/trailing values, mechanism-specific object/channel attacks and live-state
 writes reject. Schema-shaped event text alone remains non-authoritative.
+
+Independent review then showed that the first executable oracle used only a standalone
+fixture Git directory and checked only selected report fields. R2 uses a temporary linked
+worktree whose common Git directory is the candidate repository's physical LIVE_GIT,
+restores every journal/worktree-admin effect, and still executes the verified provider
+family through G20. Its negative family now exercises strict UTF-8/duplicate/framing and
+the complete frozen JSON Schema recursively, plus binding, writer, failure and cleanup
+variants; all remain aggregated under the single intentional product RED.
