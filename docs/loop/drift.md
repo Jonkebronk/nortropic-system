@@ -1084,3 +1084,12 @@ vocabulary admits the owner-frozen reader templates. Process constructor sites a
 recorded during context-sensitive actual-to-formal interpretation rather than a global
 call rescan. Positional-only keywords reject, literal star/double-star expansions bind
 faithfully, and unresolved dynamic expansions remain fail-closed.
+
+R23 freezes both identifier origins to the exact undecorated AST body
+`return secrets.token_hex(16)` plus one unaliased, unrebound `import secrets`; aliases,
+concatenation, other globals, helpers, defaults, annotations, closures and decorators
+reject. Runtime freshness/disjointness remains mandatory. The context-sensitive
+interpreter now evaluates bare expressions, conditions, iterators, with-contexts,
+asserts, raises and comprehension inputs/filters, so bare helper-mediated process
+constructor effects cannot disappear. Literal `**` keys targeting positional-only
+parameters reject exactly like direct keywords.

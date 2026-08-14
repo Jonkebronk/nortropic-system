@@ -706,31 +706,20 @@ if mode == 'output_then_fail': sys.exit(17)
                         "executable_path","executable_sha256",
                     "code_mode_host_path","code_mode_host_sha256"}}
             origin_names={"_new_run_id","_new_invocation_id"}
+            secrets_imports=[item for item in candidate_tree.body if isinstance(item,ast.Import)
+                for alias in item.names if alias.name=="secrets" and alias.asname is None]
+            secrets_rebinds=[item for item in ast.walk(candidate_tree)
+                if isinstance(item,ast.Name) and item.id=="secrets"
+                and isinstance(item.ctx,(ast.Store,ast.Del))]
             origin_body_ok={}
             for origin_name in origin_names:
-                origin=top_functions.get(origin_name);ok=origin is not None
-                if ok:
-                    calls=[item for item in ast.walk(origin) if isinstance(item,ast.Call)]
-                    allowed_entropy=all(
-                        (isinstance(call.func,ast.Attribute)
-                         and isinstance(call.func.value,ast.Name)
-                         and (call.func.value.id,call.func.attr) in {
-                             ("secrets","token_hex"),("uuid","uuid4")})
-                        or (isinstance(call.func,ast.Name)
-                            and call.func.id in {"str"})
-                        for call in calls)
-                    token_calls=[call for call in calls if isinstance(call.func,ast.Attribute)
-                        and isinstance(call.func.value,ast.Name)
-                        and (call.func.value.id,call.func.attr)==("secrets","token_hex")]
-                    token_shape=all(len(call.args)==1 and isinstance(call.args[0],ast.Constant)
-                                    and call.args[0].value==16 and not call.keywords
-                                    for call in token_calls)
-                    forbidden_load=any(isinstance(item,ast.Name) and isinstance(item.ctx,ast.Load)
-                        and (item.id in identity_helpers or item.id in {
-                            "provider","authority","code_mode_host"})
-                        for item in ast.walk(origin))
-                    ok=allowed_entropy and token_shape and bool(calls) and not forbidden_load
-                origin_body_ok[origin_name]=ok
+                origin=top_functions.get(origin_name)
+                expected=ast.parse(
+                    f"def {origin_name}():\n    return secrets.token_hex(16)\n").body[0]
+                origin_body_ok[origin_name]=(origin is not None
+                    and ast.dump(origin,include_attributes=False)
+                        == ast.dump(expected,include_attributes=False)
+                    and len(secrets_imports)==1 and not secrets_rebinds)
             capability_calls={"read","readinto","read1","readinto1","readall",
                               "pread","preadv","readv","fdopen","FileIO","mmap",
                               "dup","fileno","raw","buffer","seek","tell"}
@@ -811,6 +800,7 @@ if mode == 'output_then_fail': sys.exit(17)
                                 valid=False;continue
                             expanded_name=key.value
                             if expanded_name in bound: valid=False;continue
+                            if expanded_name in posonly: valid=False;continue
                             if expanded_name in names or expanded_name in kwonly:
                                 bound[expanded_name]=r17_expr(value,env)
                             elif fn.args.kwarg is not None:
@@ -861,6 +851,19 @@ if mode == 'output_then_fail': sys.exit(17)
                                     joined=r17_join(env.get(name,frozenset()),value)
                                     if joined != env.get(name): env[name]=joined;changed=True
                         elif isinstance(item,ast.Return): returns.append(r17_expr(item.value,env))
+                        elif isinstance(item,ast.Expr): r17_expr(item.value,env)
+                        elif isinstance(item,(ast.If,ast.While,ast.Assert)):
+                            r17_expr(item.test,env)
+                        elif isinstance(item,(ast.For,ast.AsyncFor)):
+                            r17_expr(item.iter,env)
+                        elif isinstance(item,(ast.With,ast.AsyncWith)):
+                            for context in item.items:
+                                r17_expr(context.context_expr,env)
+                        elif isinstance(item,ast.Raise):
+                            r17_expr(item.exc,env);r17_expr(item.cause,env)
+                        elif isinstance(item,ast.comprehension):
+                            r17_expr(item.iter,env)
+                            for condition in item.ifs: r17_expr(condition,env)
                     if not changed: break
                 return env,r17_join(*returns)
             for name in identity_helpers: helper_summaries[name]=frozenset({IDENTITY})
