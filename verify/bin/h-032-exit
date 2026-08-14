@@ -60,6 +60,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import builtins
+import fcntl
 import io
 import json
 import os
@@ -386,8 +387,13 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         residue_paths.update(path for path in arena.rglob("*")
                              if str(path.absolute()) not in arena_before)
         expected_runs = module.journal_root(repo) / "runs"
+        def expected_journal_path(path: Path) -> bool:
+            if path == expected_runs or path.parent == expected_runs:
+                return True
+            return (path.parent.parent == expected_runs
+                    and path.name in {"provider-envelope.json", "events.jsonl", "result.json"})
         residue = sorted(str(path) for path in residue_paths if path != arena
-                         and path != expected_runs and expected_runs not in path.parents)
+                         and not expected_journal_path(path))
         return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before), residue
 
     valid_repo = make_repo(str(provider))
@@ -857,10 +863,20 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 last_transition = max((seq for seq, path, mode in transitions
                     if Path(path) in {root, snapshot, host}), default=-1)
                 protected = all((p.stat().st_mode & 0o222) == 0 for p in (root, snapshot, host))
+                identities = {(p.stat().st_dev, p.stat().st_ino) for p in (snapshot, host)}
+                live_writable_aliases = []
+                for fd_entry in Path("/dev/fd").iterdir():
+                    try:
+                        fd = int(fd_entry.name); opened = os.fstat(fd)
+                        access_mode = fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+                        if ((opened.st_dev, opened.st_ino) in identities
+                                and access_mode in {os.O_WRONLY, os.O_RDWR}):
+                            live_writable_aliases.append(fd)
+                    except (OSError, ValueError): pass
                 fresh = all(complete_reads[name] and complete_reads[name][-1] > last_transition
                             and complete_hashes[name] and complete_hashes[name][-1] > last_transition
                             for name in expected_by_name)
-                trace_verdict.append(protected and fresh and not writable_fds and not writable_handles)
+                trace_verdict.append(protected and fresh and not live_writable_aliases)
         return original_popen(argv, *args, **kwargs)
     builtins.open, io.open, os.open, os.read, os.close, os.chmod, os.fchmod, subprocess.Popen = (
         traced_builtin_open, traced_io_open, traced_os_open, traced_os_read, traced_os_close,
@@ -893,31 +909,47 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
         target_repo = make_repo(str(provider))
         changed, targets = [False], []
-        original_builtin, original_io, original_os, original_popen_local = (
-            builtins.open, io.open, os.open, subprocess.Popen)
+        original_builtin, original_io, original_os, original_read, original_popen_local = (
+            builtins.open, io.open, os.open, os.read, subprocess.Popen)
+        read_fds: dict[int, Path] = {}
         bad = (f"#!/bin/sh\nprintf 'bad\\n' >'{marker}'\nexit 0\n").encode()
         def candidate(value):
             try: path = Path(value)
             except Exception: return None
             root = path.parent
             return path if (path.name == target_name and path != provider
-                and (root / "provider").exists() and (root / "codex-code-mode-host").exists()
-                and (root.stat().st_mode & 0o222) == 0) else None
+                and (root / "provider").exists() and (root / "codex-code-mode-host").exists()) else None
+        def protected(path: Path) -> bool: return (path.parent.stat().st_mode & 0o222) == 0
         def mutate(path: Path):
             original_chmod(path, 0o700)
             with original_io(path, "wb") as handle: handle.write(bad)
             targets.append(path); changed[0] = True
+        class CorruptRead:
+            def __init__(self, handle, path): self._handle, self._path = handle, path
+            def read(self, *args, **kwargs):
+                if protected(self._path) and not changed[0]: mutate(self._path)
+                return self._handle.read(*args, **kwargs)
+            def readinto(self, buffer):
+                if protected(self._path) and not changed[0]: mutate(self._path)
+                return self._handle.readinto(buffer)
+            def __enter__(self): return self
+            def __exit__(self, *args): return self._handle.__exit__(*args)
+            def __getattr__(self, name): return getattr(self._handle, name)
         def wrap_open(original, file, *args, **kwargs):
             mode = args[0] if args else kwargs.get("mode", "r")
             path = candidate(file)
-            if path is not None and "r" in str(mode) and not changed[0]: mutate(path)
-            return original(file, *args, **kwargs)
+            handle = original(file, *args, **kwargs)
+            return CorruptRead(handle, path) if path is not None and "r" in str(mode) else handle
         def wrap_builtin(file, *args, **kwargs): return wrap_open(original_builtin, file, *args, **kwargs)
         def wrap_io(file, *args, **kwargs): return wrap_open(original_io, file, *args, **kwargs)
         def wrap_os(file, flags, *args, **kwargs):
-            path = candidate(file)
-            if path is not None and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR) and not changed[0]: mutate(path)
-            return original_os(file, flags, *args, **kwargs)
+            path = candidate(file); fd = original_os(file, flags, *args, **kwargs)
+            if path is not None and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR): read_fds[fd] = path
+            return fd
+        def wrap_read(fd, size):
+            path = read_fds.get(fd)
+            if path is not None and protected(path) and not changed[0]: mutate(path)
+            return original_read(fd, size)
         def wrap_popen(argv, *args, **kwargs):
             if not changed[0]:
                 items = argv if isinstance(argv, (list, tuple)) else [argv]
@@ -926,9 +958,9 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                         path = Path(item).parent / target_name
                         if path.exists(): mutate(path); break
             return original_popen_local(argv, *args, **kwargs)
-        builtins.open, io.open, os.open, subprocess.Popen = wrap_builtin, wrap_io, wrap_os, wrap_popen
+        builtins.open, io.open, os.open, os.read, subprocess.Popen = wrap_builtin, wrap_io, wrap_os, wrap_read, wrap_popen
         try: result = attempt(target_repo)
-        finally: builtins.open, io.open, os.open, subprocess.Popen = original_builtin, original_io, original_os, original_popen_local
+        finally: builtins.open, io.open, os.open, os.read, subprocess.Popen = original_builtin, original_io, original_os, original_read, original_popen_local
         residue = [str(path) for path in targets if path.exists() or path.parent.exists()]
         return changed[0], result, marker.exists(), residue
     bad_provider_marker = work / "BAD_PROVIDER_CONNECTED"
@@ -1105,6 +1137,20 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
               "protected pathname changed through retained writable fd after early hash")
     finally:
         os.close(retained_fd); retained_snapshot.chmod(0o700); retained_snapshot.unlink()
+    fd_fixture = jc / "fd-inventory"; fd_fixture.write_bytes(b"trusted"); fd_fixture.chmod(0o700)
+    writer = os.open(fd_fixture, os.O_RDWR); duplicate_writer = os.dup(writer); os.close(writer)
+    reader = os.open(fd_fixture, os.O_RDONLY); duplicate_reader = os.dup(reader); os.close(reader)
+    try:
+        identity_fd = fd_fixture.stat()
+        def access(fd): return fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+        check("J_R6_GR05_DUPLICATE_WRITER_ENUMERATED",
+              (os.fstat(duplicate_writer).st_dev, os.fstat(duplicate_writer).st_ino)
+              == (identity_fd.st_dev, identity_fd.st_ino) and access(duplicate_writer) == os.O_RDWR,
+              f"fd={duplicate_writer} mode={access(duplicate_writer)}")
+        check("J_R6_GR05_PREOPENED_RO_DUP_POSITIVE", access(duplicate_reader) == os.O_RDONLY,
+              f"fd={duplicate_reader} mode={access(duplicate_reader)}")
+    finally:
+        os.close(duplicate_writer); os.close(duplicate_reader); fd_fixture.unlink()
 
     direct_parent, provider_parent = 100, 200
     check("J_R3_GR06_CONTROLLER_DIRECT_HOST_REJECT",
@@ -1134,6 +1180,14 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         if fixed_outside.exists(): shutil.rmtree(fixed_outside)
     check("J_R5_GR07_FIXED_ROOT_SELF_CLEANUP", not fixed_outside.exists(),
           f"residue={fixed_outside.exists()}")
+    journal_mutant = work / "judge-runs/run-1/leaked-family/provider"
+    journal_mutant.parent.mkdir(parents=True); journal_mutant.write_bytes(b"partial")
+    exact_names = {"provider-envelope.json", "events.jsonl", "result.json"}
+    journal_mutant_allowed = (journal_mutant.name in exact_names
+                              and journal_mutant.parent.parent.name == "judge-runs")
+    check("J_R6_GR07_FAMILY_UNDER_RUNS_REJECT", not journal_mutant_allowed,
+          f"path={journal_mutant} allowed={journal_mutant_allowed}")
+    shutil.rmtree(work / "judge-runs")
 
     check("J_R4_GR08_UNBOUNDED_PROVIDER_EFFECT", provider_fixture_effect,
           "digest-coherent oversized provider executes and captures without the bound")

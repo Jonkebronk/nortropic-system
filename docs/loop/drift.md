@@ -825,3 +825,8 @@ digest comparisons through actual capture effects, and requires no writable fami
 Expected journal paths are classified exactly; every other audit-observed success or failure residue is
 forbidden. The alternate-root cleanup fixture is now trap-owned and finally-cleaned. Production remains
 untouched and the sole intended RED is unchanged.
+
+R6 binds connected corruption to the first actual post-protection read of the snapshot object, including
+pre-opened handles and descriptors. Actual process fd enumeration plus fstat/F_GETFL replaces API-level
+writer bookkeeping at Popen. The journal cleanup exemption is now an exact finite shape, and a family
+subtree beneath runs is an explicit rejection mutant. Production remains unchanged.
