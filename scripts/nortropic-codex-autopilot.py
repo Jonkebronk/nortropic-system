@@ -42,12 +42,19 @@ EXPECTED_REPO = "Nortropic/nortropic-system"
 OWNER_DECISION_PATH = "docs/loop/owner-h003-attestation-authority-v1.md"
 REPORT_SCHEMA_PATH = "docs/loop/codex-autopilot-report.schema.json"
 PROVIDER_IDENTITY_PATH = "config/codex-provider-identity.json"
+PYTHON_IDENTITY_PATH = "config/python-interpreter-authority-v1.json"
 PROVIDER_IDENTITY_KEYS = {
     "schema_version", "provider", "executable_path", "executable_sha256",
 }
+PYTHON_IDENTITY_KEYS = {
+    "schema_version", "authority_version", "canonical_path", "python_version",
+    "executable_sha256", "required_regular_file", "required_executable",
+    "symlink_allowed", "path_lookup_allowed", "usr_bin_env_allowed",
+    "requester_override_allowed", "isolated_flags", "environment_authority",
+    "runtime_binding_model",
+}
 MAX_PROVIDER_AUTHORITY_BYTES = 16 * 1024
 MAX_PROVIDER_EXECUTABLE_BYTES = 256 * 1024 * 1024
-CONTROLLER_LAUNCH_PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 REJECTED_S3 = "1e21a7fe150f25626301f3656893d1798ae46c3d"
 FULL_ROADMAP_OWNER_PATH = "docs/loop/codex-autopilot-v3-full-roadmap.md"
 SUBSTITUTION_OWNER_PATH = "docs/loop/harness-substitution-contract-v1.md"
@@ -663,13 +670,83 @@ def _provider_snapshot(repo: Path) -> tuple[Path, Path, str]:
             final_digest = hashlib.sha256(final.read()).hexdigest()
         if final_digest != expected:
             raise Stop("private provider snapshot changed before launch")
-        os.chmod(snapshot, 0o500)
-        os.chmod(root, 0o500)
         return root, snapshot, expected
     except BaseException:
         os.chmod(root, 0o700)
         shutil.rmtree(root)
         raise
+
+
+def _python_snapshot(root: Path) -> tuple[Path, str]:
+    authority_path = Path(__file__).resolve().parents[1] / PYTHON_IDENTITY_PATH
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(authority_path, flags)
+    except OSError as e:
+        raise Stop(f"controller Python authority unavailable: {e}") from e
+    try:
+        raw = _read_stable_opened(fd, MAX_PROVIDER_AUTHORITY_BYTES,
+                                  "controller Python authority")
+    finally:
+        os.close(fd)
+    try:
+        value = strict_json_bytes(raw)
+    except (AuthorityError, UnicodeError, ValueError) as e:
+        raise Stop(f"controller Python authority is not strict JSON: {e}") from e
+    if not isinstance(value, dict) or set(value) != PYTHON_IDENTITY_KEYS:
+        raise Stop("controller Python authority has unexpected keys")
+    digest = value["executable_sha256"]
+    exact = (
+        type(value["schema_version"]) is int and value["schema_version"] == 1
+        and value["authority_version"] == "python3.12-v1"
+        and type(value["canonical_path"]) is str and bool(value["canonical_path"])
+        and value["python_version"] == "3.12.13"
+        and type(digest) is str and bool(re.fullmatch(r"[0-9a-f]{64}", digest))
+        and value["required_regular_file"] is True
+        and value["required_executable"] is True
+        and value["symlink_allowed"] is False
+        and value["path_lookup_allowed"] is False
+        and value["usr_bin_env_allowed"] is False
+        and value["requester_override_allowed"] is False
+        and value["isolated_flags"] == ["-I", "-S"]
+        and value["environment_authority"] is False
+        and value["runtime_binding_model"]
+            == "same-opened-source-private-protected-snapshot-final-rehash"
+    )
+    source = Path(value["canonical_path"])
+    if not exact or not source.is_absolute():
+        raise Stop("controller Python authority has invalid values")
+    try:
+        fd = os.open(source, flags)
+    except OSError as e:
+        raise Stop(f"controller Python executable unavailable: {e}") from e
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or not (opened.st_mode & 0o111):
+            raise Stop("controller Python is not a regular executable file")
+        payload = _read_stable_opened(fd, MAX_PROVIDER_EXECUTABLE_BYTES,
+                                      "controller Python executable")
+    finally:
+        os.close(fd)
+    if hashlib.sha256(payload).hexdigest() != digest:
+        raise Stop("controller Python digest does not match authority")
+    snapshot = root / "python3.12"
+    out = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                  | getattr(os, "O_CLOEXEC", 0), 0o700)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(out, view)
+            if written <= 0:
+                raise OSError("short controller Python snapshot write")
+            view = view[written:]
+        os.fsync(out)
+    finally:
+        os.close(out)
+    with snapshot.open("rb") as final:
+        if hashlib.sha256(final.read()).hexdigest() != digest:
+            raise Stop("private controller Python snapshot changed before launch")
+    return snapshot, digest
 
 
 def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
@@ -682,6 +759,12 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
         raise Stop(f"report schema missing in worktree: {schema}")
     full_prompt = prompt.rstrip() + "\n\n" + agent_prompt_common()
     snapshot_root, snapshot, snapshot_digest = _provider_snapshot(repo)
+    try:
+        python_snapshot, python_digest = _python_snapshot(snapshot_root)
+    except BaseException:
+        os.chmod(snapshot_root, 0o700)
+        shutil.rmtree(snapshot_root)
+        raise
     provider_argv = [
         str(snapshot),
         "-C", str(wt),
@@ -696,17 +779,12 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
     envelope = jr / "provider-envelope.json"
     envelope.write_text(json.dumps({"task_id": prompt, "role": role}), encoding="utf-8")
     launcher = Path(__file__).resolve().parents[1] / "controller/launch/cli"
-    argv = [str(launcher), "run", str(wt), str(envelope), "86400", "--", *provider_argv]
-    # The launcher's /usr/bin/env shebang runs before Seatbelt. It therefore
-    # receives a closed interpreter-selection environment, not caller PATH or
-    # Python startup/module injection. Other provider variables are preserved.
+    argv = [str(python_snapshot), "-I", "-S", str(launcher),
+            "run", str(wt), str(envelope), "86400", "--", *provider_argv]
     env = {key: value for key, value in os.environ.items()
-           if not key.upper().startswith("PYTHON") and key != "__PYVENV_LAUNCHER__"}
-    env.update(PATH=CONTROLLER_LAUNCH_PATH,
-               PYTHONNOUSERSITE="1",
-               PYTHONSAFEPATH="1",
-               PYTHONDONTWRITEBYTECODE="1",
-               NORTROPIC_TRUST_ROOT=str(snapshot_root))
+           if not key.startswith("DYLD_")
+           and key not in {"LD_PRELOAD", "LD_LIBRARY_PATH", "__PYVENV_LAUNCHER__"}}
+    env["NORTROPIC_TRUST_ROOT"] = str(snapshot_root)
     thread_id: str | None = None
     try:
         # The final read is deliberately adjacent to the trust transition.
@@ -714,6 +792,12 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
         with snapshot.open("rb") as final:
             if hashlib.sha256(final.read()).hexdigest() != snapshot_digest:
                 raise Stop("private provider snapshot changed at launch boundary")
+        with python_snapshot.open("rb") as final:
+            if hashlib.sha256(final.read()).hexdigest() != python_digest:
+                raise Stop("private controller Python changed at launch boundary")
+        os.chmod(snapshot, 0o500)
+        os.chmod(python_snapshot, 0o500)
+        os.chmod(snapshot_root, 0o500)
         journal(repo, "AGENT_START", role=role, worktree=str(wt), head=sha(wt))
         with events.open("w", encoding="utf-8") as log:
             p = subprocess.Popen(argv, cwd=str(wt), stdout=subprocess.PIPE,

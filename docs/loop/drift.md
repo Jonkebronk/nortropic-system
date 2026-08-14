@@ -568,3 +568,13 @@ path startup, disables bytecode emission, strips all caller `PYTHON*`, and expli
 non-PYTHON-prefixed `__PYVENV_LAUNCHER__` framework redirect. HOME and unrelated provider variables
 remain intact. A combined hostile HOME, usercustomize, PATH, PYTHONPATH and pyvenv-launcher run left
 all intercept markers absent and retained the live provider/G20 effects.
+
+Environment controls alone still left interpreter selection at an owner-writable Homebrew symlink and
+allowed global site/`.pth` processing before G20. The final correction consumes the existing Python
+authority completely rather than partially: exact 14-key semantics, canonical no-follow opened object,
+regular/executable mode, stable bounded bytes and exact digest. Those opened bytes are copied next to
+the provider snapshot in the same private root. Immediately before `AGENT_START`, both executables are
+rehashed and protected; the absolute Python snapshot runs the exact `-I -S` flags and absolute launcher.
+The provider environment is otherwise retained, but `DYLD_*`, `LD_PRELOAD`, `LD_LIBRARY_PATH` and
+`__PYVENV_LAUNCHER__` are removed because they can execute or redirect code before isolation/G20. A
+constructor dylib plus hostile global/user site, PATH, HOME and Python-family inputs produced no marker.
