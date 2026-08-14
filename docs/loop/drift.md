@@ -1256,3 +1256,7 @@ unrelated components and traces stay identical. SELFTEST remains separate from p
 ### 2026-08-15 — H032 R44E postcondition-bound analyzer components
 
 The owner-frozen unconditional SELFTEST no longer treats heap allocation, ordinary `Try`, or helper entry as credit. Its single analyzer returns invocation-local structured facts for completed heap alias/write/read relations, explicit exception-to-handler plus else/finally terminal routing, and actual→formal→return/call-effect provenance. Three entry-preserving mutants must each flip only its named component while all unrelated components and trace counts remain stable. This is rig sensitivity only; the unchanged product remains RED solely for the missing structured-result boundary, and no live provider call occurs while RED.
+
+### 2026-08-15 — H032 R45 types and allocation measurability
+
+The unconditional same-analyzer lane now has an explicit rig-only vocabulary for one unaliased `import types` and direct `types.SimpleNamespace` construction. Structured allocation facts preserve same-path aliases, distinguish sequential call contexts, and widen loop/recursive repetition to MAY_ALIAS with may-present/may-absent attributes. One-defect import/API/escape, alias, repetition and recursion mutants independently lose their target component with unrelated components and traces stable. The exact product lane remains the sole source of product verdict.
