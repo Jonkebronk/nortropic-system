@@ -879,3 +879,14 @@ same-opened-object source races for both members, live descriptor reuse and alia
 corruption, final-transition ordering, valid oversize effects, exact provider-to-host ancestry, G20
 namespace denials and residue-free success/failure cleanup. H-031 continues to bind the exact role route
 at this execution boundary; H-033 and the older H-034/H-035/invariant suites remain unchanged.
+
+## 2026-08-14 — H-032 structured result handoff amendment
+
+The first real host-backed TEST_AUTHOR run completed in the provider event stream but could not create
+its configured `-o` leaf inside the controller-owned live Git journal, exactly as H017/G20 requires.
+The frozen amendment keeps that denial intact and requires one fresh connected result through a
+least-authority disposable transport. The controller independently binds it to the exact invocation,
+run, role, route and process/thread context, validates one complete strict schema value, atomically
+publishes it and cleans transport state on success and every failure interval. Preseed, replay, wrong
+binding, partial/multiple/trailing values, mechanism-specific object/channel attacks and live-state
+writes reject. Schema-shaped event text alone remains non-authoritative.

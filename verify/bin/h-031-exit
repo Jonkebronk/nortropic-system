@@ -793,7 +793,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "fe5c133859ff48255b4a1fe6b36004fa140977a1644dd58fd6666216a4673925")
+                       == "11769256ea853e75ad8094138df396e4a53065d906a9c7d334ead768a3f4cf13")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
@@ -1257,9 +1257,9 @@ if not failed:
     print("H031_GATE_RESULT=PASS")
     raise SystemExit(0)
 if (failed == {"K_H032_FRESH_UPSTREAM", "K_PRODUCT_EXECUTION"}
-        and "CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT"
+        and "CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT"
             in getattr(locals().get("upstream"), "stdout", "")):
-    print("CURRENT_RED_REASON=UPSTREAM_CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
+    print("CURRENT_RED_REASON=UPSTREAM_STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT")
 elif failed == EXPECTED_PREBUILDER_RED:
     print("CURRENT_RED_REASON=EXPLICIT_ROLE_MODEL_ROUTING_ABSENT")
 else:
