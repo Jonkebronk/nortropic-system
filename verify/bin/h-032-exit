@@ -490,10 +490,12 @@ if mode == 'output_then_fail': sys.exit(17)
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
     candidate_tree = ast.parse(source.read_text(encoding="utf-8"))
     def analyze_candidate_tree(candidate_tree):
-        r44d_trace={"timeout":0,"cfg":0,"helper_provenance":0,"heap":0,"try":0}
+        r44d_trace={"timeout":0,"cfg":0,"helper_provenance":0,"heap":0,"try":0,
+                    "types":0,"allocation":0}
         r44d_components={"timeout":False,"cfg":False,"helper_provenance":False,
-                         "heap":False,"try":False}
+                         "heap":False,"try":False,"types":False,"allocation":False}
         r44e_facts={"heap":{},"try":{},"helper_provenance":{}}
+        r45_facts={"types":{},"allocation":{}}
         r44c_unsupported=("TryStar",) if isinstance(AST_TRY_STAR,type) and any(
             isinstance(node,AST_TRY_STAR) for node in ast.walk(candidate_tree)) else ()
         def r20_complete_tree_analysis(tree):
@@ -1128,6 +1130,99 @@ if mode == 'output_then_fail': sys.exit(17)
                 and "role" in [arg.arg for arg in run_codex_nodes[0].args.args])
             parent_map={child:parent for parent in ast.walk(candidate_tree)
                         for child in ast.iter_child_nodes(parent)}
+            # R45 rig-only narrow types vocabulary.  The module is never a
+            # capability: only one exact unaliased import and direct constructor
+            # calls are admissible; every other load/store/escape rejects.
+            r44d_trace["types"]+=1
+            type_imports=[node for node in ast.walk(candidate_tree)
+                if isinstance(node,(ast.Import,ast.ImportFrom))
+                and ((isinstance(node,ast.Import) and any(alias.name=="types"
+                    for alias in node.names)) or
+                    (isinstance(node,ast.ImportFrom) and node.module=="types"))]
+            exact_types_import=(len(type_imports)==1 and isinstance(type_imports[0],ast.Import)
+                and len(type_imports[0].names)==1
+                and type_imports[0].names[0].name=="types"
+                and type_imports[0].names[0].asname is None)
+            types_uses=[];types_invalid=[]
+            for node in ast.walk(candidate_tree):
+                if isinstance(node,ast.Name) and node.id=="types" and isinstance(node.ctx,ast.Load):
+                    attribute=parent_map.get(node);call=parent_map.get(attribute)
+                    direct=(isinstance(attribute,ast.Attribute) and attribute.value is node
+                        and attribute.attr=="SimpleNamespace" and isinstance(call,ast.Call)
+                        and call.func is attribute)
+                    types_uses.append((getattr(node,"lineno",-1),direct))
+                    if not direct: types_invalid.append("load_escape")
+                if isinstance(node,(ast.Attribute,ast.Subscript)):
+                    root=node.value
+                    if isinstance(root,ast.Name) and root.id=="types":
+                        if isinstance(getattr(node,"ctx",None),(ast.Store,ast.Del)):
+                            types_invalid.append("module_mutation")
+                        if isinstance(node,ast.Attribute) and node.attr!="SimpleNamespace":
+                            types_invalid.append("other_api")
+                if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) \
+                        and node.func.id in {"__import__","getattr","setattr","delattr"}:
+                    if any(isinstance(part,ast.Constant) and part.value=="types"
+                           for part in ast.walk(node)) or any(isinstance(part,ast.Name)
+                           and part.id=="types" for part in ast.walk(node)):
+                        types_invalid.append("dynamic_or_reflective")
+            types_ok=exact_types_import and bool(types_uses) and not types_invalid
+            r45_facts["types"]={"exact_import":exact_types_import,
+                "direct_constructor_loads":tuple(types_uses),
+                "invalid_uses":tuple(types_invalid),"verified":types_ok}
+            r44d_components["types"]=types_ok
+
+            # Allocation tokens are per syntactic dynamic call context.  A call
+            # beneath repetition/recursion is widened to MAY_ALIAS instead of
+            # being treated as one definitely shared object.
+            r44d_trace["allocation"]+=1
+            probe_nodes=[node for node in candidate_tree.body if isinstance(node,ast.FunctionDef)
+                         and node.name=="_r45_allocation_probe"]
+            make_nodes=[node for node in candidate_tree.body if isinstance(node,ast.FunctionDef)
+                        and node.name=="_r45_make"]
+            allocation_tokens=[];summaries=[];alias_pair=False;distinct_pair=False
+            if len(probe_nodes)==len(make_nodes)==1:
+                probe=probe_nodes[0];assignments={}
+                for node in runtime_walk_function(probe):
+                    if isinstance(node,ast.Assign) and len(node.targets)==1 \
+                            and isinstance(node.targets[0],ast.Name):
+                        name=node.targets[0].id
+                        if isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Name) \
+                                and node.value.func.id=="_r45_make":
+                            ancestor=parent_map.get(node);repeated=False
+                            while ancestor is not None and ancestor is not probe:
+                                if isinstance(ancestor,(ast.For,ast.AsyncFor,ast.While,ast.comprehension)):
+                                    repeated=True;break
+                                ancestor=parent_map.get(ancestor)
+                            token=("MAY_ALIAS" if repeated else
+                                f"ALLOC:{getattr(node.value,'lineno',-1)}:{getattr(node.value,'col_offset',-1)}")
+                            assignments[name]=token;allocation_tokens.append(token)
+                            if repeated: summaries.append((name,"MAY_PRESENT","MAY_ABSENT"))
+                        elif isinstance(node.value,ast.Name):
+                            assignments[name]=assignments.get(node.value.id,"UNKNOWN")
+                alias_pair=(assignments.get("shared","UNKNOWN")!="UNKNOWN"
+                            and assignments.get("shared")==assignments.get("alias"))
+                distinct_pair=(assignments.get("first","UNKNOWN")!="UNKNOWN"
+                    and assignments.get("second","UNKNOWN")!="UNKNOWN"
+                    and assignments.get("first")!=assignments.get("second"))
+            recursive_nodes=[node for node in candidate_tree.body
+                if isinstance(node,ast.FunctionDef) and node.name=="_r45_recursive"]
+            recursion_widened=(len(recursive_nodes)==1
+                and any(isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
+                        and call.func.id=="_r45_recursive"
+                        for call in ast.walk(recursive_nodes[0]))
+                and any(isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
+                        and call.func.id=="_r45_make"
+                        for call in ast.walk(recursive_nodes[0])))
+            if recursion_widened:
+                summaries.append(("recursive","MAY_PRESENT","MAY_ABSENT"))
+            allocation_ok=(alias_pair and distinct_pair and bool(summaries)
+                           and any(token=="MAY_ALIAS" for token in allocation_tokens)
+                           and recursion_widened)
+            r45_facts["allocation"]={"tokens":tuple(allocation_tokens),
+                "stable_alias":alias_pair,"distinct_sequential":distinct_pair,
+                "repetition_summaries":tuple(summaries),
+                "recursion_widened":recursion_widened,"verified":allocation_ok}
+            r44d_components["allocation"]=allocation_ok
             helper_direct=all(isinstance(parent_map.get(item),ast.Call)
                               and parent_map[item].func is item for item in helper_loads)
             all_popen_sites=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Call)
@@ -1836,7 +1931,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 "non_receiver_verdict": non_receiver_verdict if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "tree_shape": r20_complete_tree_analysis,
                 "unsupported":r44c_unsupported,"components":r44d_components,
-                "trace":r44d_trace,"facts":r44e_facts}
+                "trace":r44d_trace,"facts":{**r44e_facts,**r45_facts}}
     r44c_source='''import os
 import subprocess
 import secrets
@@ -1850,6 +1945,21 @@ def journal_root(repo):
     return repo
 def _r44e_identity(value):
     return value
+def _r45_make():
+    return types.SimpleNamespace()
+def _r45_recursive(n):
+    if n:
+        return _r45_recursive(n - 1)
+    return _r45_make()
+def _r45_allocation_probe(repo):
+    shared = _r45_make()
+    alias = shared
+    alias.value = 1
+    first = _r45_make()
+    second = _r45_make()
+    for item in repo:
+        repeated = _r45_make()
+    return shared, alias, first, second, repeated
 def _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
     raw = os.read(sink_fd, 1)
     marker = types.SimpleNamespace(value=raw)
@@ -1875,7 +1985,8 @@ def run_codex(repo, role):
     return _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role)
 '''
     r44c_tree=ast.parse(r44c_source);r44c_base=analyze_candidate_tree(r44c_tree)
-    required_r44c_markers={"timeout","cfg","helper_provenance","heap","try"}
+    required_r44c_markers={"timeout","cfg","helper_provenance","heap","try",
+                           "types","allocation"}
     r44c_deep_ok=(set(r44c_base)=={"verdict","exact_consumer_args","receiver_ok",
         "non_receiver_verdict","tree_shape","unsupported","components","trace","facts"}
         and required_r44c_markers=={key for key,value in r44c_base["components"].items() if value}
@@ -1916,23 +2027,66 @@ def run_codex(repo, role):
         helper=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
                     and node.name=="_r44e_identity")
         helper.body=[ast.Return(value=ast.Constant(value=None))]
+    def r45_alias_types_import(tree):
+        imported=next(node for node in tree.body if isinstance(node,ast.Import)
+                      and any(alias.name=="types" for alias in node.names))
+        next(alias for alias in imported.names if alias.name=="types").asname="types_alias"
+    def r45_break_stable_alias(tree):
+        probe=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                   and node.name=="_r45_allocation_probe")
+        assignment=next(node for node in probe.body if isinstance(node,ast.Assign)
+                        and isinstance(node.targets[0],ast.Name)
+                        and node.targets[0].id=="alias")
+        assignment.value=ast.Call(func=ast.Name(id="_r45_make",ctx=ast.Load()),
+                                  args=[],keywords=[])
+    def r45_other_types_api(tree):
+        consumer=r44e_consumer(tree)
+        consumer.body.insert(0,ast.Expr(value=ast.Call(func=ast.Attribute(
+            value=ast.Name(id="types",ctx=ast.Load()),attr="MappingProxyType",ctx=ast.Load()),
+            args=[ast.Dict(keys=[],values=[])],keywords=[])))
+    def r45_types_alias_escape(tree):
+        consumer=r44e_consumer(tree)
+        consumer.body.insert(0,ast.Assign(targets=[ast.Name(id="escaped",ctx=ast.Store())],
+                                         value=ast.Name(id="types",ctx=ast.Load())))
+    def r45_remove_repetition(tree):
+        probe=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                   and node.name=="_r45_allocation_probe")
+        loop=next(node for node in probe.body if isinstance(node,ast.For))
+        loop.body=[ast.Pass()]
+    def r45_remove_recursion(tree):
+        recursive=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                       and node.name=="_r45_recursive")
+        recursive.body=[ast.Return(value=ast.Call(func=ast.Name(id="_r45_make",ctx=ast.Load()),
+                                                  args=[],keywords=[]))]
     heap_result=r44e_mutate(r44e_remove_checked_store)
     try_result=r44e_mutate(r44e_bypass_raise)
     helper_result=r44e_mutate(r44e_break_helper_return)
+    types_result=r44e_mutate(r45_alias_types_import)
+    allocation_result=r44e_mutate(r45_break_stable_alias)
     r44e_results={"heap":heap_result,"try":try_result,
-                  "helper_provenance":helper_result}
+                  "helper_provenance":helper_result,"types":types_result,
+                  "allocation":allocation_result}
     r44e_postconditions_ok=all(
         result["components"][target] is False
         and all(result["components"][key]==r44c_base["components"][key]
                 for key in required_r44c_markers-{target})
         and result["trace"]==r44c_base["trace"]
         for target,result in r44e_results.items())
+    r45_extra_mutants=[("types",r44e_mutate(r45_other_types_api)),
+        ("types",r44e_mutate(r45_types_alias_escape)),
+        ("allocation",r44e_mutate(r45_remove_repetition)),
+        ("allocation",r44e_mutate(r45_remove_recursion))]
+    r45_extra_ok=all(result["components"][target] is False
+        and all(result["components"][key]==r44c_base["components"][key]
+                for key in required_r44c_markers-{target})
+        and result["trace"]==r44c_base["trace"]
+        for target,result in r45_extra_mutants)
     r44c_trystar_ok=True
     if isinstance(AST_TRY_STAR,type):
         r44c_star=analyze_candidate_tree(ast.parse("try:\n    pass\nexcept* Exception:\n    pass\n"))
         r44c_trystar_ok=(r44c_star["verdict"] is False and r44c_star["unsupported"]==("TryStar",))
     r44b_totality_ok=(r44c_deep_ok and r44c_mutants_ok and r44c_trystar_ok
-                      and r44e_postconditions_ok)
+                      and r44e_postconditions_ok and r45_extra_ok)
     candidate_analysis = analyze_candidate_tree(candidate_tree)
     consumer_architecture_ok = candidate_analysis["verdict"]
     exact_consumer_args = candidate_analysis["exact_consumer_args"]
