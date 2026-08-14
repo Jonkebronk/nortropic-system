@@ -712,6 +712,21 @@ if mode == 'output_then_fail': sys.exit(17)
                 base=r31_expr_flow(target.value);index=r31_expr_flow(target.slice)
                 return base[0] and index[0],base[1]|index[1]
             return False,frozenset({"UNKNOWN"})
+        def r37_store_target(target,value,env):
+            normal,raises=r36_target_flow(target)
+            updated=dict(env)
+            if normal:
+                if isinstance(target,ast.Name): updated[target.id]=value
+                elif isinstance(target,ast.Starred):
+                    return r37_store_target(target.value,value,updated)
+                elif isinstance(target,(ast.Tuple,ast.List)):
+                    for index,item in enumerate(target.elts):
+                        item_value=(frozenset({"UNKNOWN"}),)
+                        if isinstance(value,dict): item_value=value.get(index,item_value)
+                        updated,item_normal,item_raises=r37_store_target(item,item_value,updated)
+                        raises=raises|item_raises
+                        if not item_normal: return updated,False,raises
+            return updated,normal,raises
         def r35_block_states(statements,normal_envs):
             normals=[dict(env) for env in normal_envs];exceptions=[]
             for statement in statements:
@@ -720,26 +735,29 @@ if mode == 'output_then_fail': sys.exit(17)
                     if isinstance(statement,(ast.Assign,ast.AnnAssign)):
                         value=r34_value(statement.value,env)
                         targets=statement.targets if isinstance(statement,ast.Assign) else [statement.target]
-                        updated=dict(env)
-                        for target in targets:
-                            if isinstance(target,ast.Name): updated[target.id]=value
                         expr_normal,expr_raises=r31_expr_flow(statement.value)
                         exceptions.extend((exc,dict(env)) for exc in expr_raises)
-                        target_normal=expr_normal
+                        target_normal=expr_normal;updated=dict(env)
                         if expr_normal:
-                            target_env=dict(env)
                             for target in targets:
-                                one_normal,one_raises=r36_target_flow(target)
-                                exceptions.extend((exc,dict(target_env)) for exc in one_raises)
+                                next_env,one_normal,one_raises=r37_store_target(target,value,updated)
+                                exceptions.extend((exc,dict(updated)) for exc in one_raises)
                                 target_normal=target_normal and one_normal
                                 if not one_normal: break
+                                updated=next_env
                         if target_normal: next_normals.append(updated)
                     elif isinstance(statement,ast.AugAssign):
-                        value_normal,value_raises=r31_expr_flow(statement.value)
-                        exceptions.extend((exc,dict(env)) for exc in value_raises)
+                        # Python resolves and loads the target before evaluating RHS.
                         target_normal,target_raises=r36_target_flow(statement.target)
                         exceptions.extend((exc,dict(env)) for exc in target_raises)
-                        if value_normal and target_normal: next_normals.append(dict(env))
+                        value_normal,value_raises=r31_expr_flow(statement.value)
+                        if target_normal:
+                            exceptions.extend((exc,dict(env)) for exc in value_raises)
+                        if target_normal and value_normal:
+                            updated,store_normal,store_raises=r37_store_target(
+                                statement.target,(frozenset({"UNKNOWN"}),),dict(env))
+                            exceptions.extend((exc,dict(env)) for exc in store_raises)
+                            if store_normal: next_normals.append(updated)
                     elif isinstance(statement,ast.Delete):
                         target_normal=True
                         for target in statement.targets:
@@ -1789,14 +1807,26 @@ if mode == 'output_then_fail': sys.exit(17)
             "    except E:\n        pass\n"
             "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
         target_index_raise_negative=not r28_control(
-            "try:\n    holder[1 / 0] = 1\n"
+            "holder = {}\ntry:\n    holder[1 / 0] = 1\n"
             "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
         target_index_unknown_negative=not r28_control(
-            "try:\n    holder[repo.r36_index] = 1\n"
+            "holder = {}\ntry:\n    holder[repo.r36_index] = 1\n"
             "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
         target_safe_positive=r28_control(
-            "try:\n    holder[0] = 1\n"
+            "holder = {}\ntry:\n    holder[0] = 1\n"
             "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        chained_target_causal_negative=not r28_control(
+            "holder = {}\nE = ValueError\ntry:\n    E = holder[1 / 0] = RuntimeError\n"
+            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
+        chained_target_reverse_positive=r28_control(
+            "holder = {}\nE = ValueError\ntry:\n    holder[1 / 0] = E = RuntimeError\n"
+            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
+        nested_unpack_positive=r28_control(
+            "try:\n    (E, (F, G)) = (RuntimeError, (ValueError, Exception))\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        augassign_target_first_negative=not r28_control(
+            "holder = {}\ntry:\n    holder[1 / 0] += repo.r37_rhs\n"
+            "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
         helper_multikey_positive=r28_control(
             "def _r36_types():\n    return {'runtime': RuntimeError, 'value': ValueError}\n"
             "try:\n    M = _r36_types()\n    E = M['runtime']\n"
@@ -1832,7 +1862,11 @@ if mode == 'output_then_fail': sys.exit(17)
                                and target_index_raise_negative
                                and target_index_unknown_negative
                                and target_safe_positive
-                               and helper_multikey_positive)
+                               and helper_multikey_positive
+                               and chained_target_causal_negative
+                               and chained_target_reverse_positive
+                               and nested_unpack_positive
+                               and augassign_target_first_negative)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
