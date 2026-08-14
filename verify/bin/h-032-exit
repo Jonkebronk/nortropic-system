@@ -252,7 +252,10 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     provider.chmod(0o700)
     good_bytes = provider.read_bytes(); good_hash = hashlib.sha256(good_bytes).hexdigest()
     code_mode_host = provider_dir / "arbitrary-sidecar-source"
-    code_mode_host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    code_mode_host.write_text(
+        '#!/bin/sh\nif [ -n "${H032_HOST_DIRECT_MARKER:-}" ]; then '
+        'printf "DIRECT_HOST_EXECUTED\\n" >>"$H032_HOST_DIRECT_MARKER"; fi\nexit 0\n',
+        encoding="utf-8")
     code_mode_host.chmod(0o700)
     host_good_bytes = code_mode_host.read_bytes()
     host_good_hash = hashlib.sha256(host_good_bytes).hexdigest()
@@ -263,7 +266,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     shadow.write_text(f"#!/bin/sh\ntouch '{shadow_marker}'\nexit 88\n", encoding="utf-8"); shadow.chmod(0o700)
     old_path = os.environ.get("PATH", "")
     os.environ.update(PATH=str(path_shadow) + os.pathsep + old_path,
-                      H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider))
+                      H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider),
+                      H032_HOST_DIRECT_MARKER=str(work / "HOST_DIRECT_EXECUTED"))
 
     counter = 0
     def authority_document(path_value: str, hash_value: str = good_hash,
@@ -328,15 +332,27 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           and starts(base) == 0,
           f"rc={generic_effect.rc} out={generic_effect.out!r} marker={generic_marker.exists()} starts={starts(base)}")
 
-    def attempt(repo: Path) -> tuple[bool, str, int, int]:
+    def attempt(repo: Path) -> tuple[bool, str, int, int, list[str]]:
         before = starts(repo); cap_before = capture.stat().st_mtime_ns if capture.exists() else -1
+        observed_roots: list[Path] = []
+        original_mkdtemp = module.tempfile.mkdtemp
+        def observe_mkdtemp(*args, **kwargs):
+            path = Path(original_mkdtemp(*args, **kwargs))
+            if kwargs.get("prefix", "").startswith("nortropic-provider-"):
+                observed_roots.append(path)
+            return str(path)
+        module.tempfile.mkdtemp = observe_mkdtemp
         try:
-            module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
-            outcome = (True, "ADMITTED")
-        except Exception as exc:
-            outcome = (False, f"{type(exc).__name__}:{exc}")
+            try:
+                module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
+                outcome = (True, "ADMITTED")
+            except Exception as exc:
+                outcome = (False, f"{type(exc).__name__}:{exc}")
+        finally:
+            module.tempfile.mkdtemp = original_mkdtemp
         cap_after = capture.stat().st_mtime_ns if capture.exists() else -1
-        return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before)
+        residue = [str(path) for path in observed_roots if path.exists()]
+        return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before), residue
 
     valid_repo = make_repo(str(provider))
     valid = attempt(valid_repo)
@@ -352,10 +368,11 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         and cap.get("sha256") == good_hash
         and cap.get("host_sha256") == host_good_hash
         and cap.get("attacks") and all(v != 0 for v in cap["attacks"].values())
+        and not (work / "HOST_DIRECT_EXECUTED").exists()
         and not argv0.exists() and not host_snapshot.exists() and not argv0.parent.exists()
     )
     check("K_CODE_MODE_HOST_IDENTITY_BOUNDARY", family_effect_ok,
-          f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} cleanup={not argv0.parent.exists()}")
+          f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} direct_host={(work / 'HOST_DIRECT_EXECUTED').exists()} cleanup={not argv0.parent.exists()}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
@@ -424,7 +441,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     results = {}
     for name, repo in cases:
         result = attempt(repo); results[name] = result
-        check("K_" + name, not result[0] and result[2] == 0 and result[3] == 0, f"result={result}")
+        check("K_" + name, not result[0] and result[2] == 0 and result[3] == 0
+              and not result[4], f"result={result}")
 
     provider.write_bytes(good_bytes); provider.chmod(0o700)
     hardlink = provider_dir / "hardlink-provider"; os.link(provider, hardlink)
@@ -438,7 +456,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     provider.write_bytes(good_bytes + b"\n# provider drift\n"); provider.chmod(0o700)
     second = attempt(fresh_provider_repo)
     check("K_FRESH_PROVIDER", family_absent or (first[0] and not second[0]
-          and second[2] == 0 and second[3] == 0),
+          and second[2] == 0 and second[3] == 0 and not second[4]),
           f"first={first} second_after_drift={second}")
 
     provider.write_bytes(good_bytes); provider.chmod(0o700)
@@ -449,7 +467,8 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                     "executable_sha256":"0"*64}), encoding="utf-8")
     second_authority = attempt(fresh_authority_repo)
     check("K_FRESH_AUTHORITY", family_absent or (first_authority[0] and not second_authority[0]
-          and second_authority[2] == 0 and second_authority[3] == 0),
+          and second_authority[2] == 0 and second_authority[3] == 0
+          and not second_authority[4]),
           f"first={first_authority} second_after_authority_drift={second_authority}")
 
     # GR-01: replace the authority pathname immediately AFTER an opened source
@@ -542,6 +561,58 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           f"path_replaced={host_swapped[0]} result={host_race_result} host_sha={host_race_cap.get('host_sha256')}")
     code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
 
+    # A stale lstat/stat/access decision on the host pathname cannot replace
+    # fstat regular+executable identity on the exact no-follow opened fd.
+    host_same_bytes = provider_dir / "host-same-bytes"
+    host_same_bytes.write_bytes(host_good_bytes); host_same_bytes.chmod(0o600)
+    host_identity_repo = make_repo(str(provider))
+    original_stat, original_lstat, original_fstat, original_access = (
+        os.stat, os.lstat, os.fstat, os.access)
+    host_identity = original_stat(code_mode_host, follow_symlinks=False)
+    host_target_text = os.fspath(code_mode_host)
+    host_stat_swapped = [False]
+    host_opened_checks: list[tuple[bool, bool]] = []
+    def swap_host_after_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if os.fspath(path) == host_target_text and not host_stat_swapped[0]:
+            code_mode_host.unlink(); code_mode_host.symlink_to(host_same_bytes)
+            host_stat_swapped[0] = True
+        return result
+    def swap_host_after_lstat(path, *args, **kwargs):
+        result = original_lstat(path, *args, **kwargs)
+        if os.fspath(path) == host_target_text and not host_stat_swapped[0]:
+            code_mode_host.unlink(); code_mode_host.symlink_to(host_same_bytes)
+            host_stat_swapped[0] = True
+        return result
+    def swap_host_after_access(path, mode, *args, **kwargs):
+        result = original_access(path, mode, *args, **kwargs)
+        if os.fspath(path) == host_target_text and not host_stat_swapped[0]:
+            code_mode_host.unlink(); code_mode_host.symlink_to(host_same_bytes)
+            host_stat_swapped[0] = True
+        return result
+    def observe_host_fstat(fd, *args, **kwargs):
+        result = original_fstat(fd, *args, **kwargs)
+        if (result.st_dev, result.st_ino) == (host_identity.st_dev, host_identity.st_ino):
+            host_opened_checks.append((stat.S_ISREG(result.st_mode), bool(result.st_mode & 0o111)))
+        return result
+    os.stat, os.lstat, os.fstat, os.access = (
+        swap_host_after_stat, swap_host_after_lstat, observe_host_fstat, swap_host_after_access)
+    try:
+        host_identity_result = attempt(host_identity_repo)
+    finally:
+        os.stat, os.lstat, os.fstat, os.access = (
+            original_stat, original_lstat, original_fstat, original_access)
+    host_identity_ok = (bool(host_opened_checks)
+                        and all(regular and executable for regular, executable in host_opened_checks)
+                        and ((host_stat_swapped[0] and not host_identity_result[0]
+                              and host_identity_result[2] == 0 and not host_identity_result[4])
+                             or (not host_stat_swapped[0] and host_identity_result[0])))
+    check("K_CODE_MODE_HOST_OPENED_REGULAR_EXECUTABLE_IDENTITY",
+          family_absent or host_identity_ok,
+          f"opened_checks={host_opened_checks} stale_path_swap={host_stat_swapped[0]} result={host_identity_result}")
+    if code_mode_host.is_symlink(): code_mode_host.unlink()
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+
     # A regular-looking path swapped to a symlink after path-stat must not gain
     # trust. This requires the regular-file decision on the opened object plus
     # no-follow authority-path semantics.
@@ -592,7 +663,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     bad_marker = work / "BAD_SNAPSHOT_EXECUTED"
     os.environ["H032_BAD_SNAPSHOT_EXECUTED"] = str(bad_marker)
     rehash_repo = make_repo(str(provider))
-    mutated, snapshots = [False], []
+    mutated, snapshots, private_reads = [False], [], [0]
     original_builtin_open, original_io_open, original_os_open, original_popen = builtins.open, io.open, os.open, subprocess.Popen
     def is_private_executable(file) -> bool:
         try:
@@ -610,17 +681,25 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         try: candidate = is_private_executable(file)
         except Exception: candidate = False
         mode = args[0] if args else kwargs.get("mode", "r")
-        if candidate and "r" in str(mode) and not mutated[0]:
+        if candidate and "r" in str(mode):
+            private_reads[0] += 1
+        if candidate and "r" in str(mode) and private_reads[0] >= 2 and not mutated[0]:
             p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
         return original_io_open(file, *args, **kwargs)
     def mutate_before_rehash_builtin(file, *args, **kwargs):
         candidate = is_private_executable(file)
         mode = args[0] if args else kwargs.get("mode", "r")
-        if candidate and "r" in str(mode) and not mutated[0]:
+        if candidate and "r" in str(mode):
+            private_reads[0] += 1
+        if candidate and "r" in str(mode) and private_reads[0] >= 2 and not mutated[0]:
             p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
         return original_builtin_open(file, *args, **kwargs)
     def mutate_before_rehash_os(file, flags, *args, **kwargs):
-        if not mutated[0] and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR) and is_private_executable(file):
+        candidate = (not (flags & os.O_WRONLY) and not (flags & os.O_RDWR)
+                     and is_private_executable(file))
+        if candidate:
+            private_reads[0] += 1
+        if candidate and private_reads[0] >= 2 and not mutated[0]:
             p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
         return original_os_open(file, flags, *args, **kwargs)
     def mutate_if_no_rehash(argv, *args, **kwargs):
@@ -635,14 +714,81 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     finally:
         builtins.open, io.open, os.open, subprocess.Popen = original_builtin_open, original_io_open, original_os_open, original_popen
     residue = [str(p) for p in snapshots if p.exists() or p.parent.exists()]
-    check("K_FINAL_SNAPSHOT_REHASH", family_absent or (mutated[0] and not rehash_result[0]
-          and rehash_result[2] == 0 and not bad_marker.exists()),
-          f"mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
-    check("K_CODE_MODE_HOST_FINAL_REHASH", family_absent or (mutated[0]
+    check("K_FINAL_SNAPSHOT_REHASH", family_absent or (mutated[0] and private_reads[0] >= 2
           and not rehash_result[0] and rehash_result[2] == 0 and not bad_marker.exists()),
-          f"sidecar_mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
-    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (mutated[0] and not residue),
+          f"mutated={mutated[0]} reads={private_reads[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
+    check("K_CODE_MODE_HOST_FINAL_REHASH", family_absent or (mutated[0]
+          and private_reads[0] >= 2 and not rehash_result[0]
+          and rehash_result[2] == 0 and not bad_marker.exists()),
+          f"sidecar_mutated={mutated[0]} reads={private_reads[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
+    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", family_absent or (mutated[0]
+          and not residue and not rehash_result[4]),
           f"observed={[str(p) for p in snapshots]} residue={residue}")
+
+    # Independent connected launch-adjacent provider mutation. A sidecar-only
+    # final check cannot satisfy the main executable's owner digest.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
+    provider_rehash_repo = make_repo(str(provider))
+    provider_mutated, provider_snapshots, provider_reads = [False], [], [0]
+    original_builtin_open, original_io_open, original_os_open, original_popen = (
+        builtins.open, io.open, os.open, subprocess.Popen)
+    def is_private_provider(file) -> bool:
+        try:
+            p = Path(file)
+            if p == provider or p.name != "provider" or not p.is_file() or not original_access(p, os.X_OK):
+                return False
+            with original_io_open(p, "rb") as handle:
+                return hashlib.sha256(handle.read()).hexdigest() == good_hash
+        except Exception:
+            return False
+    def corrupt_provider(path: Path) -> None:
+        with original_io_open(path, "wb") as handle:
+            handle.write(bad_snapshot_bytes)
+        path.chmod(0o700)
+    def provider_read_candidate(file, mode) -> bool:
+        candidate = "r" in str(mode) and is_private_provider(file)
+        if candidate:
+            provider_reads[0] += 1
+        if candidate and provider_reads[0] >= 2 and not provider_mutated[0]:
+            path = Path(file); provider_snapshots.append(path)
+            corrupt_provider(path); provider_mutated[0] = True
+        return candidate
+    def provider_io_open(file, *args, **kwargs):
+        provider_read_candidate(file, args[0] if args else kwargs.get("mode", "r"))
+        return original_io_open(file, *args, **kwargs)
+    def provider_builtin_open(file, *args, **kwargs):
+        provider_read_candidate(file, args[0] if args else kwargs.get("mode", "r"))
+        return original_builtin_open(file, *args, **kwargs)
+    def provider_os_open(file, flags, *args, **kwargs):
+        if not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+            provider_read_candidate(file, "r")
+        return original_os_open(file, flags, *args, **kwargs)
+    def provider_popen(argv, *args, **kwargs):
+        if not provider_mutated[0]:
+            for item in argv if isinstance(argv, (list, tuple)) else [argv]:
+                if is_private_provider(item):
+                    path = Path(item); provider_snapshots.append(path)
+                    corrupt_provider(path); provider_mutated[0] = True; break
+        return original_popen(argv, *args, **kwargs)
+    builtins.open, io.open, os.open, subprocess.Popen = (
+        provider_builtin_open, provider_io_open, provider_os_open, provider_popen)
+    try:
+        provider_rehash_result = attempt(provider_rehash_repo)
+    finally:
+        builtins.open, io.open, os.open, subprocess.Popen = (
+            original_builtin_open, original_io_open, original_os_open, original_popen)
+    provider_residue = [str(path) for path in provider_snapshots
+                        if path.exists() or path.parent.exists()]
+    check("K_PROVIDER_LAUNCH_ADJACENT_FINAL_REHASH", family_absent or (
+          provider_mutated[0] and provider_reads[0] >= 2
+          and not provider_rehash_result[0] and provider_rehash_result[2] == 0
+          and not bad_marker.exists()),
+          f"mutated={provider_mutated[0]} reads={provider_reads[0]} result={provider_rehash_result} bad_executed={bad_marker.exists()}")
+    check("K_PROVIDER_POST_SNAPSHOT_FAILURE_CLEANUP",
+          family_absent or (provider_mutated[0] and not provider_residue
+                            and not provider_rehash_result[4]),
+          f"observed={[str(p) for p in provider_snapshots]} residue={provider_residue} attempt_residue={provider_rehash_result[4]}")
 
     # Authority is one byte observation: replacing the document immediately
     # after its read handle is returned must not mix old path with new digest.

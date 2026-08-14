@@ -797,3 +797,13 @@ namespace mutation of either under G20 and requires whole-family cleanup on ever
 routing fixture is upgraded to the same family authority; its route and process-source controls are
 unchanged. The owner pre-builder state is RED only for
 `CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT`; no production implementation is included here.
+
+Independent gate review then found five ways a superficial family implementation could pass. The
+amended controls now mutate provider and host independently at their launch-adjacent reads, with a
+spawn-boundary fallback that exposes implementations which verified only immediately after copying.
+The host's same-opened-object metadata is observed through fstat and raced against stale path
+stat/access plus a nonexecutable symlink target. Every identity-negative attempt records any created
+provider root and requires no partial member/root residue. Finally, the host fixture is executable and
+writes a dedicated marker if directly launched; the legitimate provider run requires that marker to
+remain absent. These are gate-only changes. The one intended product RED and all prior upstream
+regressions remain unchanged.
