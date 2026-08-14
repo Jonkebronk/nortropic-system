@@ -844,3 +844,8 @@ unchanged.
 R9 always wraps fdopen handles and resolves their live fileno identity on every buffered read, allowing
 identity seeding to occur later at protection. A connected pre-protection openat-to-fdopen subject path
 proves corruption precedes its actual final complete verification. Production remains unchanged.
+
+R10 preserves that live identity observation transitively when a pre-protection buffered handle yields
+its readable opened object through detach() or the public raw chain. Separate connected openat-to-fdopen
+detach and raw subject controls require corruption before their complete final verification read and do
+not accept the launch fallback. Ownership remains single-close and production remains unchanged.

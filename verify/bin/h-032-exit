@@ -908,7 +908,9 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     # comparisons therefore execute a capture marker and fail this oracle.
     def connected_corruption(target_name: str, marker: Path, duplicate_ro: bool = False,
                              openat_ro: bool = False, positional_ro: bool = False,
-                             fdopen_preseed: bool = False):
+                             fdopen_preseed: bool = False,
+                             fdopen_detach_preseed: bool = False,
+                             fdopen_raw_preseed: bool = False):
         provider.write_bytes(good_bytes); provider.chmod(0o700)
         code_mode_host.write_bytes(host_good_bytes); code_mode_host.chmod(0o700)
         target_repo = make_repo(str(provider))
@@ -917,6 +919,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
             builtins.open, io.open, os.open, os.read, os.fdopen, os.chmod, os.fchmod, subprocess.Popen)
         read_fds: dict[int, Path] = {}
         preseed_handles: dict[int, object] = {}
+        preseed_owners: list[object] = []
         bad = (f"#!/bin/sh\nprintf 'bad\\n' >'{marker}'\nexit 0\n").encode()
         def candidate(value):
             try: path = Path(value)
@@ -956,6 +959,11 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 path = fd_target(self._handle.fileno()) or self._path
                 if path is not None and protected(path) and not changed[0]: mutate(path)
                 return self._handle.readinto1(buffer)
+            def detach(self):
+                return CorruptRead(self._handle.detach(), None)
+            @property
+            def raw(self):
+                return CorruptRead(self._handle.raw, None)
             def __enter__(self): return self
             def __exit__(self, *args): return self._handle.__exit__(*args)
             def __getattr__(self, name): return getattr(self._handle, name)
@@ -981,8 +989,17 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                 if not (flags & os.O_WRONLY) and not (flags & os.O_RDWR): read_fds[fd] = path
                 if duplicate_ro and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
                     duplicate = os.dup(fd); os.close(fd); fd = duplicate
-                if fdopen_preseed and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
-                    preseed_handles[fd] = CorruptRead(original_fdopen(os.dup(fd), "rb"), None)
+                if (fdopen_preseed or fdopen_detach_preseed or fdopen_raw_preseed) and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR):
+                    wrapped = wrap_fdopen(os.dup(fd), "rb")
+                    if fdopen_detach_preseed:
+                        preseed_handles[fd] = wrapped.detach()
+                        preseed_owners.append(preseed_handles[fd])
+                    elif fdopen_raw_preseed:
+                        preseed_handles[fd] = wrapped.raw
+                        preseed_owners.append(wrapped)
+                    else:
+                        preseed_handles[fd] = wrapped
+                        preseed_owners.append(wrapped)
             return fd
         def wrap_read(fd, size):
             if fd in preseed_handles: return preseed_handles[fd].read(size)
@@ -1032,7 +1049,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
             if original_pread: os.pread = original_pread
             if original_readv: os.readv = original_readv
             if original_preadv: os.preadv = original_preadv
-            for handle in preseed_handles.values():
+            for handle in preseed_owners:
                 try: handle.close()
                 except Exception: pass
         residue = [str(path) for path in targets if path.exists() or path.parent.exists()]
@@ -1045,6 +1062,10 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     connected_openat = connected_corruption("provider", work / "BAD_PROVIDER_OPENAT", openat_ro=True)
     connected_pread = connected_corruption("provider", work / "BAD_PROVIDER_PREAD", positional_ro=True)
     connected_fdopen_preseed = connected_corruption("provider", work / "BAD_PROVIDER_FDOPEN_PRESEED", fdopen_preseed=True)
+    connected_fdopen_detach_preseed = connected_corruption(
+        "provider", work / "BAD_PROVIDER_FDOPEN_DETACH_PRESEED", fdopen_detach_preseed=True)
+    connected_fdopen_raw_preseed = connected_corruption(
+        "provider", work / "BAD_PROVIDER_FDOPEN_RAW_PRESEED", fdopen_raw_preseed=True)
     check("K_R5_PROVIDER_CONNECTED_POST_PROTECTION_CORRUPTION", family_absent or (
           connected_provider[0] and not connected_provider[1][0]
           and connected_provider[1][2] == 0 and not connected_provider[2]
@@ -1070,6 +1091,16 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
           connected_fdopen_preseed[0] and not connected_fdopen_preseed[1][0]
           and not connected_fdopen_preseed[2] and not connected_fdopen_preseed[3]
           and not connected_fdopen_preseed[1][4]), f"connected={connected_fdopen_preseed}")
+    check("K_R10_CONNECTED_PREPROTECT_FDOPEN_DETACH_CORRUPTION", family_absent or (
+          connected_fdopen_detach_preseed[0] and not connected_fdopen_detach_preseed[1][0]
+          and not connected_fdopen_detach_preseed[2] and not connected_fdopen_detach_preseed[3]
+          and not connected_fdopen_detach_preseed[1][4]),
+          f"connected={connected_fdopen_detach_preseed}")
+    check("K_R10_CONNECTED_PREPROTECT_FDOPEN_RAW_CORRUPTION", family_absent or (
+          connected_fdopen_raw_preseed[0] and not connected_fdopen_raw_preseed[1][0]
+          and not connected_fdopen_raw_preseed[2] and not connected_fdopen_raw_preseed[3]
+          and not connected_fdopen_raw_preseed[1][4]),
+          f"connected={connected_fdopen_raw_preseed}")
 
     # Authority is one byte observation: replacing the document immediately
     # after its read handle is returned must not mix old path with new digest.
