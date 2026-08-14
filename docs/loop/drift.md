@@ -723,3 +723,12 @@ suppression, then restores the prior interpreter state. More fundamentally, a re
 previously continued into `exec_module`; an unguarded `fcntl.fcntl/ioctl` could therefore act before the
 eventual FAIL. Source or observer rejection now terminates before upstream or subject execution, while
 fcntl/ioctl also join the audit and mutation guards as an independent backstop.
+
+Eighteenth review retained the exact admitted `sys.path.insert` syntax while changing what its operands
+meant: a reassigned `AUTHORITY_LIB` or shadowed `str` loaded attacker-controlled `core` before the
+post-import path comparison. The authority assignment is now frozen as one exact AST object, and its
+name, `Path`, builtin `str` and `__file__` cannot be rebound by assignments, parameters, functions or
+classes. The same review removed a gap in the early-stop composition: complete required API presence now
+joins task identity, upstream identity, source form and observer separation as a mandatory precondition
+before either upstream execution or subject import. Authority-shadow and missing-API mutants bind both
+transitions.

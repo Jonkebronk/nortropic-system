@@ -314,9 +314,33 @@ def process_shape(text: str) -> dict[str, object]:
     fcntl_effect_counts: dict[str, int] = {}
     sys_stream_counts: dict[str, int] = {}
     sys_state_counts: dict[str, int] = {}
+    authority_assignments = 0
+    expected_authority_assignment = ast.parse(
+        'AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"'
+    ).body[0]
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name in {"str", "Path", "AUTHORITY_LIB", "__file__"}):
+            violations.append((owner, node.lineno, f"protected-binding:{node.name}"))
+        if isinstance(node, ast.arg) and node.arg in {"str", "Path", "AUTHORITY_LIB", "__file__"}:
+            violations.append((owner, node.lineno, f"protected-argument:{node.arg}"))
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "AUTHORITY_LIB"
+                for target in node.targets):
+            if ast.dump(node, include_attributes=False) == ast.dump(
+                    expected_authority_assignment, include_attributes=False):
+                authority_assignments += 1
+            else:
+                violations.append((owner, node.lineno, "authority-lib-assignment"))
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+                and node.id in {"str", "Path", "__file__"}):
+            violations.append((owner, node.lineno, f"protected-binding:{node.id}"))
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+                and node.id == "AUTHORITY_LIB"
+                and not isinstance(parents.get(node), ast.Assign)):
+            violations.append((owner, node.lineno, "authority-lib-rebinding"))
         if isinstance(node, ast.AsyncFunctionDef):
             violations.append((owner, node.lineno, f"deferred-async-function:{node.name}"))
         if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -638,6 +662,8 @@ def process_shape(text: str) -> dict[str, object]:
         violations.append(("<module>", 0, f"sys-stream-inventory:{sys_stream_counts}"))
     if sys_state_counts != EXPECTED_SYS_STATE_COUNTS:
         violations.append(("<module>", 0, f"sys-state-inventory:{sys_state_counts}"))
+    if authority_assignments != 1:
+        violations.append(("<module>", 0, f"authority-lib-count:{authority_assignments}"))
     exact = counts == {"run": 1, "run_codex": 1, "clear": 1}
     return {
         "boundary_ok": exact and not violations,
@@ -710,7 +736,8 @@ def route_ok(argv: list[str], expected: tuple[str, str]) -> bool:
 try:
     spec_document = strict_json(spec_path.read_text(encoding="utf-8"))
     tasks = spec_document.get("tasks", []) if isinstance(spec_document, dict) else []
-    check("F_H031_EXACT_TASK", task_row_valid(tasks), "current task identity")
+    h031_static = task_row_valid(tasks)
+    check("F_H031_EXACT_TASK", h031_static, "current task identity")
     check("J_H031_ABSENT_REJECT", not task_row_valid(
         [row for row in tasks if not isinstance(row, dict) or row.get("id") != "h-031"]), "absence")
     row = next((row for row in tasks if isinstance(row, dict) and row.get("id") == "h-031"), {})
@@ -748,12 +775,13 @@ try:
         raise SystemExit(1)
     shape = process_shape(source_text)
     required_api = {"run", "run_codex", "status", "watch", "roadmap_status", "journal_root"}
-    check("K_REQUIRED_API", required_api <= shape["funcs"],
+    required_api_ok = required_api <= shape["funcs"]
+    check("K_REQUIRED_API", required_api_ok,
           f"present={sorted(required_api & shape['funcs'])}")
     check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"]), str(shape["detail"]))
     check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
-    if not shape["boundary_ok"] or not shape["observer_ok"]:
-        raise ProductFailure("source envelope rejected before subject import")
+    if not h031_static or not h032_static or not required_api_ok or not shape["boundary_ok"] or not shape["observer_ok"]:
+        raise ProductFailure("static contract rejected before upstream or subject import")
 
     shape_mutants = {
         "DIRECT_POPEN": "\nsubprocess.Popen(['/bin/true'])\n",
@@ -839,6 +867,11 @@ try:
             "h031_import_path.write_text('effect', encoding='utf-8')\n"
             "h031_import_path.unlink()\n"
         ),
+        "AUTHORITY_LIB_SHADOW": "\nAUTHORITY_LIB = Path('/private/tmp/h031-shadow')\n",
+        "STR_SHADOW": (
+            "\ndef str(value):\n"
+            "    return '/private/tmp/h031-shadow' if value is AUTHORITY_LIB else value\n"
+        ),
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
@@ -854,6 +887,11 @@ try:
         mutant_shape = process_shape(source_text + suffix)
         check("J_PROCESS_" + label + "_REJECT", not mutant_shape["boundary_ok"],
               str(mutant_shape["detail"]))
+    missing_api_source = source_text.replace("def status(", "def h031_missing_status(", 1)
+    missing_api_shape = process_shape(missing_api_source)
+    check("J_REQUIRED_API_MISSING_REJECT",
+          missing_api_source != source_text and not (required_api <= missing_api_shape["funcs"]),
+          f"present={sorted(required_api & missing_api_shape['funcs'])}")
     popen_anchor = "stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)"
     for label, keyword in (
         ("PREEXEC", "preexec_fn=lambda: None"),
