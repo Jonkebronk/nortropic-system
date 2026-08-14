@@ -617,3 +617,10 @@ read-only `__file__` selftest lookup admitted. Most importantly, invalid-role or
 the effect boundary with a scoped audit hook: file creation/writes/removal/rename/link/chmod and process
 start are recorded even when implementation inlines, renames or cleans its snapshot helper. The existing
 persistent journal, run-directory and provider capture comparisons remain independent corroboration.
+
+Third review found that Python audit events alone are not a native-syscall sandbox: a newly imported
+`ctypes` module could call libc below the observed event set, and reflected or aliased `sys.modules`
+could recover subprocess. H-031 needs no new dependency to add a constant role policy, so the bounded
+Design B envelope now freezes the product's exact existing import inventory. Bare or reflected `sys`
+is rejected; only direct non-registry attributes already used by production remain admissible. This
+composition makes the effect hook meaningful without claiming it observes arbitrary native code.

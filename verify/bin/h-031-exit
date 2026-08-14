@@ -84,6 +84,16 @@ PROCESS_ATTRS = {
     "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
     "pty": {"spawn"},
 }
+EXPECTED_IMPORT_INVENTORY = sorted([
+    "F:0:__future__:annotations:",
+    "I:argparse:", "I:datetime:dt", "I:fcntl:", "I:hashlib:", "I:json:",
+    "I:os:", "I:re:", "I:shutil:", "I:stat:", "I:subprocess:", "I:sys:",
+    "I:tempfile:", "I:time:",
+    "F:0:dataclasses:dataclass:", "F:0:pathlib:Path:",
+    "F:0:typing:Any:", "F:0:typing:Iterable:",
+    "F:0:core:AuthorityError:", "F:0:core:canonical_path:",
+    "F:0:core:permits:", "F:0:core:strict_json_bytes:",
+])
 checks: list[tuple[str, bool, str]] = []
 
 
@@ -175,11 +185,13 @@ def process_shape(text: str) -> dict[str, object]:
     calls: dict[str, set[str]] = {name: set() for name in funcs}
     sites: list[tuple[str, str, int, str]] = []
     violations: list[tuple[str, int, str]] = []
+    import_inventory: list[str] = []
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
         if isinstance(node, ast.Import):
             for alias in node.names:
+                import_inventory.append(f"I:{alias.name}:{alias.asname or ''}")
                 if alias.name == "importlib" or alias.name.startswith("importlib."):
                     violations.append((owner, node.lineno, f"dynamic-import-module:{alias.name}"))
                 if alias.name == "builtins" or alias.name.startswith("builtins."):
@@ -187,6 +199,9 @@ def process_shape(text: str) -> dict[str, object]:
                 if alias.name in PROCESS_ATTRS and alias.asname is not None:
                     violations.append((owner, node.lineno, f"import-alias:{alias.name} as {alias.asname}"))
         elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                import_inventory.append(
+                    f"F:{node.level}:{node.module or ''}:{alias.name}:{alias.asname or ''}")
             if node.module in PROCESS_ATTRS:
                 violations.append((owner, node.lineno, f"from-import:{node.module}"))
             if node.module == "importlib" or (node.module or "").startswith("importlib."):
@@ -214,10 +229,15 @@ def process_shape(text: str) -> dict[str, object]:
         if (isinstance(node, ast.Name) and node.id in {"__import__", "__builtins__"}
                 and isinstance(node.ctx, ast.Load)):
             violations.append((owner, node.lineno, f"dynamic-import-builtin:{node.id}"))
+        if isinstance(node, ast.Name) and node.id == "sys" and isinstance(node.ctx, ast.Load):
+            parent = parents.get(node)
+            direct_attribute = isinstance(parent, ast.Attribute) and parent.value is node
+            if not direct_attribute:
+                violations.append((owner, node.lineno, "bare-sys-module"))
+            elif parent.attr in {"modules", "__dict__", "__getattribute__"}:
+                violations.append((owner, node.lineno, f"dynamic-import-registry:sys.{parent.attr}"))
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             module, attr = node.value.id, node.attr
-            if module == "sys" and attr == "modules":
-                violations.append((owner, node.lineno, "dynamic-import-registry:sys.modules"))
             if module in PROCESS_ATTRS and attr == "__dict__":
                 violations.append((owner, node.lineno, f"process-dictionary:{module}"))
             if module in PROCESS_ATTRS and attr in PROCESS_ATTRS[module]:
@@ -284,12 +304,15 @@ def process_shape(text: str) -> dict[str, object]:
     observer_hits = {name: sorted(reachable(name) & {"run_codex"})
                      for name in ("status", "watch", "roadmap_status")}
     observer_hits = {name: hit for name, hit in observer_hits.items() if hit}
+    inventory_ok = sorted(import_inventory) == EXPECTED_IMPORT_INVENTORY
+    if not inventory_ok:
+        violations.append(("<module>", 0, f"import-inventory:{sorted(import_inventory)}"))
     exact = counts == {"run": 1, "run_codex": 1, "clear": 1}
     return {
         "boundary_ok": exact and not violations,
         "observer_ok": not observer_hits,
         "funcs": funcs,
-        "detail": f"counts={counts} sites={sites} violations={violations}",
+        "detail": f"counts={counts} imports_exact={inventory_ok} sites={sites} violations={violations}",
         "observer_hits": observer_hits,
     }
 
@@ -416,6 +439,10 @@ try:
         "BUILTINS_NAMESPACE": "\n__builtins__['__import__']('subprocess').Popen(['/bin/true'])\n",
         "GLOBALS_NAMESPACE": "\nglobals().get('__builtins__')['__import__']('subprocess').Popen(['/bin/true'])\n",
         "SYS_MODULES": "\nsys.modules['subprocess'].Popen(['/bin/true'])\n",
+        "SYS_GETATTR_MODULES": "\ngetattr(sys, 'modules')['subprocess'].Popen(['/bin/true'])\n",
+        "SYS_DICTIONARY_MODULES": "\nsys.__dict__['modules']['subprocess'].Popen(['/bin/true'])\n",
+        "SYS_ALIAS_MODULES": "\nh031_sys = sys\nh031_sys.modules['subprocess'].Popen(['/bin/true'])\n",
+        "CTYPES_LIBC": "\nimport ctypes\nctypes.CDLL(None).system(b'/usr/bin/true')\n",
         "PROCESS_DICTIONARY": "\nsubprocess.__dict__['Popen'](['/bin/true'])\n",
         "DYNAMIC_CODE": "\neval(\"__import__('subprocess').Popen(['/bin/true'])\")\n",
     }
