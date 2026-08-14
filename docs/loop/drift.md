@@ -513,3 +513,11 @@ The G20 containment probe remains independently candidate/spec/gate/launcher-bou
 not replace H-017's runtime namespace authority. Nested sandbox denial is ODÖMBART; the owner runner is
 required for the actual H-033 and Seatbelt effects. Before builder implementation the only legitimate
 product RED is the absent provider-identity boundary in `scripts/nortropic-codex-autopilot.py`.
+
+Independent review rejected the first fresh gate because its shell bootstrap inherited caller PATH,
+its historical `--g20-evidence` input was self-asserted JSON rather than authenticated effect, and it
+did not execute the production generic non-provider dispatcher. The remediated gate uses canonical
+absolute judge/tool identities and a fixed validated private cleanup root. G20 authorization is now
+live-only: JSON may be emitted after a real candidate-bound probe for durable evidence, but no JSON can
+be supplied back to obtain PASS. Separate production controls execute system Git, GitHub CLI and an
+arbitrary fixed controller-style helper through `run()` and require exact effects with no AGENT_START.
