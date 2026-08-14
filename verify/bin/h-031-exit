@@ -80,7 +80,7 @@ EXPECTED_PREBUILDER_RED = {
 }
 PROCESS_ATTRS = {
     "subprocess": {"Popen", "run", "call", "check_call", "check_output", "getoutput", "getstatusoutput"},
-    "os": {"system", "popen", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
+    "os": {"system", "popen", "fork", "forkpty", "posix_spawn", "posix_spawnp", "execv", "execve", "execvp", "execvpe", "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe"},
     "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
     "pty": {"spawn"},
 }
@@ -466,6 +466,8 @@ try:
         "SYS_DICTIONARY_MODULES": "\nsys.__dict__['modules']['subprocess'].Popen(['/bin/true'])\n",
         "SYS_ALIAS_MODULES": "\nh031_sys = sys\nh031_sys.modules['subprocess'].Popen(['/bin/true'])\n",
         "CTYPES_LIBC": "\nimport ctypes\nctypes.CDLL(None).system(b'/usr/bin/true')\n",
+        "OS_FORK": "\nh031_pid = os.fork()\n",
+        "OS_FORKPTY": "\nh031_pid, h031_fd = os.forkpty()\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
         "JSON_BUILTINS_GETATTR": "\ngetattr(json, '__builtins__')['__import__']('ctypes')\n",
         "GETATTR_ALIAS": "\nh031_getattr = getattr\nh031_getattr(json, '__builtins__')['__import__']('ctypes')\n",
@@ -611,6 +613,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
         mutation_events = {
             "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.replace",
             "os.link", "os.symlink", "os.truncate", "os.chmod",
+            "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp", "os.system",
             "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "subprocess.Popen",
         }
         def audit_hook(event, args):

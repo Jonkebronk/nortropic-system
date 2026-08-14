@@ -637,3 +637,9 @@ the builtin can first be stored under another name. Sensitive builtin names are 
 every load site. `getattr` and `globals` must be the direct callee of their separately checked exact safe
 forms; all references or aliases reject. `vars`, `locals`, dynamic-code and import builtins reject on load.
 Mutants cover assignment aliases that previously recovered ctypes without adding an import node.
+
+Sixth review found two native process constructors omitted from both layers: `os.fork` and
+`os.forkpty`. A forked child inherits the Python audit hook but mutates a copied observation list, so
+the parent cannot rely on the child's recorded events. Both APIs are now prohibited process sites in
+the whole-module source envelope, and their audit events are also forbidden before role validation.
+Direct fork/forkpty mutants prevent the omission from recurring.
