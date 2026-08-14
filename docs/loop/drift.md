@@ -1020,3 +1020,13 @@ sole Popen result. Before canonical rename/replace, the audit hook nofollow-open
 retains the source object, records fstat/digest, and later binds destination identity and
 digest. The mutation control now writes a complete schema-valid equal-length alternate
 value, while the swap control replaces the path behind the retained accepted fd.
+
+R16 propagates provider/authority/fixture taint through every reachable helper and
+inventories module/local bindings for all seam/helper identities. Exact call arguments
+must derive from a nofollow-created sink fd and nonconstant canonical, invocation and
+run bindings plus the run_codex role argument. The closed capability graph admits mmap,
+FileIO, pread/readv/preadv, fdopen, raw/buffer and helper reads without a narrow method
+spelling. There is exactly one assigned Popen object, no reassignment or extra site;
+its reachable timeout wait/communicate precedes every successful return. Rename-source
+capture is bounded to MAX+1, destination dev/inode must equal the retained source, and
+all post-transition canonical open/unlink/rename events reject.
