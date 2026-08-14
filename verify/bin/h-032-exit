@@ -499,6 +499,30 @@ if mode == 'output_then_fail': sys.exit(17)
                 elif isinstance(item,ast.ImportFrom) and item.module=="subprocess":
                     process_imports.extend(alias for alias in item.names if alias.name=="Popen")
             return len(process_imports)>=1
+        def runtime_walk_function(fn):
+            def walk(node,root=False):
+                yield node
+                if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef,ast.Lambda)) and not root:
+                    args=node.args
+                    for value in list(args.defaults)+[x for x in args.kw_defaults if x]:
+                        yield from walk(value)
+                    annotations=[arg.annotation for arg in
+                        list(args.posonlyargs)+list(args.args)+list(args.kwonlyargs)
+                        if arg.annotation]
+                    if args.vararg and args.vararg.annotation: annotations.append(args.vararg.annotation)
+                    if args.kwarg and args.kwarg.annotation: annotations.append(args.kwarg.annotation)
+                    if getattr(node,"returns",None): annotations.append(node.returns)
+                    for value in list(getattr(node,"decorator_list",[]))+annotations:
+                        yield from walk(value)
+                    return
+                if isinstance(node,ast.ClassDef):
+                    for value in list(node.decorator_list)+list(node.bases)+[
+                            kw.value for kw in node.keywords]: yield from walk(value)
+                    for statement in node.body: yield from walk(statement)
+                    return
+                for child in ast.iter_child_nodes(node): yield from walk(child)
+            for statement in fn.body: yield from walk(statement,root=False)
+
         consume_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
                          and node.name == "_consume_private_result"]
         exact_consumer_args = ["sink_fd", "canonical_destination", "invocation_id", "run_id", "role"]
@@ -516,12 +540,12 @@ if mode == 'output_then_fail': sys.exit(17)
         consumer_architecture_ok = False
         if len(consume_nodes) == 1 and len(run_codex_nodes) == 1:
             consumer = consume_nodes[0]
-            loaded_globals = {node.id for node in ast.walk(consumer)
+            loaded_globals = {node.id for node in runtime_walk_function(consumer)
                               if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
             tainted = {name for name in loaded_globals
                        if any(token in name.casefold() for token in
                               ("provider", "host", "authority", "fixture"))}
-            run_calls = [node for node in ast.walk(run_codex_nodes[0]) if isinstance(node, ast.Call)
+            run_calls = [node for node in runtime_walk_function(run_codex_nodes[0]) if isinstance(node, ast.Call)
                          and isinstance(node.func, ast.Name)
                          and node.func.id == "_consume_private_result"]
             function_nodes=[node for node in ast.walk(candidate_tree)
@@ -548,7 +572,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 seen.add(name);node=top_functions.get(name)
                 if node is None: graph_ok=False;continue
                 graph_nodes.append(node)
-                for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)):
+                for call in (item for item in runtime_walk_function(node) if isinstance(item,ast.Call)):
                     if isinstance(call.func,ast.Name):
                         called=call.func.id
                         if called in top_functions: pending.append(called)
@@ -558,14 +582,14 @@ if mode == 'output_then_fail': sys.exit(17)
                         if ((call.func.value.id,call.func.attr) not in pure_attrs
                                 and call.func.attr not in capability_methods): graph_ok=False
                     else: graph_ok=False
-            graph_loaded={item.id for node in graph_nodes for item in ast.walk(node)
+            graph_loaded={item.id for node in graph_nodes for item in runtime_walk_function(node)
                           if isinstance(item,ast.Name) and isinstance(item.ctx,ast.Load)}
             graph_tainted={name for name in graph_loaded if any(token in name.casefold()
                            for token in ("provider","host","authority","fixture"))}
             helper_identities=set(seen)|{"_consume_private_result"}
             rebound=[]
             for node in graph_nodes:
-                for item in ast.walk(node):
+                for item in runtime_walk_function(node):
                     if isinstance(item,(ast.Import,ast.ImportFrom,ast.ClassDef,ast.Global,ast.Nonlocal)):
                         rebound.append(type(item).__name__)
                     if isinstance(item,ast.NamedExpr): rebound.append("NamedExpr")
@@ -711,6 +735,20 @@ if mode == 'output_then_fail': sys.exit(17)
             secrets_rebinds=[item for item in ast.walk(candidate_tree)
                 if isinstance(item,ast.Name) and item.id=="secrets"
                 and isinstance(item.ctx,(ast.Store,ast.Del))]
+            entropy_mutations=[]
+            for item in ast.walk(candidate_tree):
+                if isinstance(item,ast.Attribute) and item.attr=="token_hex" \
+                        and isinstance(item.ctx,(ast.Store,ast.Del)):
+                    entropy_mutations.append("attribute")
+                if isinstance(item,ast.Subscript) and isinstance(item.ctx,(ast.Store,ast.Del)) \
+                        and any(isinstance(part,ast.Constant) and part.value=="token_hex"
+                                for part in ast.walk(item.slice)):
+                    entropy_mutations.append("subscript")
+                if isinstance(item,ast.Call) and isinstance(item.func,ast.Name) \
+                        and item.func.id in {"setattr","delattr"} \
+                        and any(isinstance(arg,ast.Constant) and arg.value=="token_hex"
+                                for arg in item.args):
+                    entropy_mutations.append(item.func.id)
             origin_body_ok={}
             for origin_name in origin_names:
                 origin=top_functions.get(origin_name)
@@ -719,7 +757,8 @@ if mode == 'output_then_fail': sys.exit(17)
                 origin_body_ok[origin_name]=(origin is not None
                     and ast.dump(origin,include_attributes=False)
                         == ast.dump(expected,include_attributes=False)
-                    and len(secrets_imports)==1 and not secrets_rebinds)
+                    and len(secrets_imports)==1 and not secrets_rebinds
+                    and not entropy_mutations)
             capability_calls={"read","readinto","read1","readinto1","readall",
                               "pread","preadv","readv","fdopen","FileIO","mmap",
                               "dup","fileno","raw","buffer","seek","tell"}
@@ -727,6 +766,9 @@ if mode == 'output_then_fail': sys.exit(17)
             process_sites=set()
             def r17_expr(node,env):
                 if node is None: return frozenset()
+                if isinstance(node,ast.Lambda):
+                    values=list(node.args.defaults)+[x for x in node.args.kw_defaults if x]
+                    return r17_join(*(r17_expr(value,env) for value in values))
                 if isinstance(node,ast.Name):
                     if node.id in module_bindings: return module_bindings[node.id]
                     if node.id in pure_names|{"os","io","mmap","json","hashlib","stat",
@@ -836,9 +878,9 @@ if mode == 'output_then_fail': sys.exit(17)
                 if fn.args.kwarg is not None:
                     env[fn.args.kwarg.arg]=seeds.get(fn.args.kwarg.arg,frozenset({UNKNOWN}))
                 returns=[]
-                for _ in range(max(2,len(list(ast.walk(fn))))):
+                for _ in range(max(2,len(list(runtime_walk_function(fn))))):
                     changed=False;returns=[]
-                    for item in ast.walk(fn):
+                    for item in runtime_walk_function(fn):
                         if isinstance(item,(ast.Assign,ast.AnnAssign,ast.NamedExpr)):
                             targets=item.targets if isinstance(item,ast.Assign) else [item.target]
                             value=r17_expr(item.value,env)
@@ -864,6 +906,22 @@ if mode == 'output_then_fail': sys.exit(17)
                         elif isinstance(item,ast.comprehension):
                             r17_expr(item.iter,env)
                             for condition in item.ifs: r17_expr(condition,env)
+                        elif isinstance(item,(ast.FunctionDef,ast.AsyncFunctionDef)):
+                            values=list(item.decorator_list)+list(item.args.defaults)+[
+                                x for x in item.args.kw_defaults if x]
+                            annotations=[arg.annotation for arg in
+                                list(item.args.posonlyargs)+list(item.args.args)+
+                                list(item.args.kwonlyargs) if arg.annotation]
+                            if item.args.vararg and item.args.vararg.annotation:
+                                annotations.append(item.args.vararg.annotation)
+                            if item.args.kwarg and item.args.kwarg.annotation:
+                                annotations.append(item.args.kwarg.annotation)
+                            if item.returns: annotations.append(item.returns)
+                            for value in values+annotations: r17_expr(value,env)
+                        elif isinstance(item,ast.ClassDef):
+                            for value in list(item.decorator_list)+list(item.bases)+[
+                                    keyword.value for keyword in item.keywords]:
+                                r17_expr(value,env)
                     if not changed: break
                 return env,r17_join(*returns)
             for name in identity_helpers: helper_summaries[name]=frozenset({IDENTITY})
@@ -884,7 +942,7 @@ if mode == 'output_then_fail': sys.exit(17)
             while context_queue:
                 name=context_queue.pop();node=top_functions[name]
                 env,_=r17_interpret(node,contexts[name])
-                for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)
+                for call in (item for item in runtime_walk_function(node) if isinstance(item,ast.Call)
                              and isinstance(item.func,ast.Name) and item.func.id in seen):
                     child=call.func.id
                     if child==name: recursive=True;continue
@@ -897,17 +955,17 @@ if mode == 'output_then_fail': sys.exit(17)
             receiver_ok=not recursive
             for name,seeds in contexts.items():
                 node=top_functions[name];env,_=r17_interpret(node,seeds)
-                for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)
+                for call in (item for item in runtime_walk_function(node) if isinstance(item,ast.Call)
                              and isinstance(item.func,ast.Attribute)
                              and item.func.attr in capability_calls):
                     flow=r17_join(r17_expr(item.func.value,env),
                                   *(r17_expr(arg,env) for arg in call.args))
                     if SINK not in flow: receiver_ok=False
-            sensitive_nodes=[item.test for item in ast.walk(consumer)
+            sensitive_nodes=[item.test for item in runtime_walk_function(consumer)
                              if isinstance(item,(ast.If,ast.While,ast.Assert))]
-            sensitive_nodes += [item.value for item in ast.walk(consumer)
+            sensitive_nodes += [item.value for item in runtime_walk_function(consumer)
                                 if isinstance(item,ast.Return)]
-            sensitive_nodes += [arg for item in ast.walk(consumer) if isinstance(item,ast.Call)
+            sensitive_nodes += [arg for item in runtime_walk_function(consumer) if isinstance(item,ast.Call)
                                 for arg in list(item.args)+[kw.value for kw in item.keywords]]
             sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
             identity_escape=any(IDENTITY in value or UNKNOWN in value
@@ -963,7 +1021,7 @@ if mode == 'output_then_fail': sys.exit(17)
                     while context_queue:
                         name=context_queue.pop();node=top_functions[name]
                         child_env,_=r17_interpret(node,contexts[name])
-                        for helper_call in (item for item in ast.walk(node)
+                        for helper_call in (item for item in runtime_walk_function(node)
                             if isinstance(item,ast.Call) and isinstance(item.func,ast.Name)
                             and item.func.id in seen):
                             child=helper_call.func.id
@@ -976,7 +1034,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             if joined!=prior: contexts[child]=joined;context_queue.append(child)
                     for name,seeds in contexts.items():
                         node=top_functions[name];child_env,_=r17_interpret(node,seeds)
-                        for capability_call in (item for item in ast.walk(node)
+                    for capability_call in (item for item in runtime_walk_function(node)
                             if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute)
                             and item.func.attr in capability_calls):
                             flow=r17_join(r17_expr(capability_call.func.value,child_env),
