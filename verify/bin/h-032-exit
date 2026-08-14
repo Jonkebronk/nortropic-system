@@ -493,6 +493,7 @@ if mode == 'output_then_fail': sys.exit(17)
         r44d_trace={"timeout":0,"cfg":0,"helper_provenance":0,"heap":0,"try":0}
         r44d_components={"timeout":False,"cfg":False,"helper_provenance":False,
                          "heap":False,"try":False}
+        r44e_facts={"heap":{},"try":{},"helper_provenance":{}}
         r44c_unsupported=("TryStar",) if isinstance(AST_TRY_STAR,type) and any(
             isinstance(node,AST_TRY_STAR) for node in ast.walk(candidate_tree)) else ()
         def r20_complete_tree_analysis(tree):
@@ -607,10 +608,16 @@ if mode == 'output_then_fail': sys.exit(17)
                 base=r34_value(node.value,env,active);known,key=r29_literal(node.slice)
                 if isinstance(base,dict) and known: return base.get(key,unknown)
                 return base if isinstance(base,tuple) else unknown
+            if isinstance(node,ast.Attribute):
+                base=r34_value(node.value,env,active)
+                if isinstance(base,dict) and "__objref__" in base:
+                    return env.get("__heap__",{}).get(base["__objref__"],{}).get(
+                        node.attr,unknown)
+                return unknown
             if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
                     and isinstance(node.func.value,ast.Name)
                     and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
-                r44d_trace["heap"]+=1;r44d_components["heap"]=True
+                r44d_trace["heap"]+=1
                 return {"__objref__":f"namespace:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}",
                         "__initial_attrs__":{kw.arg:r34_value(kw.value,env,active)
                                              for kw in node.keywords if kw.arg}}
@@ -900,7 +907,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             next_normals.extend(branch_normals);exceptions.extend(branch_exceptions)
                         exceptions.extend((exc,dict(env)) for exc in r31_expr_flow(statement.test)[1])
                     elif isinstance(statement,AST_TRY_TYPES):
-                        r44d_trace["try"]+=1;r44d_components["try"]=True
+                        r44d_trace["try"]+=1
                         body_normals,body_exceptions=r35_block_states(statement.body,[dict(env)])
                         try_normals=[];try_exceptions=[]
                         for body_env in body_normals:
@@ -972,7 +979,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             for statement in case.body: yield from walk(statement)
                     return
                 if isinstance(node,AST_TRY_TYPES):
-                    r44d_trace["try"]+=1;r44d_components["try"]=True
+                    r44d_trace["try"]+=1
                     for statement in node.body: yield from walk(statement)
                     point_env=r34_initial_env()
                     for prior in fn.body:
@@ -1355,7 +1362,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 if isinstance(node,ast.Call):
                     if (isinstance(node.func,ast.Attribute) and node.func.attr=="SimpleNamespace"
                             and isinstance(node.func.value,ast.Name) and node.func.value.id=="types"):
-                        r44d_trace["heap"]+=1;r44d_components["heap"]=True
+                        r44d_trace["heap"]+=1
                     transferred=r17_join(*(r17_expr(item,env) for item in
                         list(node.args)+[kw.value for kw in node.keywords]))
                     if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
@@ -1586,7 +1593,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 for call in (item for item in runtime_walk_function(node) if isinstance(item,ast.Call)
                              and isinstance(item.func,ast.Attribute)
                              and item.func.attr in capability_calls):
-                    flow=r17_join(r17_expr(item.func.value,env),
+                    flow=r17_join(r17_expr(call.func.value,env),
                                   *(r17_expr(arg,env) for arg in call.args))
                     if SINK not in flow: receiver_ok=False
             sensitive_nodes=[item.test for item in runtime_walk_function(consumer)
@@ -1613,6 +1620,7 @@ if mode == 'output_then_fail': sys.exit(17)
                        if isinstance(part,ast.Attribute) and isinstance(part.value,ast.Name)} if flags else set()
                 return {("os","O_RDONLY"),("os","O_NOFOLLOW")} <= attrs
             semantic_call_ok=False
+            seam_return=frozenset({UNKNOWN})
             if len(run_calls)==1:
                 call=run_calls[0];env={arg.arg:(frozenset({ROLE}) if arg.arg=="role"
                                                else frozenset({CANONICAL}) if arg.arg=="repo"
@@ -1643,7 +1651,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 # clean re-seeding may launder helper/container aliases.
                 if semantic_call_ok:
                     seam_seeds=dict(zip(exact_consumer_args,actual))
-                    seam_env,_=r17_interpret(consumer,seam_seeds)
+                    seam_env,seam_return=r17_interpret(consumer,seam_seeds)
                     sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
                     identity_escape=any(IDENTITY in value or UNKNOWN in value
                                         for value in sensitive_flow)
@@ -1672,6 +1680,77 @@ if mode == 'output_then_fail': sys.exit(17)
                                 *(r17_expr(arg,child_env) for arg in capability_call.args))
                             if SINK not in flow: receiver_ok=False
                     receiver_ok=receiver_ok and not recursive
+            helper_nodes=[node for node in candidate_tree.body
+                if isinstance(node,ast.FunctionDef) and node.name=="_r44e_identity"]
+            helper_calls=[call for call in runtime_walk_function(consumer)
+                if isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
+                and call.func.id=="_r44e_identity"]
+            helper_return_bound=(len(helper_nodes)==1 and len(helper_calls)==1
+                and len(helper_nodes[0].args.args)==1
+                and len(helper_nodes[0].body)==1
+                and isinstance(helper_nodes[0].body[0],ast.Return)
+                and isinstance(helper_nodes[0].body[0].value,ast.Name)
+                and helper_nodes[0].body[0].value.id==helper_nodes[0].args.args[0].arg
+                and len(helper_calls[0].args)==1
+                and r17_expr(helper_calls[0].args[0],seam_env)==frozenset({ROLE}))
+            helper_path_ok=(semantic_call_ok and seam_return==frozenset({ROLE})
+                            and helper_return_bound)
+            r44e_facts["helper_provenance"]={
+                "actual_formal_bound":semantic_call_ok,
+                "return_tags":tuple(sorted(seam_return)),
+                "formal_return_bound":helper_return_bound,
+                "effect_resolved":helper_path_ok}
+            r44d_components["helper_provenance"]=(
+                r44d_components["helper_provenance"] and helper_path_ok)
+
+            # Postcondition credit is derived from terminal abstract state. Merely
+            # visiting a constructor, Try or helper branch cannot make it true.
+            post_body=[]
+            for statement in consumer.body:
+                if isinstance(statement,ast.Return): break
+                post_body.append(statement)
+            post_seed=r34_initial_env()
+            post_seed.update({name:(frozenset({name.upper()}),)
+                for name in exact_consumer_args})
+            post_normals,post_exceptions=r35_block_states(post_body,[post_seed])
+            heap_body=[]
+            for statement in post_body:
+                if isinstance(statement,ast.Try): break
+                heap_body.append(statement)
+            heap_normals,_=r35_block_states(heap_body,[post_seed])
+            heap_relations=[];terminal_flows=[]
+            for post_env in heap_normals:
+                marker=post_env.get("marker");alias=post_env.get("alias")
+                observed=post_env.get("observed");heap=post_env.get("__heap__",{})
+                marker_id=marker.get("__objref__") if isinstance(marker,dict) else None
+                alias_id=alias.get("__objref__") if isinstance(alias,dict) else None
+                attrs=heap.get(marker_id,{}) if marker_id else {}
+                heap_relations.append(marker_id is not None and marker_id==alias_id
+                    and "checked" in attrs and observed==attrs.get("checked"))
+            for post_env in post_normals:
+                terminal_flows.append("handled" in post_env and "finalized" in post_env
+                    and "bypassed" not in post_env)
+            heap_ok=any(heap_relations)
+            try_nodes=[node for node in consumer.body if isinstance(node,ast.Try)]
+            explicit_routes=[]
+            for try_node in try_nodes:
+                raised={call.func.id for call in ast.walk(try_node)
+                    if isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
+                    and any(isinstance(parent,ast.Raise) and parent.exc is call
+                            for parent in ast.walk(try_node))}
+                caught={handler.type.id for handler in try_node.handlers
+                    if isinstance(handler.type,ast.Name)}
+                explicit_routes.append(bool(raised & caught))
+            try_ok=(bool(terminal_flows) and all(terminal_flows)
+                    and explicit_routes==[True])
+            r44e_facts["heap"]={"normal_states":len(heap_normals),
+                "alias_write_read_relations":tuple(heap_relations),"verified":heap_ok}
+            r44e_facts["try"]={"normal_states":len(post_normals),
+                "exception_states":len(post_exceptions),
+                "explicit_raise_to_handler":tuple(explicit_routes),
+                "handler_else_finally_terminal":tuple(terminal_flows),"verified":try_ok}
+            r44d_components["heap"]=heap_ok
+            r44d_components["try"]=try_ok
 
             id_origin_nodes={name:[node for node in candidate_tree.body
                 if isinstance(node,ast.FunctionDef) and node.name==name]
@@ -1757,7 +1836,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 "non_receiver_verdict": non_receiver_verdict if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "tree_shape": r20_complete_tree_analysis,
                 "unsupported":r44c_unsupported,"components":r44d_components,
-                "trace":r44d_trace}
+                "trace":r44d_trace,"facts":r44e_facts}
     r44c_source='''import os
 import subprocess
 import secrets
@@ -1769,13 +1848,23 @@ def _new_invocation_id():
     return secrets.token_hex(16)
 def journal_root(repo):
     return repo
+def _r44e_identity(value):
+    return value
 def _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
+    raw = os.read(sink_fd, 1)
+    marker = types.SimpleNamespace(value=raw)
+    alias = marker
+    alias.checked = raw
+    observed = marker.checked
     try:
-        raw = os.read(sink_fd, 1)
-        marker = types.SimpleNamespace(value=raw)
-    except Exception:
-        raise
-    return role
+        raise RuntimeError()
+    except RuntimeError:
+        handled = role
+    else:
+        bypassed = role
+    finally:
+        finalized = role
+    return _r44e_identity(role)
 def run_codex(repo, role):
     run_id = _new_run_id()
     invocation_id = _new_invocation_id()
@@ -1788,7 +1877,7 @@ def run_codex(repo, role):
     r44c_tree=ast.parse(r44c_source);r44c_base=analyze_candidate_tree(r44c_tree)
     required_r44c_markers={"timeout","cfg","helper_provenance","heap","try"}
     r44c_deep_ok=(set(r44c_base)=={"verdict","exact_consumer_args","receiver_ok",
-        "non_receiver_verdict","tree_shape","unsupported","components","trace"}
+        "non_receiver_verdict","tree_shape","unsupported","components","trace","facts"}
         and required_r44c_markers=={key for key,value in r44c_base["components"].items() if value}
         and all(r44c_base["trace"][key]>0 for key in required_r44c_markers))
     r44c_timeout=copy.deepcopy(r44c_tree)
@@ -1808,11 +1897,42 @@ def run_codex(repo, role):
         and all(keyword_result["components"][key]==r44c_base["components"][key]
                 for key in required_r44c_markers-{"cfg"})
         and keyword_result["trace"]==r44c_base["trace"])
+    def r44e_mutate(transform):
+        tree=copy.deepcopy(r44c_tree);transform(tree);ast.fix_missing_locations(tree)
+        return analyze_candidate_tree(tree)
+    def r44e_consumer(tree):
+        return next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                    and node.name=="_consume_private_result")
+    def r44e_remove_checked_store(tree):
+        consumer=r44e_consumer(tree)
+        target=next(node for node in ast.walk(consumer) if isinstance(node,ast.Assign)
+            and any(isinstance(item,ast.Attribute) and item.attr=="checked" for item in node.targets))
+        target.targets=[ast.Name(id="discarded",ctx=ast.Store())]
+    def r44e_bypass_raise(tree):
+        consumer=r44e_consumer(tree)
+        try_node=next(node for node in consumer.body if isinstance(node,ast.Try))
+        try_node.handlers[0].type=ast.Name(id="ValueError",ctx=ast.Load())
+    def r44e_break_helper_return(tree):
+        helper=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                    and node.name=="_r44e_identity")
+        helper.body=[ast.Return(value=ast.Constant(value=None))]
+    heap_result=r44e_mutate(r44e_remove_checked_store)
+    try_result=r44e_mutate(r44e_bypass_raise)
+    helper_result=r44e_mutate(r44e_break_helper_return)
+    r44e_results={"heap":heap_result,"try":try_result,
+                  "helper_provenance":helper_result}
+    r44e_postconditions_ok=all(
+        result["components"][target] is False
+        and all(result["components"][key]==r44c_base["components"][key]
+                for key in required_r44c_markers-{target})
+        and result["trace"]==r44c_base["trace"]
+        for target,result in r44e_results.items())
     r44c_trystar_ok=True
     if isinstance(AST_TRY_STAR,type):
         r44c_star=analyze_candidate_tree(ast.parse("try:\n    pass\nexcept* Exception:\n    pass\n"))
         r44c_trystar_ok=(r44c_star["verdict"] is False and r44c_star["unsupported"]==("TryStar",))
-    r44b_totality_ok=r44c_deep_ok and r44c_mutants_ok and r44c_trystar_ok
+    r44b_totality_ok=(r44c_deep_ok and r44c_mutants_ok and r44c_trystar_ok
+                      and r44e_postconditions_ok)
     candidate_analysis = analyze_candidate_tree(candidate_tree)
     consumer_architecture_ok = candidate_analysis["verdict"]
     exact_consumer_args = candidate_analysis["exact_consumer_args"]
@@ -3328,7 +3448,11 @@ def run_codex(repo, role):
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_R44C_ANALYZER_DEEP_TOTALITY_COMPAT", r44b_totality_ok,
-          "invocation-local traces reached timeout/CFG/helper-provenance/heap/try; timeout and keyword mutants flipped only their target component; TryStar explicit unsupported")
+          f"base_components={r44c_base['components']} base_trace={r44c_base['trace']} "
+          f"base_facts={r44c_base['facts']} mutant_components="
+          f"{ {key:value['components'] for key,value in r44e_results.items()} } "
+          f"deep={r44c_deep_ok} basic_mutants={r44c_mutants_ok} "
+          f"postconditions={r44e_postconditions_ok} trystar={r44c_trystar_ok}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")

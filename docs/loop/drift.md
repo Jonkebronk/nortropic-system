@@ -1253,3 +1253,6 @@ named component verdicts and counters, incremented only inside the timeout, CFG,
 helper/provenance, heap and ordinary-Try branches. The shaped baseline requires every
 component true and trace nonzero; causal mutants flip only their target component while
 unrelated components and traces stay identical. SELFTEST remains separate from product credit.
+### 2026-08-15 — H032 R44E postcondition-bound analyzer components
+
+The owner-frozen unconditional SELFTEST no longer treats heap allocation, ordinary `Try`, or helper entry as credit. Its single analyzer returns invocation-local structured facts for completed heap alias/write/read relations, explicit exception-to-handler plus else/finally terminal routing, and actual→formal→return/call-effect provenance. Three entry-preserving mutants must each flip only its named component while all unrelated components and trace counts remain stable. This is rig sensitivity only; the unchanged product remains RED solely for the missing structured-result boundary, and no live provider call occurs while RED.
