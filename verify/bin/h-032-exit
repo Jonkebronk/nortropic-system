@@ -365,6 +365,9 @@ if mode in {'exact_max','over_max'}:
     target=4*1024*1024+(1 if mode == 'over_max' else 0)
     payload['summary']='x'*(target-len(base))
 encoded=json.dumps(payload,separators=(',',':'))
+if mode == 'fork_descendant':
+    marker=out.parent/'late-descendant-residue'
+    subprocess.Popen([sys.executable,'-c','import pathlib,sys,time; time.sleep(.5); p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_text("late")',str(marker)])
 if mode == 'timeout':
     import time; time.sleep(3)
 if mode == 'interruption':
@@ -381,6 +384,12 @@ elif mode == 'partial_then_complete':
         midpoint=len(encoded)//2; stream.write(encoded[:midpoint].encode()); stream.flush(); os.fsync(stream.fileno())
         import time; time.sleep(0.5)
         stream.write(encoded[midpoint:].encode()); stream.flush(); os.fsync(stream.fileno())
+elif mode == 'two_values':
+    out.write_text(encoded)
+    import time; time.sleep(0.3)
+    payload['summary']='second accepted value'
+    out.write_text(json.dumps(payload,separators=(',',':')))
+    time.sleep(0.3)
 elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
@@ -667,7 +676,8 @@ if mode == 'output_then_fail': sys.exit(17)
     time.sleep(1.0)
     interruption_after = quiescence_inventory(interruption_root)
     interruption_quiescent = (
-        not interruption_after[0]
+        not interruption_root.exists()
+        and not interruption_after[0]
         and interruption_before[1] == interruption_after[1]
         and not interruption_after[2]
         and not interruption_after[3])
@@ -719,6 +729,13 @@ if mode == 'output_then_fail': sys.exit(17)
     module.subprocess.Popen = tracked_popen
     try:
         tracked_interruption = result_case("interruption")
+        def tracked_timeout_popen(argv, *args, **kwargs):
+            changed = ["1" if value == "86400" else value for value in list(argv)]
+            return tracked_popen(changed, *args, **kwargs)
+        module.subprocess.Popen = tracked_timeout_popen
+        tracked_timeout = result_case("timeout")
+        module.subprocess.Popen = tracked_popen
+        tracked_fork = result_case("fork_descendant")
     finally:
         module.subprocess.Popen = original_tracked_popen
         monitor_stop.set()
@@ -730,7 +747,16 @@ if mode == 'output_then_fail': sys.exit(17)
     for identity in tracked_identities:
         pid, _ppid, started = identity
         if pid in rows_after and rows_after[pid][1] == started: remaining_identities.append(identity)
-    tracked_quiescent = (not tracked_interruption[0][0] and bool(tracked_identities)
+    tracked_timeout_paths = tracked_timeout[1].get("_gate_output_paths", [])
+    tracked_timeout_root = (Path(tracked_timeout_paths[-1]).parent
+                            if tracked_timeout_paths else work)
+    tracked_fork_paths = tracked_fork[1].get("_gate_output_paths", [])
+    tracked_fork_root = Path(tracked_fork_paths[-1]).parent if tracked_fork_paths else work
+    tracked_quiescent = (not tracked_interruption[0][0] and not tracked_timeout[0][0]
+                         and not tracked_fork[0][0]
+                         and bool(tracked_identities)
+                         and not tracked_timeout_root.exists()
+                         and not tracked_fork_root.exists()
                          and not remaining_identities)
 
     def object_attack(kind: str):
@@ -1003,58 +1029,56 @@ if mode == 'output_then_fail': sys.exit(17)
     read_attacks_ok = all(not outcome[0] and fired == 1
                           for outcome, fired in read_attacks.values())
 
-    def logical_consume_case(duplicate_parse: bool):
-        logical_repo = make_repo(str(provider)); parses = [0]; promotions = [0]
-        transport: list[Path] = []; canonical: list[Path] = []
-        original_popen = module.subprocess.Popen
-        original_loads = module.json.loads
-        original_replace = module.os.replace
-        original_rename = module.os.rename
-        def observe(argv, *args, **kwargs):
-            flat = list(argv)
+    def value_promotion_effect_case(mode: str, inject_second_promotion: bool):
+        effect_repo = make_repo(str(provider)); accepted = set(); promoted = set()
+        injected = [False]; stop = threading.Event(); observers = []
+        original = module.subprocess.Popen
+        def observe_path(path: Path, bucket: set, allow_inject: bool):
+            while not stop.is_set():
+                try:
+                    st = path.stat()
+                    raw = bounded_stable_result(path)
+                    doc = strict_json(raw.decode("utf-8", errors="strict"))
+                    if complete_schema_valid(doc, schema_document):
+                        bucket.add((st.st_dev, st.st_ino, hashlib.sha256(raw).hexdigest()))
+                        if allow_inject and inject_second_promotion and not injected[0]:
+                            injected[0] = True
+                            old = path.with_name(path.name + ".first-promotion")
+                            path.rename(old)
+                            path.write_bytes(raw)
+                except Exception:
+                    pass
+                time.sleep(0.002)
+        def popen(argv, *args, **kwargs):
+            flat = list(argv); process = original(argv, *args, **kwargs)
             if "-o" in flat:
-                transport.append(Path(flat[flat.index("-o") + 1]))
+                output = Path(flat[flat.index("-o") + 1])
                 envelopes = [Path(value) for value in flat if isinstance(value, str)
                              and Path(value).name == "provider-envelope.json"]
-                if envelopes: canonical.append(envelopes[-1].parent / "result.json")
-            return original_popen(argv, *args, **kwargs)
-        def loads(value, *args, **kwargs):
-            document = original_loads(value, *args, **kwargs)
-            if isinstance(document, dict) and complete_schema_valid(document, schema_document):
-                parses[0] += 1
-                if duplicate_parse:
-                    original_loads(value, *args, **kwargs); parses[0] += 1
-            return document
-        def promoted(original, src, dst, *args, **kwargs):
-            if canonical and Path(dst).absolute() == canonical[-1].absolute(): promotions[0] += 1
-            return original(src, dst, *args, **kwargs)
-        module.subprocess.Popen = observe; module.json.loads = loads
-        module.os.replace = lambda src, dst, *a, **kw: promoted(original_replace, src, dst, *a, **kw)
-        module.os.rename = lambda src, dst, *a, **kw: promoted(original_rename, src, dst, *a, **kw)
+                canonical = envelopes[-1].parent / "result.json" if envelopes else output
+                for path, bucket, allow in ((output, accepted, False),
+                                            (canonical, promoted, True)):
+                    thread = threading.Thread(target=observe_path,
+                                              args=(path, bucket, allow), daemon=True)
+                    observers.append(thread); thread.start()
+            return process
+        module.subprocess.Popen = popen; os.environ["H032_RESULT_MODE"] = mode
         try:
-            outcome = attempt(logical_repo)
+            outcome = attempt(effect_repo)
+            time.sleep(0.1)
         finally:
-            module.subprocess.Popen = original_popen; module.json.loads = original_loads
-            module.os.replace = original_replace; module.os.rename = original_rename
-        return outcome, parses[0], promotions[0], len(transport), len(canonical)
-    logical_once = logical_consume_case(False)
-    logical_double = logical_consume_case(True)
-    logical_once_ok = (logical_once[0][0] and logical_once[1:] == (1, 1, 1, 1))
-    logical_double_caught = (logical_double[1] == 2 and logical_double[3:] == (1, 1)
-                             and logical_double[1:3] != (1, 1))
-    subject_text = source.read_text(encoding="utf-8")
-    capability_inventory = {
-        "mmap": subject_text.count("mmap"),
-        "io.FileIO": subject_text.count("io.FileIO"),
-        "os.dup": subject_text.count("os.dup"),
-        ".raw": subject_text.count(".raw"),
-        ".buffer": subject_text.count(".buffer"),
-        ".detach(": subject_text.count(".detach("),
-        "memoryview(": subject_text.count("memoryview("),
-    }
-    capability_inventory_ok = capability_inventory == {
-        "mmap": 0, "io.FileIO": 0, "os.dup": 0, ".raw": 0,
-        ".buffer": 0, ".detach(": 0, "memoryview(": 2}
+            module.subprocess.Popen = original; os.environ.pop("H032_RESULT_MODE", None)
+            stop.set()
+            for thread in observers: thread.join(timeout=1)
+        return outcome, len(accepted), len(promoted), injected[0]
+    effect_once = value_promotion_effect_case("valid", False)
+    effect_two_values = value_promotion_effect_case("two_values", False)
+    effect_two_promotions = value_promotion_effect_case("valid", True)
+    effect_once_ok = effect_once[0][0] and effect_once[1:3] == (1, 1)
+    effect_two_values_caught = effect_two_values[1] >= 2 and effect_two_values[1] != 1
+    effect_two_promotions_caught = (effect_two_promotions[3]
+                                    and effect_two_promotions[2] >= 2
+                                    and effect_two_promotions[2] != 1)
 
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
@@ -1109,7 +1133,7 @@ if mode == 'output_then_fail': sys.exit(17)
         valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok
-        and logical_once_ok and logical_double_caught and capability_inventory_ok
+        and effect_once_ok and effect_two_values_caught and effect_two_promotions_caught
         and oversized_positive[0][0] and exactly_once_ok
         and atomic_ok and timeout_ok and object_attacks_ok
         and cleanup_error_ok and interruption_quiescent and tracked_quiescent
@@ -1126,7 +1150,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} transport_reads={transport_consume_reads} canonical_observer_reads={canonical_observer_reads} exactly_once={exactly_once_ok} logical_once={logical_once, logical_once_ok} logical_double={logical_double, logical_double_caught} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} transport_reads={transport_consume_reads} canonical_observer_reads={canonical_observer_reads} exactly_once={exactly_once_ok} effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
