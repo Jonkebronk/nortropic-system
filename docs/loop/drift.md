@@ -1194,3 +1194,9 @@ states continue outward. Orelse consumes normal-exit states and finally transfor
 normal and exceptional path. Same-type branch joins prove a definite catch while divergent
 branches retain both catch and escape alternatives; inside-try reassignment plus dict/helper
 controls prevent stale pre-try bindings from receiving credit.
+
+R36 extends path-state execution through assignment targets in Python order: RHS first,
+then each nested attribute base, subscript value/index, starred or sequence target. Known
+and unknown target failures retain the environment at that point and reach handlers;
+safe targets remain normal. Helper summaries now preserve structured dict keys and
+container alternatives rather than accidentally iterating a dict into bare key strings.
