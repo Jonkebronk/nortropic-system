@@ -1200,3 +1200,8 @@ then each nested attribute base, subscript value/index, starred or sequence targ
 and unknown target failures retain the environment at that point and reach handlers;
 safe targets remain normal. Helper summaries now preserve structured dict keys and
 container alternatives rather than accidentally iterating a dict into bare key strings.
+
+R37 models Python target ordering rather than treating assignment as a simultaneous
+environment update. One RHS feeds chained targets left-to-right, nested destructuring
+stores sequentially, and an exception captures all earlier successful stores. AugAssign
+resolves and loads its target before RHS, then performs the operation and final store.
