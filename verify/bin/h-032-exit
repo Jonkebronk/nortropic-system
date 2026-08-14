@@ -499,6 +499,47 @@ if mode == 'output_then_fail': sys.exit(17)
                 elif isinstance(item,ast.ImportFrom) and item.module=="subprocess":
                     process_imports.extend(alias for alias in item.names if alias.name=="Popen")
             return len(process_imports)>=1
+        def r29_literal(node):
+            try: return True,ast.literal_eval(node)
+            except Exception: return False,None
+        def r29_pattern_match(pattern,known,value):
+            if isinstance(pattern,ast.MatchAs):
+                return r29_pattern_match(pattern.pattern,known,value) if pattern.pattern else True
+            if isinstance(pattern,ast.MatchSingleton): return known and value is pattern.value
+            if isinstance(pattern,ast.MatchValue):
+                pknown,pvalue=r29_literal(pattern.value)
+                return (value==pvalue) if known and pknown else None
+            if isinstance(pattern,ast.MatchOr):
+                outcomes=[r29_pattern_match(part,known,value) for part in pattern.patterns]
+                if True in outcomes: return True
+                return None if None in outcomes else False
+            if isinstance(pattern,ast.MatchSequence):
+                if not known or not isinstance(value,(list,tuple)): return None
+                if len(value)!=len(pattern.patterns): return False
+                outcomes=[r29_pattern_match(part,True,item)
+                          for part,item in zip(pattern.patterns,value)]
+                return False if False in outcomes else None if None in outcomes else True
+            if isinstance(pattern,ast.MatchClass): return None
+            if isinstance(pattern,ast.MatchMapping):
+                return None if not known or isinstance(value,dict) else False
+            if isinstance(pattern,ast.MatchStar): return True
+            return None
+        def r29_cases(node):
+            known,value=r29_literal(node.subject);reachable=[]
+            for case in node.cases:
+                outcome=r29_pattern_match(case.pattern,known,value)
+                # Pattern expressions are evaluated when the case is reached even
+                # when the match ultimately fails; guards/bodies require a possible match.
+                reachable.append((case,outcome is not False))
+                if outcome is True and case.guard is None: break
+            return reachable
+        def r29_block_raise_state(statements):
+            if any(isinstance(item,ast.Raise) for statement in statements for item in ast.walk(statement)):
+                return "yes"
+            effectful=(ast.Call,ast.Await,ast.Yield,ast.YieldFrom)
+            if any(isinstance(item,effectful) for statement in statements for item in ast.walk(statement)):
+                return "unknown"
+            return "no"
         def runtime_walk_function(fn):
             def walk(node,root=False):
                 yield node
@@ -519,6 +560,24 @@ if mode == 'output_then_fail': sys.exit(17)
                     for value in list(node.decorator_list)+list(node.bases)+[
                             kw.value for kw in node.keywords]: yield from walk(value)
                     for statement in node.body: yield from walk(statement)
+                    return
+                if isinstance(node,ast.Match):
+                    yield from walk(node.subject)
+                    for case,may_match in r29_cases(node):
+                        yield from walk(case.pattern)
+                        if may_match and case.guard is not None: yield from walk(case.guard)
+                        guard_known,guard_value=r29_literal(case.guard) if case.guard else (True,True)
+                        if may_match and not (guard_known and guard_value is False):
+                            for statement in case.body: yield from walk(statement)
+                    return
+                if isinstance(node,(ast.Try,ast.TryStar)):
+                    for statement in node.body: yield from walk(statement)
+                    state=r29_block_raise_state(node.body)
+                    if state!="yes":
+                        for statement in node.orelse: yield from walk(statement)
+                    if state!="no":
+                        for handler in node.handlers: yield from walk(handler)
+                    for statement in node.finalbody: yield from walk(statement)
                     return
                 for child in ast.iter_child_nodes(node): yield from walk(child)
             for statement in fn.body: yield from walk(statement,root=False)
@@ -1026,10 +1085,12 @@ if mode == 'output_then_fail': sys.exit(17)
                             r17_expr(item.exc,env);r17_expr(item.cause,env)
                         elif isinstance(item,ast.Match):
                             flow=r17_expr(item.subject,env)
-                            for case in item.cases:
-                                flow=r17_join(flow,pattern_effect(case.pattern,env),
-                                              r17_expr(case.guard,env))
-                            if flow & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,PROCESS_OBJECT}:
+                            for case,may_match in r29_cases(item):
+                                flow=r17_join(flow,pattern_effect(case.pattern,env))
+                                if may_match: flow=r17_join(flow,r17_expr(case.guard,env))
+                            # Merely resolving a class/value pattern constructor is
+                            # not process creation; only an executed Call yields an object.
+                            if PROCESS_OBJECT in flow:
                                 process_binding_unresolved.append("Match")
                         elif isinstance(item,ast.ExceptHandler):
                             flow=r17_expr(item.type,env)
@@ -1330,16 +1391,24 @@ if mode == 'output_then_fail': sys.exit(17)
             ast.fix_missing_locations(tree);return analyze_candidate_tree(tree)["verdict"]
         match_process_rejects=all(not r28_control(source,True) for source in (
             "match _r28_spawn(subprocess.Popen):\n    case _:\n        pass\n",
-            "match 1:\n    case _ if _r28_spawn(subprocess.Popen):\n        pass\n",
-            "match 1:\n    case subprocess.Popen():\n        pass\n",
-            "try:\n    pass\nexcept _r28_spawn(subprocess.Popen):\n    pass\n"))
+            "match 1:\n    case 1 if _r28_spawn(subprocess.Popen):\n        pass\n",
+            "try:\n    raise RuntimeError('x')\nexcept _r28_spawn(subprocess.Popen):\n    pass\n"))
         match_legitimate_positive=all(r28_control(source,False) for source in (
             "match 1:\n    case 1:\n        pass\n    case _:\n        pass\n",
             "try:\n    pass\nexcept Exception:\n    pass\n"))
+        reference_legitimate_positive=r28_control(
+            "match 1:\n    case subprocess.Popen():\n        pass\n",False)
+        nonmatching_guard_positive=r28_control(
+            "match 1:\n    case 2 if _r28_spawn(subprocess.Popen):\n        pass\n",True)
+        no_raise_handler_positive=r28_control(
+            "try:\n    pass\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
         r25_static_mutants_ok=(entropy_rejects and receiver_rejects
                                and receiver_positive and augassign_rejects
                                and target_effects_reject and match_process_rejects
-                               and match_legitimate_positive)
+                               and match_legitimate_positive
+                               and reference_legitimate_positive
+                               and nonmatching_guard_positive
+                               and no_raise_handler_positive)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
