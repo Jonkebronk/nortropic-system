@@ -545,22 +545,38 @@ if mode == 'output_then_fail': sys.exit(17)
                 reachable.append((case,outcome is not False))
                 if outcome is True and case.guard is None: break
             return reachable
-        def r30_expr_may_raise(node):
-            if node is None: return False
+        def r31_expr_flow(node):
+            if node is None: return True,False
             if isinstance(node,ast.Lambda):
-                return any(r30_expr_may_raise(value) for value in
-                    list(node.args.defaults)+[x for x in node.args.kw_defaults if x])
-            if isinstance(node,(ast.Call,ast.Await,ast.Yield,ast.YieldFrom)): return True
-            return any(r30_expr_may_raise(child) for child in ast.iter_child_nodes(node))
+                flows=[r31_expr_flow(value) for value in
+                    list(node.args.defaults)+[x for x in node.args.kw_defaults if x]]
+                return (all(flow[0] for flow in flows),any(flow[1] for flow in flows))
+            literal_nodes=(ast.Expression,ast.Constant,ast.List,ast.Tuple,ast.Set,ast.Dict,
+                           ast.UnaryOp,ast.BinOp,ast.BoolOp,ast.Compare,ast.Subscript,ast.Slice,
+                           ast.Load,ast.operator,ast.unaryop,ast.boolop,ast.cmpop)
+            if all(isinstance(part,literal_nodes) for part in ast.walk(node)):
+                try:
+                    eval(compile(ast.fix_missing_locations(ast.Expression(
+                        body=copy.deepcopy(node))),"<r31-constant>","eval"),{"__builtins__":{}},{})
+                    return True,False
+                except Exception: return False,True
+            # Unknown names/attributes/subscripts/operators and every dynamic call
+            # may either complete or raise; never use absence of Call as proof.
+            return True,True
         def r30_stmt_flow(statement):
             if isinstance(statement,ast.Raise): return False,True
             if isinstance(statement,(ast.Return,ast.Break,ast.Continue)):
-                return False,r30_expr_may_raise(getattr(statement,"value",None))
+                return False,r31_expr_flow(getattr(statement,"value",None))[1]
+            if isinstance(statement,ast.Assert):
+                known,value=r29_literal(statement.test)
+                if known: return (True,False) if bool(value) else (False,True)
+                return True,True
             if isinstance(statement,ast.If):
                 known,value=r29_literal(statement.test)
                 branches=[statement.body] if known and value else [statement.orelse] if known else [statement.body,statement.orelse]
                 flows=[r30_block_flow(branch) for branch in branches]
-                return any(x[0] for x in flows),r30_expr_may_raise(statement.test) or any(x[1] for x in flows)
+                test_normal,test_raise=r31_expr_flow(statement.test)
+                return test_normal and any(x[0] for x in flows),test_raise or any(x[1] for x in flows)
             if isinstance(statement,(ast.Try,ast.TryStar)):
                 body_normal,body_raise=r30_block_flow(statement.body)
                 normal=False;raises=body_raise
@@ -573,19 +589,23 @@ if mode == 'output_then_fail': sys.exit(17)
                         normal|=handler_normal;raises|=handler_raise
                 if statement.finalbody:
                     final_normal,final_raise=r30_block_flow(statement.finalbody)
-                    raises|=final_raise
-                    normal=normal and final_normal
+                    raises=final_raise or (final_normal and raises)
+                    normal=final_normal and normal
                 return normal,raises
             if isinstance(statement,(ast.FunctionDef,ast.AsyncFunctionDef)):
                 values=list(statement.decorator_list)+list(statement.args.defaults)+[
                     x for x in statement.args.kw_defaults if x]
-                return True,any(r30_expr_may_raise(value) for value in values)
+                flows=[r31_expr_flow(value) for value in values]
+                return all(flow[0] for flow in flows),any(flow[1] for flow in flows)
             if isinstance(statement,ast.ClassDef): return True,True
             if isinstance(statement,(ast.For,ast.AsyncFor,ast.While,ast.With,ast.AsyncWith,ast.Match)):
                 return True,True
             if isinstance(statement,(ast.Pass,ast.Global,ast.Nonlocal,ast.Import,ast.ImportFrom)):
                 return True,False
-            return True,any(r30_expr_may_raise(child) for child in ast.iter_child_nodes(statement))
+            expressions=[child for child in ast.iter_child_nodes(statement)
+                         if isinstance(child,ast.expr)]
+            flows=[r31_expr_flow(child) for child in expressions]
+            return (all(flow[0] for flow in flows),any(flow[1] for flow in flows))
         def r30_block_flow(statements):
             may_normal=True;may_raise=False
             for statement in statements:
@@ -1467,6 +1487,14 @@ if mode == 'output_then_fail': sys.exit(17)
             "match [1, 2]:\n    case [*rest] if _r28_spawn(subprocess.Popen):\n        pass\n",True)
         fixed_sequence_nonmatch_positive=r28_control(
             "match [1, 2]:\n    case [1, 2, 3] if _r28_spawn(subprocess.Popen):\n        pass\n",True)
+        arithmetic_raise_negative=not r28_control(
+            "try:\n    1 / 0\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
+        assert_false_negative=not r28_control(
+            "try:\n    assert False\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
+        arithmetic_safe_positive=r28_control(
+            "try:\n    1 + 1\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
+        unknown_attribute_conservative=not r28_control(
+            "try:\n    repo.r31_unknown_attribute\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
         r25_static_mutants_ok=(entropy_rejects and receiver_rejects
                                and receiver_positive and augassign_rejects
                                and target_effects_reject and match_process_rejects
@@ -1475,7 +1503,9 @@ if mode == 'output_then_fail': sys.exit(17)
                                and nonmatching_guard_positive
                                and no_raise_handler_positive and try_else_negative
                                and dormant_raise_positive and starred_sequence_negative
-                               and fixed_sequence_nonmatch_positive)
+                               and fixed_sequence_nonmatch_positive
+                               and arithmetic_raise_negative and assert_false_negative
+                               and arithmetic_safe_positive and unknown_attribute_conservative)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own

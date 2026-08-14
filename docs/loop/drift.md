@@ -1153,3 +1153,11 @@ Sequence patterns support exactly one star by matching prefix/suffix and requiri
 subject length at least the nonstar count; unsupported patterns remain MAY_MATCH.
 Controls cover reachable try-else calls, dormant nested raises, a matching `[*rest]`
 guard and a known nonmatching fixed-length sequence.
+
+R31 gives expressions structured may-normal/may-raise outcomes. A closed pure
+literal/container/unary/binary/boolean/compare/subscript vocabulary is evaluated
+safely: success is normal-only and an evaluation error is raise-only. Unknown names,
+attributes, subscripts, operators and dynamic calls remain both-path conservative.
+`assert` uses the same constant proof, and finally return/raise can override prior
+normal/raise flow while its effects are always inventoried. Controls bind `1/0`,
+`assert False`, safe `1+1`, and an unknown attribute to actual handler reachability.
