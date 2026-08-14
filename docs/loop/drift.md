@@ -981,3 +981,12 @@ bounded helper reads are positive equivalent routes. The observer does not add o
 Popen session kwargs. Its hostile double-fork+setsid child receives no cooperative
 ledger/marker channel and can derive only the real private output parent for its delayed
 external write, which timeout and SIGTERM containment must prevent.
+
+R12 gives all new handoff PASS credit only to fresh-interpreter runs with the real
+stdlib Popen type. Per-attempt behavior is embedded in separately hashed provider
+authority bytes; no fixture token or monkeypatch enters the subject. The same actual
+run_codex route exercises exact-source mmap, FileIO, raw and helper read-call variants,
+whose process topology is AST-identical. The timeout variant changes only the unique
+86400 constant to one second. Its uncooperative double-fork+setsid survivor loops on
+the actual sink indefinitely, forcing bounded causal containment instead of a finite
+observation-window success.
