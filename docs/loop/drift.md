@@ -944,3 +944,12 @@ fdopen, readline/readlines/readall/iteration and positional/vector read capabili
 Object attacks require removal of every seeded leaf and moved parent before verdict.
 Timeout/SIGTERM quiescence derives the actual staging root from the audited provider
 argv and inventories surviving provider commands plus each survivor's lsof fd table.
+
+R8 adds semantic exactly-once counters around the actual product route: one complete
+schema parse and one atomic promotion to the invocation's canonical destination. A
+second run injects a genuine duplicate parse and proves the same oracle rejects it.
+Uninstrumented C-backed acquisition routes are mechanically closed by an exact source
+capability inventory (mmap/FileIO/dup/raw/buffer/detach absent and the two pre-existing
+non-result memoryview sites unchanged). Timeout/SIGTERM monitoring records provider
+families by pid, ppid and process-start identity while alive, then requires every such
+identity gone after delay; the actual staging tree and survivor fd inventories are zero.
