@@ -17,12 +17,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 AUTHORITY = Path("/Library/Application Support/Nortropic/provenance")
 PRODUCER = "_nortropic_provenance"
-SERVICE_SHA = "60e171b1d4ce415819eb48e736ffda53ac0723dee1e14d29449f11e17eee2735"
+SERVICE_SHA = "da3b7900d6a24e6297db256186d490de50fee54f4c565710a225909f0638e686"
 PROBE_SHA = "d17aecd9c4c2df98b945f6c53c5573e71a30e7b242657aeaffa56762d86902ef"
 ALLOWLIST_SHA = "3e29e923ffe3904506c5c68d7e6b9250899d9b550f8a8efa7fb8b6ca7338cff7"
 H034_SHA = "405ced0cb549f1b14b50b3f6fa88dab54083a74e291d563dbc32a63021fff5f3"
 H034_MANIFEST_SHA = "18f57799f091fe4be8a829a1fbbe891f33b57d5f4d8a50df49f755082d5398a1"
-ARTIFACT_MANIFEST_SHA = "e767ce1d0518b128a5c5d85b953d40f5f7109a57ea61b55fffb80591b463d889"
+ARTIFACT_MANIFEST_SHA = "069265c112ce1056fa4318d5eb6320cf781d9d272bb3ae82bf7573f586575aa0"
 SERVICES = ("request-producer", "request-observer", "request-consumer")
 PROBES = ("h033-auth-pass-v1", "h033-auth-fail-v1", "h033-auth-odombart-v1")
 

@@ -480,10 +480,11 @@ were regenerated; the external root ceremony remains unexecuted.
 
 The first provisioned owner-environment run exposed a Darwin group-list failure before any producer
 evidence was created. A compile-time-only diagnostic build of the same service path proved that
-setgroups/GID/UID transitions all succeeded, then Darwin reported the effective dedicated primary GID
-as one implicit `getgroups()` entry after explicit supplementary groups were cleared. The earlier
-candidate rejected that exact host result. The drop now clears explicit supplementary groups, changes
-GID before UID, and verifies exact real/effective UID and GID plus exactly that one implicit dedicated
-GID and no others. A linked Darwin-semantics control reproduces the observed group-list result and must
-execute the exact probe and create producer-owned evidence. Diagnostic logging is absent from the
-production artifact, and live authority is not changed by this repository correction.
+setgroups/GID/UID transitions all succeeded. A second numeric diagnostic then proved Darwin returned
+the eight Directory Services memberships of the resolved `_nortropic_provenance` account after UID
+transition: `309,12,61,701,703,702,100,704`, exactly matching the OS account record. Both the zero-entry
+and one-entry candidate postconditions were therefore invalid machine-local assumptions. The drop now
+requires successful clearing before GID-before-UID transition and exact real/effective dedicated UID/GID;
+it does not reinterpret the OS-resolved account's membership list. A linked Darwin-semantics control
+reproduces the eight-entry result, while independent mutants prove setgroups failure and wrong IDs still
+reject before evidence. Diagnostic logging is absent from production, and live authority is unchanged.

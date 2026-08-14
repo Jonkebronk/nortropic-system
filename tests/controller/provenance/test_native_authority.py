@@ -84,6 +84,23 @@ class NativeAuthorityTests(unittest.TestCase):
                       "-o", cls.darwin_producer], timeout=30)
         if darwin.returncode:
             raise RuntimeError((darwin.returncode, darwin.stdout, darwin.stderr))
+        cls.identity_faults = []
+        for fault_macro in ("FAIL_SETGROUPS", "WRONG_EUID"):
+            fault_dir = Path(cls.temp.name) / fault_macro.lower()
+            fault_dir.mkdir()
+            fault_producer = fault_dir / "request-producer"
+            identity_fault = run(["/usr/bin/clang", "-std=c11", "-O2", "-Wall", "-Wextra",
+                                  "-Werror", "-arch", "arm64", "-DNORTROPIC_FIXTURE",
+                                  "-DNORTROPIC_TEST_PRODUCTION_DROP", "-D" + fault_macro,
+                                  '-DPROBE_SHA256="' + PROBE_SHA + '"',
+                                  '-DALLOWLIST_SHA256="' + allowlist_sha + '"',
+                                  '-DAUTHORITY_ROOT="' + str(cls.authority) + '"',
+                                  source, ROOT / "tests/controller/provenance/identity_faults.c",
+                                  "-o", fault_producer], timeout=30)
+            if identity_fault.returncode:
+                raise RuntimeError((identity_fault.returncode,
+                                    identity_fault.stdout, identity_fault.stderr))
+            cls.identity_faults.append(fault_producer)
         cls.candidate = "1" * 40
         cls.spec = "2" * 64
         cls.gate = "3" * 64
@@ -225,7 +242,7 @@ class NativeAuthorityTests(unittest.TestCase):
                          self.signal_marker.read_text() if self.signal_marker.exists() else "")
         self.assertEqual(set((self.authority / "evidence").iterdir()), before)
 
-    def test_identity_drop_accepts_implicit_primary_gid_after_clear(self):
+    def test_identity_drop_accepts_os_resolved_memberships_after_exact_ids(self):
         argv = self.producer_args(PROBES[0][0])
         argv[0] = self.darwin_producer
         q = run(argv)
@@ -233,6 +250,16 @@ class NativeAuthorityTests(unittest.TestCase):
         self.assertRegex(q.stdout, r"^REQUEST_ID=[0-9a-f]{64}\n$")
         evidence = self.authority / "evidence" / (q.stdout[11:-1] + ".json")
         self.assertTrue(evidence.is_file())
+
+    def test_identity_drop_rejects_setgroups_failure_and_wrong_ids(self):
+        for fault_producer in self.identity_faults:
+            with self.subTest(fault_producer.parent.name):
+                before = set((self.authority / "evidence").iterdir())
+                argv = self.producer_args(PROBES[0][0])
+                argv[0] = fault_producer
+                q = run(argv)
+                self.assertEqual((q.returncode, q.stdout, q.stderr), (2, "", ""), q)
+                self.assertEqual(set((self.authority / "evidence").iterdir()), before)
 
     def test_committed_artifact_identity_and_no_fixture_override(self):
         service = ROOT / "controller/provenance/dist/h033-service"
