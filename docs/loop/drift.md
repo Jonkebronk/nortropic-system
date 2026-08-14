@@ -609,3 +609,11 @@ so the source-form audit rejects those dispatch mechanisms explicitly. Finally, 
 comparison alone could miss a provider snapshot created and cleaned before an invalid-role rejection.
 The invalid-role oracle now replaces the production snapshot function with a recording tripwire and
 requires that it is never reached, while retaining the journal, run-directory and provider-effect checks.
+
+A second review demonstrated why security oracles cannot privilege today's helper names. Attached
+profile and dangling known selectors are now part of the closed route grammar. Builtins and reflected
+module registries join importlib as prohibited alternate dispatch sources, with only production's exact
+read-only `__file__` selftest lookup admitted. Most importantly, invalid-role ordering is now observed at
+the effect boundary with a scoped audit hook: file creation/writes/removal/rename/link/chmod and process
+start are recorded even when implementation inlines, renames or cleans its snapshot helper. The existing
+persistent journal, run-directory and provider capture comparisons remain independent corroboration.
