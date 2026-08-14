@@ -835,3 +835,8 @@ R7 removes original-fd history from connected corruption: every actual read fsta
 against current snapshot dev/inode, including a connected duplicated-RO subject control. Cleanup now
 binds the exact single run directory created by the invocation and rejects empty sibling roots or valid
 leaf names beneath any other child. Production remains unchanged.
+
+R8 seeds snapshot dev/inode identities from the observed exact private family at protection transitions,
+not from pathname-open spelling. Connected corruption covers high-level buffered variants plus os.read,
+pread, readv and preadv, with actual all-openat and positional-read subject controls. Production remains
+unchanged.
