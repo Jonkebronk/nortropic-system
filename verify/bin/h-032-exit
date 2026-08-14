@@ -843,6 +843,7 @@ if mode == 'output_then_fail': sys.exit(17)
                               "dup","fileno","raw","buffer","seek","tell"}
             r17_active=set()
             process_sites=set()
+            semantic_unhandled=[]
             def r17_expr(node,env):
                 if node is None: return frozenset()
                 if isinstance(node,ast.Lambda):
@@ -965,6 +966,24 @@ if mode == 'output_then_fail': sys.exit(17)
                     if isinstance(target,ast.Subscript):
                         return r17_join(r17_expr(target.value,env),r17_expr(target.slice,env))
                     return frozenset()
+                def pattern_effect(pattern,env):
+                    if isinstance(pattern,ast.MatchValue): return r17_expr(pattern.value,env)
+                    if isinstance(pattern,ast.MatchSingleton): return frozenset()
+                    if isinstance(pattern,ast.MatchSequence):
+                        return r17_join(*(pattern_effect(value,env) for value in pattern.patterns))
+                    if isinstance(pattern,ast.MatchMapping):
+                        return r17_join(*(r17_expr(key,env) for key in pattern.keys),
+                            *(pattern_effect(value,env) for value in pattern.patterns))
+                    if isinstance(pattern,ast.MatchClass):
+                        return r17_join(r17_expr(pattern.cls,env),
+                            *(pattern_effect(value,env) for value in pattern.patterns),
+                            *(pattern_effect(value,env) for value in pattern.kwd_patterns))
+                    if isinstance(pattern,ast.MatchAs):
+                        return pattern_effect(pattern.pattern,env) if pattern.pattern else frozenset()
+                    if isinstance(pattern,ast.MatchOr):
+                        return r17_join(*(pattern_effect(value,env) for value in pattern.patterns))
+                    if isinstance(pattern,ast.MatchStar): return frozenset()
+                    semantic_unhandled.append(type(pattern).__name__);return frozenset({UNKNOWN})
                 for _ in range(max(2,len(list(runtime_walk_function(fn))))):
                     changed=False;returns=[]
                     for item in runtime_walk_function(fn):
@@ -1005,6 +1024,17 @@ if mode == 'output_then_fail': sys.exit(17)
                                 r17_expr(context.context_expr,env)
                         elif isinstance(item,ast.Raise):
                             r17_expr(item.exc,env);r17_expr(item.cause,env)
+                        elif isinstance(item,ast.Match):
+                            flow=r17_expr(item.subject,env)
+                            for case in item.cases:
+                                flow=r17_join(flow,pattern_effect(case.pattern,env),
+                                              r17_expr(case.guard,env))
+                            if flow & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,PROCESS_OBJECT}:
+                                process_binding_unresolved.append("Match")
+                        elif isinstance(item,ast.ExceptHandler):
+                            flow=r17_expr(item.type,env)
+                            if flow & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,PROCESS_OBJECT}:
+                                process_binding_unresolved.append("ExceptHandler")
                         elif isinstance(item,ast.comprehension):
                             r17_expr(item.iter,env)
                             for condition in item.ifs: r17_expr(condition,env)
@@ -1024,6 +1054,11 @@ if mode == 'output_then_fail': sys.exit(17)
                             for value in list(item.decorator_list)+list(item.bases)+[
                                     keyword.value for keyword in item.keywords]:
                                 r17_expr(value,env)
+                        elif isinstance(item,(ast.Try,ast.TryStar,ast.Pass,ast.Break,
+                                              ast.Continue,ast.Global,ast.Nonlocal)):
+                            pass
+                        elif isinstance(item,ast.stmt):
+                            semantic_unhandled.append(type(item).__name__)
                     if not changed: break
                 return env,r17_join(*returns)
             for name in identity_helpers: helper_summaries[name]=frozenset({IDENTITY})
@@ -1215,7 +1250,7 @@ if mode == 'output_then_fail': sys.exit(17)
             non_receiver_verdict=(consumer_architecture_ok and semantic_call_ok
                                       and not identity_escape and cfg_ok
                                       and len(resolved_popen)==1 and not process_binding_unresolved
-                                      and not unresolved_process_calls
+                                      and not unresolved_process_calls and not semantic_unhandled
                                       and r20_complete_tree_analysis(candidate_tree)
                                       and id_origins_ok and origin_runtime_ok)
             consumer_architecture_ok=non_receiver_verdict and receiver_ok
@@ -1284,9 +1319,27 @@ if mode == 'output_then_fail': sys.exit(17)
                 "_r27_spawn(subprocess.Popen).attribute = 1\n")
             and r27_target_mutant(
                 "del _r27_holder[_r27_spawn(subprocess.Popen)]\n"))
+        def r28_control(statement,with_spawn):
+            tree=copy.deepcopy(candidate_tree)
+            if with_spawn:
+                tree.body.append(ast.parse(
+                    "def _r28_spawn(ctor):\n    return ctor(['/usr/bin/true'])\n").body[0])
+            run=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                     and node.name=="run_codex")
+            run.body=ast.parse(statement).body+run.body
+            ast.fix_missing_locations(tree);return analyze_candidate_tree(tree)["verdict"]
+        match_process_rejects=all(not r28_control(source,True) for source in (
+            "match _r28_spawn(subprocess.Popen):\n    case _:\n        pass\n",
+            "match 1:\n    case _ if _r28_spawn(subprocess.Popen):\n        pass\n",
+            "match 1:\n    case subprocess.Popen():\n        pass\n",
+            "try:\n    pass\nexcept _r28_spawn(subprocess.Popen):\n    pass\n"))
+        match_legitimate_positive=all(r28_control(source,False) for source in (
+            "match 1:\n    case 1:\n        pass\n    case _:\n        pass\n",
+            "try:\n    pass\nexcept Exception:\n    pass\n"))
         r25_static_mutants_ok=(entropy_rejects and receiver_rejects
                                and receiver_positive and augassign_rejects
-                               and target_effects_reject)
+                               and target_effects_reject and match_process_rejects
+                               and match_legitimate_positive)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
