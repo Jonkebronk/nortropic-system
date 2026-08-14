@@ -1185,3 +1185,12 @@ retain structure. A handler MAY match if any alternative catches the raised type
 is DEFINITE only if every alternative catches it; a tuple literal is one alternative
 whose members are disjunctive catches. Reassignment order, branch alternatives,
 actual tuple, dict-key and helper controls prevent cross-scope/global-union credit.
+
+R35 carries the binding environment on each normal and exceptional abstract-execution
+path instead of separating an exception token from its program-point state. Assignment
+inside a try therefore changes only later paths; each raised state resolves handlers
+against its captured environment, matching states enter with that state, and nonmatching
+states continue outward. Orelse consumes normal-exit states and finally transforms every
+normal and exceptional path. Same-type branch joins prove a definite catch while divergent
+branches retain both catch and escape alternatives; inside-try reassignment plus dict/helper
+controls prevent stale pre-try bindings from receiving credit.

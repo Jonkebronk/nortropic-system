@@ -684,20 +684,82 @@ if mode == 'output_then_fail': sys.exit(17)
             flows=[r31_expr_flow(child) for child in expressions]
             return (all(flow[0] for flow in flows),frozenset().union(
                 *(flow[1] for flow in flows)))
+        def r35_join_envs(envs):
+            joined={}
+            for name in set().union(*(set(env) for env in envs)) if envs else set():
+                choices=[]
+                for env in envs:
+                    value=env.get(name,(frozenset({"UNKNOWN"}),))
+                    if isinstance(value,tuple): choices.extend(value)
+                joined[name]=tuple(dict.fromkeys(choices)) or (frozenset({"UNKNOWN"}),)
+            return joined
+        def r35_block_states(statements,normal_envs):
+            normals=[dict(env) for env in normal_envs];exceptions=[]
+            for statement in statements:
+                next_normals=[]
+                for env in normals:
+                    if isinstance(statement,(ast.Assign,ast.AnnAssign)):
+                        value=r34_value(statement.value,env)
+                        targets=statement.targets if isinstance(statement,ast.Assign) else [statement.target]
+                        updated=dict(env)
+                        for target in targets:
+                            if isinstance(target,ast.Name): updated[target.id]=value
+                        expr_normal,expr_raises=r31_expr_flow(statement.value)
+                        if expr_normal: next_normals.append(updated)
+                        exceptions.extend((exc,dict(env)) for exc in expr_raises)
+                    elif isinstance(statement,ast.Raise):
+                        exceptions.extend((exc,dict(env)) for exc in r32_raise_types(statement.exc,env))
+                    elif isinstance(statement,(ast.Return,ast.Break,ast.Continue)):
+                        exceptions.extend((exc,dict(env)) for exc in
+                                          r31_expr_flow(getattr(statement,"value",None))[1])
+                    elif isinstance(statement,ast.If):
+                        known,value=r29_literal(statement.test)
+                        branches=[statement.body] if known and value else [statement.orelse] if known else [statement.body,statement.orelse]
+                        for branch in branches:
+                            branch_normals,branch_exceptions=r35_block_states(branch,[dict(env)])
+                            next_normals.extend(branch_normals);exceptions.extend(branch_exceptions)
+                        exceptions.extend((exc,dict(env)) for exc in r31_expr_flow(statement.test)[1])
+                    elif isinstance(statement,(ast.Try,ast.TryStar)):
+                        body_normals,body_exceptions=r35_block_states(statement.body,[dict(env)])
+                        try_normals=[];try_exceptions=[]
+                        for body_env in body_normals:
+                            else_normals,else_exceptions=r35_block_states(statement.orelse,[body_env])
+                            try_normals.extend(else_normals);try_exceptions.extend(else_exceptions)
+                        remaining=list(body_exceptions)
+                        for handler in statement.handlers:
+                            still=[]
+                            for exc,exc_env in remaining:
+                                alternatives=r32_handler_types(handler.type,exc_env)
+                                if any(r32_may_match(exc,types) for types in alternatives):
+                                    handler_normals,handler_exceptions=r35_block_states(handler.body,[dict(exc_env)])
+                                    try_normals.extend(handler_normals);try_exceptions.extend(handler_exceptions)
+                                if not r32_definitely_caught(exc,alternatives): still.append((exc,exc_env))
+                            remaining=still
+                        try_exceptions.extend(remaining)
+                        if statement.finalbody:
+                            final_normals=[];final_exceptions=[]
+                            for prior_env in try_normals:
+                                out_normals,out_exceptions=r35_block_states(statement.finalbody,[prior_env])
+                                final_normals.extend(out_normals);final_exceptions.extend(out_exceptions)
+                            for exc,prior_env in try_exceptions:
+                                out_normals,out_exceptions=r35_block_states(statement.finalbody,[prior_env])
+                                final_exceptions.extend(out_exceptions)
+                                final_exceptions.extend((exc,out_env) for out_env in out_normals)
+                            try_normals,try_exceptions=final_normals,final_exceptions
+                        next_normals.extend(try_normals);exceptions.extend(try_exceptions)
+                    else:
+                        stmt_normal,stmt_raises=r30_stmt_flow(statement,dict(env))
+                        if stmt_normal: next_normals.append(dict(env))
+                        exceptions.extend((exc,dict(env)) for exc in stmt_raises)
+                normals=next_normals
+                if not normals: break
+            return normals,exceptions
         def r30_block_flow(statements,env=None):
             if env is None: env=r34_initial_env()
-            may_normal=True;may_raise=frozenset()
-            for statement in statements:
-                if not may_normal: break
-                stmt_normal,stmt_raise=r30_stmt_flow(statement,env)
-                may_raise=may_raise|stmt_raise
-                may_normal=may_normal and stmt_normal
-                if isinstance(statement,(ast.Assign,ast.AnnAssign)):
-                    targets=statement.targets if isinstance(statement,ast.Assign) else [statement.target]
-                    value=r34_value(statement.value,env)
-                    for target in targets:
-                        if isinstance(target,ast.Name): env[target.id]=value
-            return may_normal,may_raise
+            normals,exceptions=r35_block_states(statements,[env])
+            if normals:
+                env.clear();env.update(r35_join_envs(normals))
+            return bool(normals),frozenset(exc for exc,_ in exceptions)
         def runtime_walk_function(fn):
             def walk(node,root=False):
                 yield node
@@ -738,19 +800,21 @@ if mode == 'output_then_fail': sys.exit(17)
                             value=r34_value(prior.value,point_env)
                             for target in targets:
                                 if isinstance(target,ast.Name): point_env[target.id]=value
-                    may_normal,may_raise=r30_block_flow(node.body,dict(point_env))
-                    if may_normal:
+                    normal_states,exception_states=r35_block_states(node.body,[dict(point_env)])
+                    if normal_states:
                         for statement in node.orelse: yield from walk(statement)
-                    if may_raise:
-                        remaining=set(may_raise)
+                    if exception_states:
+                        remaining=list(exception_states)
                         for handler in node.handlers:
-                            alternatives=r32_handler_types(handler.type,point_env)
-                            possible={exc for exc in remaining if any(
-                                r32_may_match(exc,types) for types in alternatives)}
+                            possible=[];still=[]
+                            for exc,exc_env in remaining:
+                                alternatives=r32_handler_types(handler.type,exc_env)
+                                if any(r32_may_match(exc,types) for types in alternatives):
+                                    possible.append((exc,exc_env))
+                                if not r32_definitely_caught(exc,alternatives):
+                                    still.append((exc,exc_env))
                             if possible: yield from walk(handler)
-                            remaining={exc for exc in remaining
-                                if not (possible and r32_definitely_caught(
-                                    exc,alternatives))}
+                            remaining=still
                     for statement in node.finalbody: yield from walk(statement)
                     return
                 for child in ast.iter_child_nodes(node): yield from walk(child)
@@ -1661,6 +1725,29 @@ if mode == 'output_then_fail': sys.exit(17)
             "try:\n    try:\n        raise RuntimeError('x')\n"
             "    except E:\n        pass\n"
             "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        try_assignment_catch_negative=not r28_control(
+            "E = ValueError\ntry:\n    E = RuntimeError\n    raise RuntimeError('x')\n"
+            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
+        try_assignment_escape_negative=not r28_control(
+            "E = RuntimeError\ntry:\n    try:\n        E = ValueError\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        branch_same_type_positive=r28_control(
+            "try:\n    if repo:\n        E = RuntimeError\n    else:\n        E = RuntimeError\n"
+            "    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        branch_divergent_negative=not r28_control(
+            "try:\n    if repo:\n        E = RuntimeError\n    else:\n        E = ValueError\n"
+            "    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+        try_dict_helper_positive=r28_control(
+            "def _r35_types():\n    return {'runtime': RuntimeError}\n"
+            "try:\n    M = _r35_types()\n    E = M['runtime']\n"
+            "    try:\n        raise RuntimeError('x')\n"
+            "    except E:\n        pass\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
         r25_static_mutants_ok=(entropy_rejects and receiver_rejects
                                and receiver_positive and augassign_rejects
                                and target_effects_reject and match_process_rejects
@@ -1681,7 +1768,12 @@ if mode == 'output_then_fail': sys.exit(17)
                                and shadowed_unknown_negative
                                and reassigned_to_valueerror_negative
                                and reassigned_to_runtime_positive
-                               and branch_alternative_negative and dict_key_positive)
+                               and branch_alternative_negative and dict_key_positive
+                               and try_assignment_catch_negative
+                               and try_assignment_escape_negative
+                               and branch_same_type_positive
+                               and branch_divergent_negative
+                               and try_dict_helper_positive)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
