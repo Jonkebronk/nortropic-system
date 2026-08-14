@@ -69,6 +69,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
+import time
 
 source, authority_source, schema_source, work = map(Path, sys.argv[1:5])
 g20_emit_path = Path(sys.argv[5]) if sys.argv[5] else None
@@ -315,7 +317,13 @@ mutations={
 }
 if mode == 'extra': payload['unexpected']='worker-controlled'
 if mode in mutations: mutations[mode](payload)
+if mode == 'oversized_valid': payload['summary']='v'*(2*1024*1024)
+if mode == 'oversized': payload['summary']='x'*(4*1024*1024+1)
 encoded=json.dumps(payload,separators=(',',':'))
+if mode == 'timeout':
+    import time; time.sleep(3)
+if mode == 'interruption':
+    import signal,time; os.kill(os.getppid(),signal.SIGTERM); time.sleep(1)
 if mode == 'malformed': out.write_text('{')
 elif mode == 'empty': out.write_bytes(b'')
 elif mode == 'partial': out.write_text(encoded[:max(1,len(encoded)//2)])
@@ -323,8 +331,11 @@ elif mode == 'trailing': out.write_text(encoded+' x')
 elif mode == 'concatenated': out.write_text(encoded+encoded)
 elif mode == 'duplicate': out.write_text(encoded[:-1]+',"role":"TEST_AUTHOR"}')
 elif mode == 'invalid_utf8': out.write_bytes(bytes([255]))
-elif mode == 'preseed': out.write_text('stale'); out.write_text(encoded)
-elif mode == 'copied': out.write_text(encoded)
+elif mode == 'partial_then_complete':
+    with out.open('wb') as stream:
+        midpoint=len(encoded)//2; stream.write(encoded[:midpoint].encode()); stream.flush(); os.fsync(stream.fileno())
+        import time; time.sleep(0.5)
+        stream.write(encoded[midpoint:].encode()); stream.flush(); os.fsync(stream.fileno())
 elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
@@ -333,7 +344,7 @@ thread='h032'
 if mode == 'wrong_thread': thread='foreign-thread'
 if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
 if mode == 'multiple_thread': print(json.dumps({'type':'thread.started','thread_id':'second-thread'}))
-if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
+if mode == 'output_then_fail': sys.exit(17)
 """, encoding="utf-8")
     provider.chmod(0o700)
     good_bytes = provider.read_bytes(); good_hash = hashlib.sha256(good_bytes).hexdigest()
@@ -385,8 +396,11 @@ if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
     if spec is None or spec.loader is None: raise RuntimeError("cannot import subject")
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
     run_seq = [0]
+    forced_run_ids: list[str] = []
     original_now_id = module.now_id
     def fixture_now_id():
+        if forced_run_ids:
+            return forced_run_ids.pop(0)
         run_seq[0] += 1
         return f"{original_now_id()}-{run_seq[0]:04d}"
     module.now_id = fixture_now_id
@@ -509,6 +523,7 @@ if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
     check("K_CODE_MODE_HOST_IDENTITY_BOUNDARY", family_effect_ok,
           f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} host_records={host_records} ancestry={host_ancestry_ok} cleanup={not argv0.parent.exists()}")
     def result_case(mode: str):
+        if capture.exists(): capture.unlink()
         os.environ["H032_RESULT_MODE"] = mode
         case_result = attempt(make_repo(str(provider)))
         case_capture = json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else {}
@@ -526,7 +541,7 @@ if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
         schema_document = strict_json(schema_source.read_text(encoding="utf-8"))
         valid_raw = valid_canonical.read_bytes()
         valid_document = strict_json(valid_raw.decode("utf-8", errors="strict"))
-        valid_schema = (len(valid_raw) <= 1024 * 1024
+        valid_schema = (len(valid_raw) <= 4 * 1024 * 1024
             and complete_schema_valid(valid_document, schema_document)
             and valid_document["role"] == "TEST_AUTHOR")
     except Exception: pass
@@ -535,52 +550,142 @@ if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
         "concatenated", "duplicate", "invalid_utf8", "wrong_role", "wrong_outcome",
         "wrong_summary_type", "wrong_changed_files_type", "wrong_finding_shape",
         "wrong_test_shape", "wrong_nullable_bool", "wrong_owner_bool",
-        "wrong_next_action", "wrong_next_task", "preseed", "copied",
+        "wrong_next_action", "wrong_next_task", "oversized",
         "disconnected_writer", "wrong_thread", "missing_thread", "multiple_thread",
-        "output_then_fail", "timeout", "interruption", "hostile")
+        "output_then_fail", "interruption", "hostile")
     negative_cases = {mode: result_case(mode) for mode in negative_modes}
     os.environ.pop("H032_RESULT_MODE", None)
 
-    # Reproduce the production topology, not merely a standalone fixture repo:
-    # a temporary linked worktree has the authoritative repository's exact
-    # common Git directory as LIVE_GIT while the controller source/launcher ROT
-    # remains this exact candidate.  Every touched controller journal byte and
-    # worktree-admin entry is restored in the enclosing finally.
-    physical_repo = work / "physical-live-git-worktree"
-    live_git = module.common_git_dir(repo).resolve()
-    live_journal = live_git / "nortropic-codex-autopilot"
-    live_events = live_journal / "events.jsonl"
-    events_existed = live_events.exists()
-    events_before = live_events.read_bytes() if events_existed else b""
-    runs_root = live_journal / "runs"
-    runs_before = {p.name for p in runs_root.iterdir()} if runs_root.is_dir() else set()
-    physical_case = None
-    physical_capture = {}
+    original_popen_timeout = module.subprocess.Popen
+    def one_second_launcher(argv, *args, **kwargs):
+        changed = list(argv)
+        changed = ["1" if value == "86400" else value for value in changed]
+        return original_popen_timeout(changed, *args, **kwargs)
+    module.subprocess.Popen = one_second_launcher
     try:
-        sh(GIT, "worktree", "add", "--detach", "-q", str(physical_repo), "HEAD", cwd=repo)
-        physical_authority = physical_repo / "config/codex-provider-identity.json"
-        physical_authority.write_text(json.dumps(authority_document(str(provider))), encoding="utf-8")
-        os.environ["H032_RESULT_MODE"] = "valid"
-        physical_case = attempt(physical_repo)
+        timeout_case = result_case("timeout")
+    finally:
+        module.subprocess.Popen = original_popen_timeout
+        os.environ.pop("H032_RESULT_MODE", None)
+    timeout_ok = rejected_clean(timeout_case) if 'rejected_clean' in locals() else (
+        not timeout_case[0][0] and not timeout_case[2] and not timeout_case[3] and not timeout_case[4])
+
+    def object_attack(kind: str):
+        attack_repo = make_repo(str(provider))
+        seeded: list[Path] = []
+        target_guard = work / f"object-attack-{kind}-guard"
+        target_guard.write_text("guard", encoding="utf-8")
+        original = module.subprocess.Popen
+        def inject(argv, *args, **kwargs):
+            flat = list(argv)
+            if "-o" not in flat:
+                return original(argv, *args, **kwargs)
+            index = flat.index("-o")
+            target = Path(flat[index + 1]); target.parent.mkdir(parents=True, exist_ok=True)
+            if kind == "symlink": target.symlink_to(target_guard)
+            elif kind == "directory": target.mkdir()
+            elif kind == "hardlink": os.link(target_guard, target)
+            else: raise RuntimeError(kind)
+            seeded.append(target)
+            return original(argv, *args, **kwargs)
+        module.subprocess.Popen = inject
+        try:
+            outcome = attempt(attack_repo)
+        finally:
+            module.subprocess.Popen = original
+        intact = target_guard.read_text(encoding="utf-8") == "guard"
+        for path in seeded:
+            if path.is_symlink() or path.is_file(): path.unlink()
+            elif path.is_dir(): path.rmdir()
+        return outcome, len(seeded) == 1, intact
+    object_attacks = {kind: object_attack(kind) for kind in ("symlink", "directory", "hardlink")}
+    object_attacks_ok = all(not value[0][0] and value[0][2] == 0
+                            and value[1] and value[2] for value in object_attacks.values())
+
+    oversized_positive = result_case("oversized_valid")
+    os.environ.pop("H032_RESULT_MODE", None)
+
+    atomic_repo = make_repo(str(provider))
+    atomic_box: list[tuple[bool, str, int, int, list[str]]] = []
+    partial_visible: list[bytes] = []
+    os.environ["H032_RESULT_MODE"] = "partial_then_complete"
+    atomic_thread = threading.Thread(target=lambda: atomic_box.append(attempt(atomic_repo)))
+    atomic_thread.start()
+    while atomic_thread.is_alive():
+        for candidate in module.journal_root(atomic_repo).glob("runs/*/result.json"):
+            try:
+                raw = candidate.read_bytes()
+                parsed = strict_json(raw.decode("utf-8", errors="strict"))
+                if not complete_schema_valid(parsed, schema_document): partial_visible.append(raw)
+            except Exception:
+                partial_visible.append(candidate.read_bytes() if candidate.exists() else b"")
+        time.sleep(0.005)
+    atomic_thread.join(); os.environ.pop("H032_RESULT_MODE", None)
+    atomic_ok = (len(atomic_box) == 1 and atomic_box[0][0] and not partial_visible)
+
+    # Causal stale/preseed/replay controls.  These bytes exist before the
+    # invocation creates its channel; fixture-only mode strings are not used.
+    stale_id = "20000101-000000-stale"
+    stale_run = module.journal_root(valid_repo) / "runs" / f"{stale_id}-test_author"
+    stale_run.mkdir(parents=True)
+    stale_result = stale_run / "result.json"
+    stale_bytes = valid_canonical.read_bytes() if valid_canonical.is_file() else b'{"stale":true}'
+    stale_result.write_bytes(stale_bytes)
+    forced_run_ids.append(stale_id)
+    os.environ["H032_RESULT_MODE"] = "missing"
+    stale_case = attempt(valid_repo)
+    os.environ.pop("H032_RESULT_MODE", None)
+    stale_rejects = (not stale_case[0] and stale_result.read_bytes() == stale_bytes
+                     and stale_case[2] == 0)
+
+    replay_id = "20000101-000001-replay"
+    replay_run = module.journal_root(valid_repo) / "runs" / f"{replay_id}-builder"
+    replay_run.mkdir(parents=True)
+    replay_result = replay_run / "result.json"; replay_result.write_bytes(stale_bytes)
+    forced_run_ids.append(replay_id)
+    try:
+        module.run_codex(valid_repo, valid_repo, "BUILDER", "H032-WRONG-INVOCATION")
+        replay_case = (True, "ADMITTED")
+    except Exception as exc:
+        replay_case = (False, f"{type(exc).__name__}:{exc}")
+    replay_rejects = (not replay_case[0] and replay_result.read_bytes() == stale_bytes)
+
+    # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
+    # repository.  This no-hardlink tree contains the exact candidate bytes,
+    # its own .git/control plane, and imports its own controller/launcher ROT.
+    physical_repo = work / "isolated-authoritative-root"
+    shutil.copytree(repo, physical_repo, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+    if sha256(physical_repo / "scripts/nortropic-codex-autopilot.py") != sha256(source):
+        raise RuntimeError("isolated physical root is not exact candidate source")
+    sh(GIT, "init", "-q", cwd=physical_repo)
+    sh(GIT, "config", "user.name", "h032-physical", cwd=physical_repo)
+    sh(GIT, "config", "user.email", "h032-physical@nortropic.invalid", cwd=physical_repo)
+    physical_authority = physical_repo / "config/codex-provider-identity.json"
+    physical_authority.write_text(json.dumps(authority_document(str(provider))), encoding="utf-8")
+    sh(GIT, "add", ".", cwd=physical_repo); sh(GIT, "commit", "-qm", "exact candidate fixture", cwd=physical_repo)
+    physical_spec = importlib.util.spec_from_file_location(
+        "h032_physical_subject", physical_repo / "scripts/nortropic-codex-autopilot.py")
+    if physical_spec is None or physical_spec.loader is None:
+        raise RuntimeError("cannot import isolated physical controller")
+    physical_module = importlib.util.module_from_spec(physical_spec)
+    sys.modules[physical_spec.name] = physical_module; physical_spec.loader.exec_module(physical_module)
+    os.environ["H032_RESULT_MODE"] = "valid"
+    try:
+        try:
+            physical_run = physical_module.run_codex(physical_repo, physical_repo, "TEST_AUTHOR", "H032")
+            physical_case = (True, "ADMITTED")
+        except Exception as exc:
+            physical_case = (False, f"{type(exc).__name__}:{exc}")
         physical_capture = json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else {}
     finally:
         os.environ.pop("H032_RESULT_MODE", None)
-        if runs_root.is_dir():
-            for child in list(runs_root.iterdir()):
-                if child.name not in runs_before:
-                    shutil.rmtree(child) if child.is_dir() and not child.is_symlink() else child.unlink()
-        if events_existed:
-            live_events.write_bytes(events_before)
-        elif live_events.exists():
-            live_events.unlink()
-        if physical_repo.exists():
-            sh(GIT, "worktree", "remove", "--force", str(physical_repo), cwd=repo)
-        sh(GIT, "worktree", "prune", cwd=repo)
     physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
     physical_canonical = Path(physical_capture.get("canonical_result", "/private/tmp/h032-missing-physical-canonical"))
+    live_git = physical_module.common_git_dir(physical_repo).resolve()
     physical_topology_ok = (
-        physical_case is not None and physical_case[0]
-        and module.common_git_dir(repo).resolve() == live_git
+        physical_case[0]
+        and physical_module.common_git_dir(physical_repo).resolve() == live_git
+        and live_git == (physical_repo / ".git").resolve()
         and live_git in physical_canonical.parents
         and live_git not in physical_output.parents
         and not physical_output.exists())
@@ -588,7 +693,9 @@ if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
         result, _capture, output_exists, canonical_exists, hostile_exists = case
         return not result[0] and result[2] == 1 and not output_exists and not canonical_exists and not hostile_exists
     result_delivery_ok = (
-        valid[0] and valid_schema and physical_topology_ok and valid_output.is_absolute()
+        valid[0] and valid_schema and physical_topology_ok and stale_rejects and replay_rejects
+        and oversized_positive[0][0] and atomic_ok and timeout_ok and object_attacks_ok
+        and valid_output.is_absolute()
         and valid_output != valid_canonical
         and repo not in valid_output.parents and valid_repo not in valid_output.parents
         and module.journal_root(valid_repo) not in valid_output.parents
@@ -596,7 +703,7 @@ if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
         and all(rejected_clean(case) for case in negative_cases.values())
         and negative_cases["hostile"][1].get("hostile_error") != "WRITE_SUCCEEDED")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
