@@ -490,23 +490,11 @@ if mode == 'output_then_fail': sys.exit(17)
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
     candidate_tree = ast.parse(source.read_text(encoding="utf-8"))
     def analyze_candidate_tree(candidate_tree):
+        r44d_trace={"timeout":0,"cfg":0,"helper_provenance":0,"heap":0,"try":0}
+        r44d_components={"timeout":False,"cfg":False,"helper_provenance":False,
+                         "heap":False,"try":False}
         r44c_unsupported=("TryStar",) if isinstance(AST_TRY_STAR,type) and any(
             isinstance(node,AST_TRY_STAR) for node in ast.walk(candidate_tree)) else ()
-        r44c_markers={
-            "timeout_guard":any(isinstance(node,(ast.Assign,ast.AnnAssign)) and
-                any(isinstance(target,ast.Name) and target.id=="CODEX_RUN_TIMEOUT_SECONDS"
-                    for target in (node.targets if isinstance(node,ast.Assign) else [node.target]))
-                for node in ast.walk(candidate_tree)),
-            "cfg":any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
-                and node.func.attr in {"wait","communicate"} for node in ast.walk(candidate_tree)),
-            "helper":any(isinstance(node,ast.FunctionDef) and node.name=="journal_root"
-                for node in candidate_tree.body),
-            "provenance":any(isinstance(node,ast.Attribute) and node.attr=="O_NOFOLLOW"
-                for node in ast.walk(candidate_tree)),
-            "heap":any(isinstance(node,ast.Attribute) and node.attr=="SimpleNamespace"
-                for node in ast.walk(candidate_tree)),
-            "try_dispatch":any(isinstance(node,ast.Try) for node in ast.walk(candidate_tree)),
-        }
         def r20_complete_tree_analysis(tree):
             consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
                        and node.name=="_consume_private_result"]
@@ -622,6 +610,7 @@ if mode == 'output_then_fail': sys.exit(17)
             if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
                     and isinstance(node.func.value,ast.Name)
                     and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
+                r44d_trace["heap"]+=1;r44d_components["heap"]=True
                 return {"__objref__":f"namespace:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}",
                         "__initial_attrs__":{kw.arg:r34_value(kw.value,env,active)
                                              for kw in node.keywords if kw.arg}}
@@ -911,6 +900,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             next_normals.extend(branch_normals);exceptions.extend(branch_exceptions)
                         exceptions.extend((exc,dict(env)) for exc in r31_expr_flow(statement.test)[1])
                     elif isinstance(statement,AST_TRY_TYPES):
+                        r44d_trace["try"]+=1;r44d_components["try"]=True
                         body_normals,body_exceptions=r35_block_states(statement.body,[dict(env)])
                         try_normals=[];try_exceptions=[]
                         for body_env in body_normals:
@@ -982,6 +972,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             for statement in case.body: yield from walk(statement)
                     return
                 if isinstance(node,AST_TRY_TYPES):
+                    r44d_trace["try"]+=1;r44d_components["try"]=True
                     for statement in node.body: yield from walk(statement)
                     point_env=r34_initial_env()
                     for prior in fn.body:
@@ -1166,6 +1157,12 @@ if mode == 'output_then_fail': sys.exit(17)
                 if isinstance(ancestor,ast.If) and isinstance(ancestor.test,ast.Constant) \
                         and ancestor.test.value is False: timeout_reachable=False
                 ancestor=parent_map.get(ancestor)
+            r44d_trace["timeout"]+=1
+            r44d_components["timeout"]=(len(timeout_assignments)==1
+                and isinstance(timeout_assignments[0].value,ast.Constant)
+                and type(timeout_assignments[0].value.value) is int
+                and timeout_assignments[0].value.value==86400 and len(timeout_loads)==1
+                and timeout_reachable)
             consumer_architecture_ok = (
                 [arg.arg for arg in consumer.args.args] == exact_consumer_args
                 and consumer.args.vararg is None and consumer.args.kwarg is None
@@ -1356,6 +1353,9 @@ if mode == 'output_then_fail': sys.exit(17)
                         return frozenset({PROCESS_CONSTRUCTOR})
                     return base
                 if isinstance(node,ast.Call):
+                    if (isinstance(node.func,ast.Attribute) and node.func.attr=="SimpleNamespace"
+                            and isinstance(node.func.value,ast.Name) and node.func.value.id=="types"):
+                        r44d_trace["heap"]+=1;r44d_components["heap"]=True
                     transferred=r17_join(*(r17_expr(item,env) for item in
                         list(node.args)+[kw.value for kw in node.keywords]))
                     if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
@@ -1636,6 +1636,9 @@ if mode == 'output_then_fail': sys.exit(17)
                 exact_actual=(frozenset({SINK}),frozenset({CANONICAL}),
                               frozenset({INVOCATION}),frozenset({RUN}),frozenset({ROLE}))
                 semantic_call_ok=(len(actual)==5 and tuple(actual)==exact_actual)
+                r44d_trace["helper_provenance"]+=1
+                r44d_components["helper_provenance"]=(semantic_call_ok and sink_nofollow
+                    and bool(provenance_values.get("canonical_destination")))
                 # The consumer receives exactly the proven call-site tag sets; no
                 # clean re-seeding may launder helper/container aliases.
                 if semantic_call_ok:
@@ -1717,6 +1720,7 @@ if mode == 'output_then_fail': sys.exit(17)
             # loop, with or exception region cannot dominate the success exits.
             # This rejects bypass edges rather than guessing from line numbers.
             cfg_ok=False
+            r44d_trace["cfg"]+=1
             if len(timeout_calls)==1 and len(resolved_popen)==1:
                 call=timeout_calls[0];ancestor=parent_map.get(call);guarded=False
                 while ancestor is not None and ancestor is not run_codex_nodes[0]:
@@ -1734,6 +1738,7 @@ if mode == 'output_then_fail': sys.exit(17)
                     return_indices.append(top.get(stmt,-1))
                 cfg_ok=(not guarded and call_index>=0
                         and all(index>call_index for index in return_indices))
+            r44d_components["cfg"]=cfg_ok
             unresolved_process_calls=[call for call in ast.walk(candidate_tree)
                 if isinstance(call,ast.Call) and UNKNOWN in r17_expr(call.func,run_flow_env)
                 and any(isinstance(part,ast.Name) and part.id in module_bindings
@@ -1751,7 +1756,8 @@ if mode == 'output_then_fail': sys.exit(17)
                 "receiver_ok": receiver_ok if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "non_receiver_verdict": non_receiver_verdict if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "tree_shape": r20_complete_tree_analysis,
-                "unsupported":r44c_unsupported,"markers":r44c_markers}
+                "unsupported":r44c_unsupported,"components":r44d_components,
+                "trace":r44d_trace}
     r44c_source='''import os
 import subprocess
 import secrets
@@ -1780,10 +1786,11 @@ def run_codex(repo, role):
     return _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role)
 '''
     r44c_tree=ast.parse(r44c_source);r44c_base=analyze_candidate_tree(r44c_tree)
-    required_r44c_markers={"timeout_guard","cfg","helper","provenance","heap","try_dispatch"}
+    required_r44c_markers={"timeout","cfg","helper_provenance","heap","try"}
     r44c_deep_ok=(set(r44c_base)=={"verdict","exact_consumer_args","receiver_ok",
-        "non_receiver_verdict","tree_shape","unsupported","markers"}
-        and required_r44c_markers=={key for key,value in r44c_base["markers"].items() if value})
+        "non_receiver_verdict","tree_shape","unsupported","components","trace"}
+        and required_r44c_markers=={key for key,value in r44c_base["components"].items() if value}
+        and all(r44c_base["trace"][key]>0 for key in required_r44c_markers))
     r44c_timeout=copy.deepcopy(r44c_tree)
     next(node for node in r44c_timeout.body if isinstance(node,ast.Assign)
          and any(isinstance(target,ast.Name) and target.id=="CODEX_RUN_TIMEOUT_SECONDS" for target in node.targets)).value=ast.Name(id="BAD_TIMEOUT",ctx=ast.Load())
@@ -1792,8 +1799,15 @@ def run_codex(repo, role):
         and isinstance(node.func,ast.Attribute) and node.func.attr=="communicate")
     wait_call.keywords=[ast.keyword(arg="wrong",value=ast.Name(id="CODEX_RUN_TIMEOUT_SECONDS",ctx=ast.Load()))]
     ast.fix_missing_locations(r44c_timeout);ast.fix_missing_locations(r44c_keyword)
-    r44c_mutants=[analyze_candidate_tree(r44c_timeout),analyze_candidate_tree(r44c_keyword)]
-    r44c_mutants_ok=all(result["verdict"] is False and not result["unsupported"] for result in r44c_mutants)
+    timeout_result=analyze_candidate_tree(r44c_timeout);keyword_result=analyze_candidate_tree(r44c_keyword)
+    r44c_mutants_ok=(timeout_result["components"]["timeout"] is False
+        and all(timeout_result["components"][key]==r44c_base["components"][key]
+                for key in required_r44c_markers-{"timeout"})
+        and timeout_result["trace"]==r44c_base["trace"]
+        and keyword_result["components"]["cfg"] is False
+        and all(keyword_result["components"][key]==r44c_base["components"][key]
+                for key in required_r44c_markers-{"cfg"})
+        and keyword_result["trace"]==r44c_base["trace"])
     r44c_trystar_ok=True
     if isinstance(AST_TRY_STAR,type):
         r44c_star=analyze_candidate_tree(ast.parse("try:\n    pass\nexcept* Exception:\n    pass\n"))
@@ -3314,7 +3328,7 @@ def run_codex(repo, role):
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_R44C_ANALYZER_DEEP_TOTALITY_COMPAT", r44b_totality_ok,
-          "same analyzer reached timeout/CFG/helper/provenance/heap/try markers; malformed timeout/keyword and conditional TryStar reject without throw")
+          "invocation-local traces reached timeout/CFG/helper-provenance/heap/try; timeout and keyword mutants flipped only their target component; TryStar explicit unsupported")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")

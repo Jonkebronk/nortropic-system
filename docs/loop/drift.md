@@ -1247,3 +1247,9 @@ runtime can parse it. The unconditional source is now architecture-shaped and mu
 timeout guard, CFG, helper, provenance, heap and ordinary-try dispatch markers. Causal
 timeout-name/wrong-keyword mutants and conditional except* return structured rejection,
 never an exception; these effects remain rig-only and cannot credit ACTUAL_PRODUCT.
+
+R44D removes disconnected syntax-marker credit. Each analyzer invocation owns its own
+named component verdicts and counters, incremented only inside the timeout, CFG,
+helper/provenance, heap and ordinary-Try branches. The shaped baseline requires every
+component true and trace nonzero; causal mutants flip only their target component while
+unrelated components and traces stay identical. SELFTEST remains separate from product credit.
