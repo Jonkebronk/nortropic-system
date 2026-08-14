@@ -813,3 +813,9 @@ each family member. It adds a positive exactly-once provider-to-host ancestry an
 cleanup observation independent of tempfile API/prefix, and separate oversized sparse provider/host
 negatives at 256 MiB + 1 byte. This remains owner TEST_AUTHOR work only: no production implementation
 is present and H-032 must stay RED solely for the absent execution-family boundary.
+
+R4 replaces R3's first-matching protection mutation with an ordered launch trace spanning chmod,
+fchmod, complete member reads and actual Popen; both fresh reads must follow the final mode transition.
+Cleanup now retains every audited absent-at-event path anywhere and uses exact pre-seeding for system
+noise rather than location or basename exclusions. Both 256 MiB + 1 fixtures are valid executable
+programs whose unbounded capture effects are run and proven. No production byte is changed.
