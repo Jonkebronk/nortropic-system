@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import ast
 import builtins
 import fcntl
 import io
@@ -74,6 +75,7 @@ import subprocess
 import sys
 import threading
 import time
+import selectors
 
 source, authority_source, schema_source, work = map(Path, sys.argv[1:5])
 g20_emit_path = Path(sys.argv[5]) if sys.argv[5] else None
@@ -1261,10 +1263,196 @@ if mode == 'output_then_fail': sys.exit(17)
     def rejected_clean(case) -> bool:
         result, _capture, output_exists, canonical_exists, hostile_exists = case
         return not result[0] and result[2] == 1 and not output_exists and not canonical_exists and not hostile_exists
+
+    # R12 boundary: a fresh interpreter imports the exact candidate source and
+    # retains the genuine stdlib subprocess.Popen object.  Each behavior is
+    # intrinsic to a separately hashed provider authority; neither environment
+    # modes nor monkeypatch state crosses into the subject process.
+    r12_runner = work / "r12-real-popen-runner.py"
+    r12_runner.write_text("""import importlib.util,pathlib,sys\n"
+"source,repo=map(pathlib.Path,sys.argv[1:3])\n"
+"spec=importlib.util.spec_from_file_location('r12_exact_subject',source)\n"
+"mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)\n"
+"import subprocess\n"
+"print('R12_POPEN_TYPE='+subprocess.Popen.__module__+'.'+subprocess.Popen.__qualname__,flush=True)\n"
+"try:\n"
+" r=mod.run_codex(repo,repo,'TEST_AUTHOR','H032-R12')\n"
+" print('R12_OUTCOME=ADMITTED',flush=True)\n"
+"except Exception as exc:\n"
+" print('R12_OUTCOME=REJECTED:'+type(exc).__name__+':'+str(exc),flush=True)\n""", encoding="utf-8")
+    def r12_provider(case: str, release_root: Path) -> Path:
+        directory = work / f"r12-provider-{case}-{len(list(work.glob('r12-provider-*')))}"; directory.mkdir()
+        host = directory / "codex-code-mode-host"
+        host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8"); host.chmod(0o700)
+        program = directory / "provider"
+        payload = json.dumps({
+            "role":"TEST_AUTHOR","outcome":"READY","summary":"r12 causal value",
+            "changed_files":[],"blocking_findings":[],"tests":[],
+            "allowed_write_violation":False,"frozen_artifacts_modified":False,
+            "production_files_modified":False,"frozen_gate_ready":True,
+            "baseline_red_for_right_reason":True,"owner_decision_required":False,
+            "stop_reason":"NONE","next_action":"BUILD","next_task_id":"h-032",
+        }, separators=(",", ":"))
+        program.write_text("#!/usr/bin/python3\n" +
+            "import json,pathlib,subprocess,sys,time\n" +
+            f"case={case!r}; release=pathlib.Path({str(release_root)!r}); payload={payload!r}\n" +
+            "subprocess.run([str(pathlib.Path(sys.argv[0]).parent/'codex-code-mode-host')],check=True)\n" +
+            "out=pathlib.Path(sys.argv[sys.argv.index('-o')+1])\n" +
+            "if case=='escape':\n"
+            " print('R12_ESCAPE_SINK '+str(out),flush=True)\n"
+            " first=__import__('os').fork()\n"
+            " if first==0:\n"
+            "  second=__import__('os').fork()\n"
+            "  if second==0:\n"
+            "   __import__('os').setsid()\n"
+            "   while True:\n"
+            "    try: out.parent.mkdir(parents=True,exist_ok=True);out.write_text('late')\n"
+            "    except Exception: pass\n"
+            "    time.sleep(.1)\n"
+            "  __import__('os')._exit(0)\n"
+            " __import__('os').waitpid(first,0);time.sleep(3600)\n" +
+            "def emit(n,data):\n"
+            " out.write_text(data); print('R12_SINK_CLOSED %d %s'%(n,out),flush=True)\n"
+            " limit=time.monotonic()+15\n"
+            " while not (release/('release-%d'%n)).exists():\n"
+            "  if time.monotonic()>limit: raise SystemExit(71)\n"
+            "  time.sleep(.01)\n" +
+            "emit(1,payload)\n" +
+            "if case=='two':\n"
+            " value=json.loads(payload);value['summary']='r12 second';emit(2,json.dumps(value,separators=(',',':')))\n" +
+            "print(json.dumps({'type':'thread.started','thread_id':'r12-thread'}),flush=True)\n",
+            encoding="utf-8")
+        program.chmod(0o700)
+        return program
+    def r12_real_case(case: str, inject_promotion: bool = False,
+                      subject_source: Path = source):
+        release = work / f"r12-release-{case}"; release.mkdir()
+        fixture = r12_provider(case, release)
+        fixture_host = fixture.parent / "codex-code-mode-host"
+        case_repo = make_repo(str(fixture), sha256(fixture), str(fixture_host), sha256(fixture_host))
+        env = {key:value for key,value in os.environ.items()
+               if not key.startswith("H032_")}
+        proc = system_popen(["/usr/bin/python3", "-I", "-S", "-u", str(r12_runner),
+                             str(subject_source), str(case_repo)], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, env=env)
+        assert proc.stdout is not None
+        selector = selectors.DefaultSelector(); selector.register(proc.stdout, selectors.EVENT_READ)
+        identities=[]; outcome="NO_OUTCOME"; popen_type=""; canonical_absent=False
+        deadline=time.monotonic()+25
+        while time.monotonic()<deadline and proc.poll() is None:
+            events=selector.select(timeout=.25)
+            for key,_mask in events:
+                line=key.fileobj.readline().strip()
+                if line.startswith("R12_POPEN_TYPE="): popen_type=line.split("=",1)[1]
+                elif line.startswith("R12_SINK_CLOSED "):
+                    _,_,number,path_text=line.split(" ",3); sink=Path(path_text)
+                    raw=bounded_stable_result(sink); st=sink.stat()
+                    value=strict_json(raw.decode("utf-8"))
+                    identities.append((st.st_dev,st.st_ino,hashlib.sha256(raw).hexdigest(),
+                                       complete_schema_valid(value,schema_document)))
+                    runs=sorted((module.journal_root(case_repo)/"runs").iterdir())
+                    canonical=runs[-1]/"result.json"; canonical_absent=not canonical.exists()
+                    if inject_promotion: canonical.write_bytes(raw)
+                    (release/f"release-{number}").write_text("release")
+                elif line.startswith("R12_OUTCOME="): outcome=line.split("=",1)[1]
+        try: proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            try: proc.wait(timeout=2)
+            except subprocess.TimeoutExpired: proc.kill(); proc.wait()
+        for line in proc.stdout:
+            line=line.strip()
+            if line.startswith("R12_OUTCOME="): outcome=line.split("=",1)[1]
+        selector.close(); shutil.rmtree(release)
+        return outcome,popen_type,identities,canonical_absent
+    r12_once = r12_real_case("one")
+    r12_two = r12_real_case("two")
+    r12_promote = r12_real_case("one", True)
+    exact_source_text = source.read_text(encoding="utf-8")
+    read_anchor='json.loads(result.read_text(encoding="utf-8"))'
+    if exact_source_text.count(read_anchor) != 1:
+        raise RuntimeError("R12 read-helper variant anchor not unique")
+    read_replacements={
+        "fileio":"json.loads(__import__('io').FileIO(result,'r').read().decode('utf-8'))",
+        "raw":"json.loads(open(result,'rb',buffering=0).read().decode('utf-8'))",
+        "mmap":"json.loads(bytes(__import__('mmap').mmap(__import__('os').open(result,__import__('os').O_RDONLY),0,access=__import__('mmap').ACCESS_READ)).decode('utf-8'))",
+        "helper":"json.loads(result.open('rb').read().decode('utf-8'))",
+    }
+    read_variant_results={}
+    exact_process_sites=None
+    for name,replacement in read_replacements.items():
+        variant_text=exact_source_text.replace(read_anchor,replacement,1)
+        variant=work/f"r12-read-{name}-subject.py";variant.write_text(variant_text,encoding="utf-8")
+        read_variant_results[name]=r12_real_case("one",subject_source=variant)
+    if exact_source_text.count('"86400"') != 1:
+        raise RuntimeError("R12 timeout variant anchor not unique")
+    timeout_source_text = exact_source_text.replace('"86400"', '"1"', 1)
+    timeout_source = work / "r12-timeout-subject.py"
+    timeout_source.write_text(timeout_source_text, encoding="utf-8")
+    def process_sites(text):
+        tree=ast.parse(text)
+        return [(type(node).__name__,getattr(node,"lineno",0),node.func.attr)
+                for node in ast.walk(tree) if isinstance(node,ast.Call)
+                and isinstance(node.func,ast.Attribute) and node.func.attr in {"Popen","run"}]
+    read_variants_diff_ok=all(
+        process_sites(exact_source_text)==process_sites(
+            (work/f"r12-read-{name}-subject.py").read_text(encoding="utf-8"))
+        for name in read_replacements)
+    read_variants_actual_ok=(read_variants_diff_ok and all(
+        value[0]=="ADMITTED" and value[1]=="subprocess.Popen"
+        and len(value[2])==1 and value[2][0][3] and value[3]
+        for value in read_variant_results.values()))
+    timeout_variant_ok = (process_sites(exact_source_text) == process_sites(timeout_source_text)
+                          and len(timeout_source_text) == len(exact_source_text)-4)
+    def r12_escape_case():
+        fixture=r12_provider("escape",work/"r12-unused-release")
+        host=fixture.parent/"codex-code-mode-host"
+        case_repo=make_repo(str(fixture),sha256(fixture),str(host),sha256(host))
+        env={key:value for key,value in os.environ.items() if not key.startswith("H032_")}
+        proc=system_popen(["/usr/bin/python3","-I","-S","-u",str(r12_runner),
+                           str(timeout_source),str(case_repo)],stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT,text=True,env=env)
+        assert proc.stdout is not None
+        selector=selectors.DefaultSelector();selector.register(proc.stdout,selectors.EVENT_READ)
+        sink=None;outcome="NO_OUTCOME";deadline=time.monotonic()+8
+        while time.monotonic()<deadline and proc.poll() is None:
+            for key,_mask in selector.select(timeout=.2):
+                line=key.fileobj.readline().strip()
+                if line.startswith("R12_ESCAPE_SINK "): sink=Path(line.split(" ",1)[1])
+                elif line.startswith("R12_OUTCOME="): outcome=line.split("=",1)[1]
+        bounded=proc.poll() is not None
+        if not bounded: proc.terminate()
+        try: proc.wait(timeout=2)
+        except subprocess.TimeoutExpired: proc.kill();proc.wait()
+        stable_absent=True
+        if sink is not None:
+            for _ in range(8):
+                time.sleep(.25)
+                if sink.exists() or sink.parent.exists(): stable_absent=False
+        ps=subprocess.run(["/bin/ps","-axo","pid=,command="],text=True,
+                          stdout=subprocess.PIPE,check=True).stdout
+        for line in ps.splitlines():
+            if str(fixture) in line:
+                try: os.kill(int(line.split(None,1)[0]),signal.SIGKILL)
+                except (ProcessLookupError,ValueError): pass
+        if sink is not None and sink.parent.exists(): shutil.rmtree(sink.parent)
+        selector.close()
+        return bounded,outcome,sink is not None,stable_absent
+    r12_escape=r12_escape_case()
+    r12_real_boundary_ok = (
+        r12_once[0] == "ADMITTED" and r12_once[1] == "subprocess.Popen"
+        and len(r12_once[2]) == 1 and r12_once[2][0][3] and r12_once[3]
+        and r12_two[0].startswith("REJECTED:") and len(r12_two[2]) == 2
+        and len({item[2] for item in r12_two[2]}) == 2
+        and r12_promote[0].startswith("REJECTED:") and len(r12_promote[2]) == 1
+        and r12_promote[3] and timeout_variant_ok and read_variants_actual_ok
+        and r12_escape[0] and r12_escape[1].startswith("REJECTED:")
+        and r12_escape[2] and r12_escape[3])
     result_delivery_ok = (
         valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
+        and r12_real_boundary_ok
         and effect_once_ok and effect_two_values_caught and effect_two_promotions_caught
         and effect_sink_attacks_caught
         and oversized_positive[0][0]
@@ -1283,7 +1471,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
