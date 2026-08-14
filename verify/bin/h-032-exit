@@ -1,0 +1,727 @@
+#!/bin/bash -p
+# h-032-exit — fresh owner-frozen Codex executable/provider identity boundary
+#
+# Predicted controls before execution:
+#   valid locked bytes under an arbitrary basename -> admitted through a private snapshot
+#   PATH shadow, relative path, symlink, directory, non-executable and hash drift -> rejected
+#   source mutation by the launched fixture -> running image remains the verified snapshot
+
+set -u
+umask 077
+unset CDPATH ENV BASH_ENV GLOBIGNORE PYTHONHOME PYTHONPATH
+export PATH="/usr/bin:/bin:/opt/homebrew/bin"
+
+SOURCE_PATH="${BASH_SOURCE[0]}"
+case "$SOURCE_PATH" in
+  /*) ;;
+  *) SOURCE_PATH="$(/bin/pwd -P)/$SOURCE_PATH" ;;
+esac
+if [[ -L "$SOURCE_PATH" ]]; then
+  echo "ODÖMBART K0 — grindens entry är en symlink"
+  exit 2
+fi
+SCRIPT_DIR="$(cd -P -- "$(/usr/bin/dirname -- "$SOURCE_PATH")" 2>/dev/null && /bin/pwd -P)" || exit 2
+ROOT="$(cd -P -- "$SCRIPT_DIR/../.." 2>/dev/null && /bin/pwd -P)" || exit 2
+if [[ ! "$SOURCE_PATH" -ef "$ROOT/verify/bin/h-032-exit" ]]; then
+  echo "ODÖMBART K0 — icke-kanonisk grindentry"
+  exit 2
+fi
+SOURCE="$ROOT/scripts/nortropic-codex-autopilot.py"
+AUTHORITY="$ROOT/config/codex-provider-identity.json"
+SCHEMA="$ROOT/docs/loop/codex-autopilot-report.schema.json"
+WORK="$(/usr/bin/mktemp -d /private/tmp/nortropic-h032.XXXXXX)" || exit 2
+case "$WORK" in /private/tmp/nortropic-h032.*) ;; *) echo "ODÖMBART K0 — osäker tempidentitet"; exit 2;; esac
+cleanup() {
+  cleanup_rc=$?
+  trap - EXIT HUP INT TERM
+  case "${WORK:-}" in
+    /private/tmp/nortropic-h032.*) /bin/rm -rf -- "$WORK" || cleanup_rc=2 ;;
+    *) cleanup_rc=2 ;;
+  esac
+  exit "$cleanup_rc"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+G20_EMIT=""
+if [[ $# -gt 0 ]]; then
+  [[ $# -eq 2 && "$1" == "--emit-g20-evidence" ]] || {
+    echo "ODÖMBART K0 — användning: h-032-exit [--emit-g20-evidence <path>]"
+    exit 2
+  }
+  G20_EMIT="$2"
+fi
+
+/usr/bin/python3 -I -S - "$SOURCE" "$AUTHORITY" "$SCHEMA" "$WORK" "$G20_EMIT" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import builtins
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+
+source, authority_source, schema_source, work = map(Path, sys.argv[1:5])
+g20_emit_path = Path(sys.argv[5]) if sys.argv[5] else None
+repo = source.parents[1]
+task_spec = repo / "specs/tasks.spec.json"
+h033_gate = repo / "verify/bin/h-033-exit"
+checks: list[tuple[str, bool, str]] = []
+EXPECTED_PROVIDER_PATH = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex")
+EXPECTED_PROVIDER_SHA256 = "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37"
+GIT = "/usr/bin/git"
+
+def check(key: str, ok: bool, detail: str) -> None:
+    checks.append((key, ok, detail))
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+class DuplicateKey(ValueError):
+    pass
+
+def strict_json(raw: str):
+    def pairs(items):
+        out = {}
+        for key, value in items:
+            if key in out:
+                raise DuplicateKey(key)
+            out[key] = value
+        return out
+    return json.loads(raw, object_pairs_hook=pairs)
+
+def authority_shape(raw: str) -> tuple[bool, str]:
+    try:
+        value = strict_json(raw)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}:{exc}"
+    keys = {"schema_version", "provider", "executable_path", "executable_sha256"}
+    if not isinstance(value, dict) or set(value) != keys:
+        return False, "top-level/keys"
+    path = value["executable_path"]
+    digest = value["executable_sha256"]
+    ok = (
+        type(value["schema_version"]) is int and value["schema_version"] == 1
+        and type(value["provider"]) is str and value["provider"] == "openai-codex"
+        and type(path) is str and bool(path) and Path(path).is_absolute()
+        and type(digest) is str and len(digest) == 64
+        and digest == digest.lower() and all(c in "0123456789abcdef" for c in digest)
+    )
+    return ok, "exact" if ok else "value/type"
+
+def sh(*argv: str, cwd: Path | None = None) -> str:
+    if not argv or argv[0] != GIT:
+        raise RuntimeError("judge helper permits only exact system Git")
+    p = subprocess.run(argv, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if p.returncode:
+        raise RuntimeError(f"rc={p.returncode}: {' '.join(argv)}\n{p.stdout}")
+    return p.stdout
+
+try:
+    # Current-authority lifecycle. Historical h-032 candidates are design
+    # evidence only; this exact row must follow the published h-033 chain.
+    spec_document = strict_json(task_spec.read_text(encoding="utf-8"))
+    tasks = spec_document.get("tasks", []) if isinstance(spec_document, dict) else []
+    def h032_row_valid(rows) -> bool:
+        hits = [row for row in rows if isinstance(row, dict) and row.get("id") == "h-032"]
+        if len(hits) != 1:
+            return False
+        row = hits[0]
+        return (
+            row.get("slice") == "H032_EXACT_CODEX_PROVIDER_IDENTITY"
+            and row.get("authority_class") == "ordinary"
+            and row.get("depends_on") == ["h-033"]
+            and row.get("exit_test") == "verify/bin/h-032-exit"
+            and row.get("allowed_write") == [
+                "scripts/nortropic-codex-autopilot.py",
+                "docs/05-beslutslogg.md",
+                "docs/loop/drift.md",
+            ]
+            and row.get("owner_author_allowed_write") == []
+        )
+    check("F_H032_EXACT_TASK", h032_row_valid(tasks), "current task identity")
+    h033 = [row for row in tasks if isinstance(row, dict) and row.get("id") == "h-033"]
+    check("F_H033_PUBLISHED_DEPENDENCY", len(h033) == 1
+          and h033[0].get("exit_test") == "verify/bin/h-033-exit"
+          and h033_gate.is_file(), f"h033_rows={len(h033)} gate={h033_gate.is_file()}")
+    check("J_H032_ABSENT_REJECT", not h032_row_valid(
+          [row for row in tasks if not isinstance(row, dict) or row.get("id") != "h-032"]),
+          "absence must reject")
+    row = next(row for row in tasks if isinstance(row, dict) and row.get("id") == "h-032")
+    check("J_H032_DUPLICATE_REJECT", not h032_row_valid(tasks + [dict(row)]),
+          "duplicate must reject")
+    for name, key, value in (
+        ("WRONG_DEPENDENCY", "depends_on", ["h-017"]),
+        ("WRONG_GATE", "exit_test", "verify/bin/h-031-exit"),
+        ("WRONG_AUTHORITY", "authority_class", "owner_authority"),
+    ):
+        mutant = []
+        for item in tasks:
+            changed = dict(item) if isinstance(item, dict) else item
+            if isinstance(changed, dict) and changed.get("id") == "h-032":
+                changed[key] = value
+            mutant.append(changed)
+        check("J_H032_" + name + "_REJECT", not h032_row_valid(mutant), key)
+
+    authority_lstat = authority_source.lstat()
+    authority_raw = authority_source.read_text(encoding="utf-8")
+    shape_ok, shape_detail = authority_shape(authority_raw)
+    authority = strict_json(authority_raw)
+    exact_keys = {"schema_version", "provider", "executable_path", "executable_sha256"}
+    apath = Path(authority.get("executable_path", ""))
+    digest = authority.get("executable_sha256", "")
+    authority_ok = (
+        shape_ok and set(authority) == exact_keys
+        and authority.get("schema_version") == 1
+        and authority.get("provider") == "openai-codex"
+        and apath == EXPECTED_PROVIDER_PATH and digest == EXPECTED_PROVIDER_SHA256
+        and stat.S_ISREG(authority_lstat.st_mode) and not authority_source.is_symlink()
+        and apath.is_absolute()
+        and isinstance(digest, str) and len(digest) == 64
+        and digest == digest.lower() and all(c in "0123456789abcdef" for c in digest)
+        and apath.exists() and not apath.is_symlink() and apath.is_file()
+        and os.access(apath, os.X_OK) and sha256(apath) == digest
+    )
+    check("K0", authority_ok, f"shape={shape_detail} provider={authority.get('provider')} path={apath} hash_match={apath.is_file() and sha256(apath) == digest}")
+
+    base = work / "base"; base.mkdir()
+    sh(GIT, "init", "-q", cwd=base)
+    sh(GIT, "config", "user.name", "h032-gate", cwd=base)
+    sh(GIT, "config", "user.email", "h032@nortropic.invalid", cwd=base)
+    schema = base / "docs/loop/codex-autopilot-report.schema.json"; schema.parent.mkdir(parents=True)
+    shutil.copyfile(schema_source, schema)
+    (base / "anchor").write_text("h032\n", encoding="utf-8")
+    sh(GIT, "add", ".", cwd=base); sh(GIT, "commit", "-qm", "fixture", cwd=base)
+
+    provider_dir = work / "providers"; provider_dir.mkdir()
+    provider = provider_dir / "totally-renamed-agent"
+    capture = work / "capture.json"
+    provider.write_text("""#!/usr/bin/env python3
+import hashlib,json,os,pathlib,subprocess,sys
+self_path=pathlib.Path(sys.argv[0]); root=self_path.parent
+before=hashlib.sha256(self_path.read_bytes()).hexdigest()
+def op(argv):
+    return subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode
+attacks={
+ 'write':op(['/bin/sh','-c','echo x >> "$1"','sh',str(self_path)]),
+ 'chmod':op(['/bin/chmod','700',str(self_path)]),
+ 'unlink':op(['/bin/rm','-f',str(self_path)]),
+ 'rename':op(['/bin/mv',str(self_path),str(root/'moved-provider')]),
+ 'create':op(['/bin/sh','-c','echo x > "$1"','sh',str(root/'replacement-provider')]),
+ 'parent_rename':op(['/bin/mv',str(root),str(root)+'-moved']),
+}
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'attacks':attacks}))
+args=sys.argv[1:]; out=pathlib.Path(args[args.index('-o')+1])
+out.write_text(json.dumps({'role':'TEST_AUTHOR','outcome':'READY','owner_decision_required':False,'blocking_findings':[]}))
+print(json.dumps({'type':'thread.started','thread_id':'h032'}))
+""", encoding="utf-8")
+    provider.chmod(0o700)
+    good_bytes = provider.read_bytes(); good_hash = hashlib.sha256(good_bytes).hexdigest()
+
+    path_shadow = work / "path-shadow"; path_shadow.mkdir()
+    shadow_marker = work / "PATH_SHADOW_RAN"
+    shadow = path_shadow / "codex"
+    shadow.write_text(f"#!/bin/sh\ntouch '{shadow_marker}'\nexit 88\n", encoding="utf-8"); shadow.chmod(0o700)
+    old_path = os.environ.get("PATH", "")
+    os.environ.update(PATH=str(path_shadow) + os.pathsep + old_path,
+                      H032_CAPTURE=str(capture), H032_LOCKED_SOURCE=str(provider))
+
+    counter = 0
+    def make_repo(path_value: str, hash_value: str = good_hash) -> Path:
+        nonlocal_counter[0] += 1
+        repo = work / f"repo-{nonlocal_counter[0]}"
+        shutil.copytree(base, repo)
+        cfg = repo / "config/codex-provider-identity.json"; cfg.parent.mkdir(parents=True)
+        cfg.write_text(json.dumps({"schema_version":1,"provider":"openai-codex",
+                                   "executable_path":path_value,"executable_sha256":hash_value}), encoding="utf-8")
+        return repo
+    def make_raw_repo(raw: str) -> Path:
+        repo = make_repo(str(provider))
+        (repo / "config/codex-provider-identity.json").write_text(raw, encoding="utf-8")
+        return repo
+    nonlocal_counter = [counter]
+
+    spec = importlib.util.spec_from_file_location("h032_subject", source)
+    if spec is None or spec.loader is None: raise RuntimeError("cannot import subject")
+    module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
+    run_seq = [0]
+    original_now_id = module.now_id
+    def fixture_now_id():
+        run_seq[0] += 1
+        return f"{original_now_id()}-{run_seq[0]:04d}"
+    module.now_id = fixture_now_id
+
+    def starts(repo: Path) -> int:
+        p = module.journal_root(repo) / "events.jsonl"
+        if not p.exists(): return 0
+        return sum(json.loads(x).get("event") == "AGENT_START" for x in p.read_text().splitlines() if x.strip())
+
+    # H-032 owns only provider launch selection. The actual production generic
+    # dispatcher must continue to execute Git, GitHub and arbitrary fixed
+    # non-provider controller helpers without creating AGENT_START.
+    git_effect = module.run([GIT, "--version"], cwd=base, check=False)
+    check("K_NONPROVIDER_GIT_BOUNDARY", git_effect.rc == 0
+          and git_effect.out.startswith("git version ") and starts(base) == 0,
+          f"rc={git_effect.rc} out={git_effect.out.strip()} starts={starts(base)}")
+    gh_path = shutil.which("gh")
+    gh_effect = module.run([gh_path, "--version"], cwd=base, check=False) if gh_path else None
+    check("K_NONPROVIDER_GITHUB_BOUNDARY", gh_effect is not None and gh_effect.rc == 0
+          and "gh version" in gh_effect.out and starts(base) == 0,
+          f"path={gh_path} result={gh_effect} starts={starts(base)}")
+    generic_marker = work / "generic-controller-effect"
+    generic = work / "generic-controller-helper"
+    generic.write_text("#!/bin/sh\nprintf '%s\\n' \"$2\" >\"$1\"\nprintf 'GENERIC_OK\\n'\n", encoding="utf-8")
+    generic.chmod(0o700)
+    generic_effect = module.run([str(generic), str(generic_marker), "exact-token"], cwd=base, check=False)
+    check("K_NONPROVIDER_GENERIC_EFFECT", generic_effect.rc == 0
+          and generic_effect.out == "GENERIC_OK\n"
+          and generic_marker.read_text(encoding="utf-8") == "exact-token\n"
+          and starts(base) == 0,
+          f"rc={generic_effect.rc} out={generic_effect.out!r} marker={generic_marker.exists()} starts={starts(base)}")
+
+    def attempt(repo: Path) -> tuple[bool, str, int, int]:
+        before = starts(repo); cap_before = capture.stat().st_mtime_ns if capture.exists() else -1
+        try:
+            module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
+            outcome = (True, "ADMITTED")
+        except Exception as exc:
+            outcome = (False, f"{type(exc).__name__}:{exc}")
+        cap_after = capture.stat().st_mtime_ns if capture.exists() else -1
+        return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before)
+
+    valid_repo = make_repo(str(provider))
+    valid = attempt(valid_repo)
+    cap = json.loads(capture.read_text()) if capture.exists() else {}
+    argv0 = Path(cap.get("argv0", ""))
+    check("K1", valid[0] and valid[2] == 1, f"valid={valid}")
+    check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
+    check("K3", argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash,
+          f"source={provider} argv0={argv0} hash={cap.get('sha256')}")
+    attacks = cap.get("attacks", {})
+    check("K4", cap.get("sha256") == good_hash and attacks and all(v != 0 for v in attacks.values()),
+          f"executed_sha={cap.get('sha256')} namespace_attacks={attacks}")
+    check("K5", not argv0.exists(), f"snapshot_exists_after={argv0.exists()}")
+
+    # Restore source fixture for independent negative controls.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    cases: list[tuple[str, Path]] = []
+    cases.append(("RELATIVE", make_repo("codex")))
+    link = provider_dir / "linked-codex"; link.symlink_to(provider)
+    cases.append(("SYMLINK", make_repo(str(link))))
+    cases.append(("DIRECTORY", make_repo(str(provider_dir), good_hash)))
+    noexec = provider_dir / "noexec"; noexec.write_bytes(good_bytes); noexec.chmod(0o600)
+    cases.append(("NONEXEC", make_repo(str(noexec))))
+    drift = provider_dir / "drift"; drift.write_bytes(good_bytes + b"\n# drift\n"); drift.chmod(0o700)
+    cases.append(("HASH_DRIFT", make_repo(str(drift))))
+    missing_repo = make_repo(str(provider)); (missing_repo / "config/codex-provider-identity.json").unlink()
+    cases.append(("MISSING_AUTHORITY", missing_repo))
+    malformed_repo = make_repo(str(provider)); (malformed_repo / "config/codex-provider-identity.json").write_text("{}")
+    cases.append(("MALFORMED_AUTHORITY", malformed_repo))
+
+    authority_negative = {
+        "MISSING_KEY": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider)}),
+        "UNEXPECTED_KEY": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":good_hash,"extra":1}),
+        "TOPLEVEL_TYPE": "[]",
+        "SCHEMA_WRONG_TYPE": json.dumps({"schema_version":True,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":good_hash}),
+        "PROVIDER_WRONG_VALUE": json.dumps({"schema_version":1,"provider":"other","executable_path":str(provider),"executable_sha256":good_hash}),
+        "PATH_WRONG_TYPE": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":7,"executable_sha256":good_hash}),
+        "SHA_WRONG_TYPE": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":7}),
+        "EMPTY_PATH": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":"","executable_sha256":good_hash}),
+        "EMPTY_SHA": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":""}),
+        "SHA_WRONG_LENGTH": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":"a"*63}),
+        "SHA_NONHEX": json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),"executable_sha256":"g"*64}),
+        "DUPLICATE_PATH": '{"schema_version":1,"provider":"openai-codex","executable_path":"/first","executable_path":'+json.dumps(str(provider))+',"executable_sha256":"'+good_hash+'"}',
+        "DUPLICATE_SHA": '{"schema_version":1,"provider":"openai-codex","executable_path":'+json.dumps(str(provider))+',"executable_sha256":"'+good_hash+'","executable_sha256":"'+good_hash+'"}',
+        "BROKEN_JSON": "{",
+    }
+    for name, raw in authority_negative.items():
+        shape, why = authority_shape(raw)
+        check("J_" + name, not shape, f"strict_shape={shape}:{why}")
+        cases.append((name, make_raw_repo(raw)))
+
+    results = {}
+    for name, repo in cases:
+        result = attempt(repo); results[name] = result
+        check("K_" + name, not result[0] and result[2] == 0 and result[3] == 0, f"result={result}")
+
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    hardlink = provider_dir / "hardlink-provider"; os.link(provider, hardlink)
+    hardlink_result = attempt(make_repo(str(hardlink)))
+    check("K_HARDLINK_ALLOWED", hardlink_result[0], f"result={hardlink_result}")
+
+    # Fresh validation must occur at every launch in the same imported process.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    fresh_provider_repo = make_repo(str(provider))
+    first = attempt(fresh_provider_repo)
+    provider.write_bytes(good_bytes + b"\n# provider drift\n"); provider.chmod(0o700)
+    second = attempt(fresh_provider_repo)
+    check("K_FRESH_PROVIDER", first[0] and not second[0] and second[2] == 0 and second[3] == 0,
+          f"first={first} second_after_drift={second}")
+
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    fresh_authority_repo = make_repo(str(provider))
+    first_authority = attempt(fresh_authority_repo)
+    (fresh_authority_repo / "config/codex-provider-identity.json").write_text(
+        json.dumps({"schema_version":1,"provider":"openai-codex","executable_path":str(provider),
+                    "executable_sha256":"0"*64}), encoding="utf-8")
+    second_authority = attempt(fresh_authority_repo)
+    check("K_FRESH_AUTHORITY", first_authority[0] and not second_authority[0]
+          and second_authority[2] == 0 and second_authority[3] == 0,
+          f"first={first_authority} second_after_authority_drift={second_authority}")
+
+    # GR-01: replace the authority pathname immediately AFTER an opened source
+    # object has been returned. A safe implementation continues from that open
+    # object; a path-reopen implementation observes B and cannot execute it.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    source_b = provider_dir / "source-b"
+    source_b.write_text("#!/bin/sh\ntouch \"$H032_B_EXECUTED\"\nexit 0\n", encoding="utf-8")
+    source_b.chmod(0o700)
+    b_marker = work / "UNVERIFIED_B_EXECUTED"
+    os.environ["H032_B_EXECUTED"] = str(b_marker)
+    race_repo = make_repo(str(provider))
+    original_builtin_open, original_io_open, original_os_open = builtins.open, io.open, os.open
+    swapped = [False]
+    def swap_after_open(file, *args, **kwargs):
+        f = original_io_open(file, *args, **kwargs)
+        try: same = Path(file) == provider
+        except TypeError: same = False
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if same and "r" in str(mode) and not swapped[0]:
+            os.replace(source_b, provider); swapped[0] = True
+        return f
+    def swap_after_builtin_open(file, *args, **kwargs):
+        f = original_builtin_open(file, *args, **kwargs)
+        try: same = Path(file) == provider
+        except TypeError: same = False
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if same and "r" in str(mode) and not swapped[0]:
+            os.replace(source_b, provider); swapped[0] = True
+        return f
+    def swap_after_os_open(file, flags, *args, **kwargs):
+        fd = original_os_open(file, flags, *args, **kwargs)
+        try: same = Path(file) == provider
+        except TypeError: same = False
+        if same and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR) and not swapped[0]:
+            os.replace(source_b, provider); swapped[0] = True
+        return fd
+    builtins.open, io.open, os.open = swap_after_builtin_open, swap_after_open, swap_after_os_open
+    try:
+        race_result = attempt(race_repo)
+    finally:
+        builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
+    race_cap = json.loads(capture.read_text()) if capture.exists() else {}
+    check("K_SOURCE_PATH_REOPEN_RACE", swapped[0] and race_result[0]
+          and race_cap.get("sha256") == good_hash and not b_marker.exists(),
+          f"path_replaced={swapped[0]} result={race_result} executed_sha={race_cap.get('sha256')} b={b_marker.exists()}")
+
+    # A regular-looking path swapped to a symlink after path-stat must not gain
+    # trust. This requires the regular-file decision on the opened object plus
+    # no-follow authority-path semantics.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    same_bytes_target = provider_dir / "same-bytes-target"
+    same_bytes_target.write_bytes(good_bytes); same_bytes_target.chmod(0o700)
+    opened_identity_repo = make_repo(str(provider))
+    original_stat, original_lstat, original_fstat = os.stat, os.lstat, os.fstat
+    stat_swapped = [False]
+    opened_object_regular_checks = []
+    provider_identity = original_stat(provider, follow_symlinks=False)
+    target_text = os.fspath(provider)
+    def swap_after_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if os.fspath(path) == target_text and not stat_swapped[0]:
+            provider.unlink(); provider.symlink_to(same_bytes_target); stat_swapped[0] = True
+        return result
+    def swap_after_lstat(path, *args, **kwargs):
+        result = original_lstat(path, *args, **kwargs)
+        if os.fspath(path) == target_text and not stat_swapped[0]:
+            provider.unlink(); provider.symlink_to(same_bytes_target); stat_swapped[0] = True
+        return result
+    def observe_fstat(fd, *args, **kwargs):
+        result = original_fstat(fd, *args, **kwargs)
+        if (result.st_dev, result.st_ino) == (provider_identity.st_dev, provider_identity.st_ino):
+            opened_object_regular_checks.append(
+                stat.S_ISREG(result.st_mode))
+        return result
+    os.stat, os.lstat, os.fstat = swap_after_stat, swap_after_lstat, observe_fstat
+    try:
+        opened_identity_result = attempt(opened_identity_repo)
+    finally:
+        os.stat, os.lstat, os.fstat = original_stat, original_lstat, original_fstat
+    opened_identity_ok = (bool(opened_object_regular_checks)
+                          and all(opened_object_regular_checks)
+                          and ((stat_swapped[0] and not opened_identity_result[0]
+                                and opened_identity_result[2] == 0)
+                               or (not stat_swapped[0] and opened_identity_result[0])))
+    check("K_OPENED_REGULAR_IDENTITY", opened_identity_ok,
+          f"opened_regular_checks={opened_object_regular_checks} path_swapped_to_symlink={stat_swapped[0]} result={opened_identity_result}")
+    if provider.is_symlink(): provider.unlink()
+
+    # GR-02/GR-05: mutate the first private executable when it is opened for
+    # final reading. If no final read occurs, mutate it at the spawn boundary.
+    # Correct code rejects and removes every observed private snapshot/root.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    bad_snapshot_bytes = b"#!/bin/sh\ntouch \"$H032_BAD_SNAPSHOT_EXECUTED\"\nexit 0\n"
+    bad_marker = work / "BAD_SNAPSHOT_EXECUTED"
+    os.environ["H032_BAD_SNAPSHOT_EXECUTED"] = str(bad_marker)
+    rehash_repo = make_repo(str(provider))
+    mutated, snapshots = [False], []
+    original_builtin_open, original_io_open, original_os_open, original_popen = builtins.open, io.open, os.open, subprocess.Popen
+    def is_private_executable(file) -> bool:
+        try:
+            p = Path(file)
+            if p == provider or not p.is_file() or not os.access(p, os.X_OK): return False
+            h = hashlib.sha256()
+            with original_io_open(p, "rb") as f: h.update(f.read())
+            return h.hexdigest() == good_hash
+        except Exception:
+            return False
+    def corrupt(p: Path) -> None:
+        with original_io_open(p, "wb") as f: f.write(bad_snapshot_bytes)
+        p.chmod(0o700)
+    def mutate_before_rehash(file, *args, **kwargs):
+        try: candidate = is_private_executable(file)
+        except Exception: candidate = False
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if candidate and "r" in str(mode) and not mutated[0]:
+            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
+        return original_io_open(file, *args, **kwargs)
+    def mutate_before_rehash_builtin(file, *args, **kwargs):
+        candidate = is_private_executable(file)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if candidate and "r" in str(mode) and not mutated[0]:
+            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
+        return original_builtin_open(file, *args, **kwargs)
+    def mutate_before_rehash_os(file, flags, *args, **kwargs):
+        if not mutated[0] and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR) and is_private_executable(file):
+            p = Path(file); snapshots.append(p); corrupt(p); mutated[0] = True
+        return original_os_open(file, flags, *args, **kwargs)
+    def mutate_if_no_rehash(argv, *args, **kwargs):
+        if not mutated[0]:
+            for item in argv if isinstance(argv, (list, tuple)) else [argv]:
+                if is_private_executable(item):
+                    p = Path(item); snapshots.append(p); corrupt(p); mutated[0] = True; break
+        return original_popen(argv, *args, **kwargs)
+    builtins.open, io.open, os.open, subprocess.Popen = mutate_before_rehash_builtin, mutate_before_rehash, mutate_before_rehash_os, mutate_if_no_rehash
+    try:
+        rehash_result = attempt(rehash_repo)
+    finally:
+        builtins.open, io.open, os.open, subprocess.Popen = original_builtin_open, original_io_open, original_os_open, original_popen
+    residue = [str(p) for p in snapshots if p.exists() or p.parent.exists()]
+    check("K_FINAL_SNAPSHOT_REHASH", mutated[0] and not rehash_result[0]
+          and rehash_result[2] == 0 and not bad_marker.exists(),
+          f"mutated={mutated[0]} result={rehash_result} bad_executed={bad_marker.exists()}")
+    check("K_POST_SNAPSHOT_FAILURE_CLEANUP", mutated[0] and not residue,
+          f"observed={[str(p) for p in snapshots]} residue={residue}")
+
+    # Authority is one byte observation: replacing the document immediately
+    # after its read handle is returned must not mix old path with new digest.
+    provider.write_bytes(good_bytes); provider.chmod(0o700)
+    coherent_repo = make_repo(str(provider))
+    coherent_cfg = coherent_repo / "config/codex-provider-identity.json"
+    replacement_cfg = coherent_repo / "config/replacement.json"
+    replacement_cfg.write_text(json.dumps({"schema_version":1,"provider":"openai-codex",
+        "executable_path":str(provider),"executable_sha256":"0"*64}), encoding="utf-8")
+    original_builtin_open, original_io_open, original_os_open = builtins.open, io.open, os.open
+    authority_swapped = [False]
+    def authority_read_swap(file, *args, **kwargs):
+        f = original_io_open(file, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        try: same = Path(file) == coherent_cfg
+        except TypeError: same = False
+        if same and "r" in str(mode) and not authority_swapped[0]:
+            os.replace(replacement_cfg, coherent_cfg); authority_swapped[0] = True
+        return f
+    def authority_builtin_swap(file, *args, **kwargs):
+        f = original_builtin_open(file, *args, **kwargs)
+        mode = args[0] if args else kwargs.get("mode", "r")
+        try: same = Path(file) == coherent_cfg
+        except TypeError: same = False
+        if same and "r" in str(mode) and not authority_swapped[0]:
+            os.replace(replacement_cfg, coherent_cfg); authority_swapped[0] = True
+        return f
+    def authority_os_swap(file, flags, *args, **kwargs):
+        fd = original_os_open(file, flags, *args, **kwargs)
+        try: same = Path(file) == coherent_cfg
+        except TypeError: same = False
+        if same and not (flags & os.O_WRONLY) and not (flags & os.O_RDWR) and not authority_swapped[0]:
+            os.replace(replacement_cfg, coherent_cfg); authority_swapped[0] = True
+        return fd
+    builtins.open, io.open, os.open = authority_builtin_swap, authority_read_swap, authority_os_swap
+    try:
+        coherent_result = attempt(coherent_repo)
+    finally:
+        builtins.open, io.open, os.open = original_builtin_open, original_io_open, original_os_open
+    check("K_COHERENT_AUTHORITY", authority_swapped[0] and coherent_result[0],
+          f"document_replaced_after_open={authority_swapped[0]} result={coherent_result}")
+
+    # GR-02/GR-06 owner-runner control. Evidence may be consumed only when
+    # every immutable input equals THIS checked-out candidate.
+    g20 = work / "g20"; trust = g20 / "trust"; ws = g20 / "ws"
+    trust.mkdir(parents=True); ws.mkdir()
+    protected = trust / "snapshot"; protected.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    protected.chmod(0o500); trust.chmod(0o500)
+    envelope = g20 / "envelope.json"; envelope.write_text('{"task_id":"h-032"}\n', encoding="utf-8")
+    launcher = source.parents[1] / "controller/launch/cli"
+    task_spec = source.parents[1] / "specs/tasks.spec.json"
+    gate_path = source.parents[1] / "verify/bin/h-032-exit"
+    candidate_sha = sh(GIT, "rev-parse", "HEAD", cwd=source.parents[1]).strip()
+    binding = {"schema_version": 1, "task": "h-032", "candidate_sha": candidate_sha,
+               "task_spec_sha256": sha256(task_spec), "h032_gate_sha256": sha256(gate_path),
+               "g20_probe_identity": "controller/launch/cli:" + sha256(launcher)}
+    attack = ('set +e; echo x >> "$1/snapshot"; echo WRITE=$?; '
+              'chmod 700 "$1/snapshot"; echo CHMOD=$?; '
+              'unlink "$1/snapshot"; echo UNLINK=$?; '
+              'mv "$1/snapshot" "$1/moved"; echo RENAME=$?; '
+              'echo y > "$1/replacement"; echo CREATE=$?; '
+              'mv "$1" "$1-moved"; echo PARENT_RENAME=$?')
+    env = dict(os.environ, NORTROPIC_TRUST_ROOT=str(trust))
+    g20_odom = False
+    g20_run = subprocess.run([str(launcher), "run", str(ws), str(envelope), "30", "--",
+                              "/bin/sh", "-c", attack, "sh", str(trust)],
+                             cwd=source.parents[1], env=env, text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    g20_out = g20_run.stdout
+    if g20_run.returncode == 3 and "sandbox_apply: Operation not permitted" in g20_out:
+        g20_odom, g20_ok = True, False
+        check("K_G20_NAMESPACE", False, "ODÖMBART nested sandbox-exec förbjuden; owner-runner krävs")
+    else:
+        denial_lines = {f"{name}=1" for name in
+                        ("WRITE","CHMOD","UNLINK","RENAME","CREATE","PARENT_RENAME")}
+        g20_ok = (g20_run.returncode == 0 and denial_lines.issubset(set(g20_out.splitlines()))
+                  and protected.exists() and not (trust / "replacement").exists())
+        check("K_G20_NAMESPACE", g20_ok,
+              f"rc={g20_run.returncode} lines={g20_out.strip().replace(chr(10), '|')} snapshot={protected.exists()} replacement={(trust/'replacement').exists()}")
+        if g20_ok:
+            evidence = dict(binding, g20_effect_result="PASS", write_denied="YES",
+                chmod_denied="YES", unlink_denied="YES", rename_denied="YES",
+                create_replacement_denied="YES", parent_rename_denied="YES",
+                launch_succeeded="YES", snapshot_survived="YES", replacement_absent="YES")
+            print("G20_BOUND_EVIDENCE=" + json.dumps(evidence, sort_keys=True, separators=(",", ":")))
+            if g20_emit_path is not None:
+                g20_emit_path.write_text(json.dumps(evidence, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    trust.chmod(0o700)
+
+    # Judge self-controls: one defect per disposable effect mutant. These do
+    # not replace the real subject checks above; they prove the oracles have
+    # opposite outcomes for the shallow unsafe construction.
+    jc = work / "judge-controls"; jc.mkdir()
+    jc_source = jc / "source"; jc_b = jc / "b"
+    jc_source.write_bytes(b"A"); jc_b.write_bytes(b"B")
+    with jc_source.open("rb") as opened:
+        os.replace(jc_b, jc_source)
+        same_opened = opened.read()
+        reopened = jc_source.read_bytes()
+    check("J_GR01_SAME_OPENED_OBJECT", same_opened == b"A", f"snapshot={same_opened!r}")
+    check("J_GR01_PATH_REOPEN_MUTANT", reopened != b"A", f"mutant_snapshot={reopened!r}")
+
+    authority_digest = hashlib.sha256(b"A").hexdigest()
+    jc_snapshot = jc / "snapshot"; jc_snapshot.write_bytes(b"A")
+    jc_snapshot.write_bytes(b"B")
+    safe_rehash_admits = hashlib.sha256(jc_snapshot.read_bytes()).hexdigest() == authority_digest
+    no_rehash_mutant_admits = True
+    check("J_GR02_FINAL_REHASH", not safe_rehash_admits, f"safe_admits={safe_rehash_admits}")
+    check("J_GR02_NO_REHASH_MUTANT", no_rehash_mutant_admits and not safe_rehash_admits,
+          "mutant would execute changed bytes while rehash oracle rejects")
+
+    cached_digest = authority_digest
+    drifted = b"B"
+    cached_mutant_admits = cached_digest == authority_digest
+    fresh_oracle_admits = hashlib.sha256(drifted).hexdigest() == authority_digest
+    check("J_GR04_CACHED_SUCCESS_MUTANT", cached_mutant_admits and not fresh_oracle_admits,
+          f"cached={cached_mutant_admits} fresh={fresh_oracle_admits}")
+
+    cleanup_root = jc / "cleanup-root"; cleanup_root.mkdir(); (cleanup_root / "snapshot").write_bytes(b"bad")
+    shutil.rmtree(cleanup_root)
+    check("J_GR05_FAILURE_CLEANUP", not cleanup_root.exists(), f"residue={cleanup_root.exists()}")
+
+    # GR-07 judge controls: the verdict is attached to the exact opened
+    # object's identity. Path metadata alone and omission are insufficient.
+    regular_mode = stat.S_IFREG | 0o700; fifo_mode = stat.S_IFIFO | 0o600
+    def identity(st): return st.st_dev, st.st_ino
+    def opened_regular_oracle(opened_st, inspected_st):
+        return (inspected_st is not None and identity(opened_st) == identity(inspected_st)
+                and stat.S_ISREG(inspected_st.st_mode))
+    gr07_a = jc / "gr07-a"; gr07_b = jc / "gr07-b"
+    gr07_a.write_bytes(b"trusted"); gr07_b.write_bytes(b"trusted")
+    stale_path_st = gr07_a.stat()
+    with gr07_b.open("rb") as opened:
+        opened_st = original_fstat(opened.fileno())
+        # Disposable unsafe implementation: digest/read succeeds but it omits
+        # all metadata inspection of the opened object.
+        no_check_bytes, no_check_st = opened.read(), None
+    no_opened_check_admits = (no_check_bytes == b"trusted"
+                              and opened_regular_oracle(opened_st, no_check_st))
+    stale_path_stat_admits = opened_regular_oracle(opened_st, stale_path_st)
+    with gr07_b.open("rb") as opened:
+        same_opened_st = original_fstat(opened.fileno())
+        same_opened_bytes = opened.read()
+    same_opened_admits = (same_opened_bytes == b"trusted"
+                          and opened_regular_oracle(same_opened_st, same_opened_st))
+    nonregular_st = os.stat_result((fifo_mode, *same_opened_st[1:]))
+    nonregular_opened_admits = opened_regular_oracle(nonregular_st, nonregular_st)
+    check("J_GR07_NO_OPENED_OBJECT_TYPE_CHECK", not no_opened_check_admits,
+          "NO_OPENED_OBJECT_TYPE_CHECK=REJECTED")
+    check("J_GR07_STALE_PATH_STAT", not stale_path_stat_admits,
+          "STALE_PATH_STAT=REJECTED")
+    check("J_GR07_SAME_OPENED_OBJECT", same_opened_admits,
+          "SAME_OPENED_OBJECT_REGULAR_CHECK=ADMITTED")
+    check("J_GR07_NONREGULAR_OPENED_OBJECT", not nonregular_opened_admits,
+          "NONREGULAR_OPENED_OBJECT=REJECTED")
+
+    # Fresh upstream provenance is an executed prerequisite, not a copied
+    # historical claim. It is intentionally last because an owner environment
+    # may create one-time protected H-033 evidence while a nested sandbox is
+    # expected to report ODÖMBART.
+    h033_odom = False
+    h033_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    try:
+        h033_result = subprocess.run(
+            [str(h033_gate)], cwd=repo, env=h033_env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180)
+        h033_ok = (h033_result.returncode == 0
+                   and "H033_GATE_SUMMARY=55 PASS 0 FAIL" in h033_result.stdout
+                   and "H033_GATE_RESULT=PASS" in h033_result.stdout)
+        h033_odom = (h033_result.returncode == 2 or (
+            h033_result.returncode == 1
+            and "H033_GATE_SUMMARY=42 PASS 13 FAIL" in h033_result.stdout
+            and "FAIL K_OWNER_FRESH_REQUEST_PASS: (2, '', '')" in h033_result.stdout
+            and "FAIL K_OWNER_FRESH_REQUEST_FAIL: (2, '', '')" in h033_result.stdout
+            and "FAIL K_OWNER_FRESH_REQUEST_ODÖMBART: (2, '', '')" in h033_result.stdout
+        ))
+        check("K_H033_FRESH_UPSTREAM_PROVENANCE", h033_ok,
+              f"rc={h033_result.returncode} tail={h033_result.stdout[-500:].replace(chr(10), '|')}")
+    except subprocess.TimeoutExpired:
+        h033_odom = True
+        check("K_H033_FRESH_UPSTREAM_PROVENANCE", False, "timeout/cleanup authority unavailable")
+
+    passed = sum(ok for _, ok, _ in checks)
+    for key, ok, detail in checks:
+        print(("PASS " if ok else "FAIL ") + key + " — " + detail)
+    print(f"SAMMANFATTNING {passed} PASS / {len(checks)-passed} FAIL")
+    if any(key == "K1" and not ok for key, ok, _ in checks):
+        print("CURRENT_RED_REASON=PROVIDER_IDENTITY_BOUNDARY_ABSENT")
+    if g20_odom or h033_odom:
+        if g20_odom:
+            print("ODÖMBART K_G20_NAMESPACE — nested sandbox-exec förbjuden; candidate-bound owner-runner evidence required")
+        if h033_odom:
+            print("ODÖMBART K_H033_FRESH_UPSTREAM_PROVENANCE — protected owner runner unavailable")
+        raise SystemExit(2)
+    raise SystemExit(0 if passed == len(checks) else 1)
+except SystemExit:
+    raise
+except Exception as exc:
+    print(f"ODÖMBART K-RIGG — {type(exc).__name__}: {exc}")
+    raise SystemExit(2)
+PY
