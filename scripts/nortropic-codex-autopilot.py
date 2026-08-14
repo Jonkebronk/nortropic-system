@@ -785,34 +785,30 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
      host_snapshot, host_snapshot_digest) = _provider_snapshot(repo)
     try:
         python_snapshot, python_digest = _python_snapshot(snapshot_root)
-    except BaseException:
-        shutil.rmtree(snapshot_root)
-        raise
-    provider_argv = [
-        str(snapshot),
-        "-C", str(wt),
-        "-a", "never",
-        "--sandbox", "danger-full-access",
-        "exec",
-        "--ignore-user-config",
-        "-m", model,
-        "-c", f'model_reasoning_effort="{reasoning_effort}"',
-        "--json",
-        "--output-schema", str(schema),
-        "-o", str(result),
-        full_prompt,
-    ]
-    envelope = jr / "provider-envelope.json"
-    envelope.write_text(json.dumps({"task_id": prompt, "role": role}), encoding="utf-8")
-    launcher = Path(__file__).resolve().parents[1] / "controller/launch/cli"
-    argv = [str(python_snapshot), "-I", "-S", str(launcher),
-            "run", str(wt), str(envelope), "86400", "--", *provider_argv]
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith("DYLD_")
-           and key not in {"LD_PRELOAD", "LD_LIBRARY_PATH", "__PYVENV_LAUNCHER__"}}
-    env["NORTROPIC_TRUST_ROOT"] = str(snapshot_root)
-    thread_id: str | None = None
-    try:
+        provider_argv = [
+            str(snapshot),
+            "-C", str(wt),
+            "-a", "never",
+            "--sandbox", "danger-full-access",
+            "exec",
+            "--ignore-user-config",
+            "-m", model,
+            "-c", f'model_reasoning_effort="{reasoning_effort}"',
+            "--json",
+            "--output-schema", str(schema),
+            "-o", str(result),
+            full_prompt,
+        ]
+        envelope = jr / "provider-envelope.json"
+        envelope.write_text(json.dumps({"task_id": prompt, "role": role}), encoding="utf-8")
+        launcher = Path(__file__).resolve().parents[1] / "controller/launch/cli"
+        argv = [str(python_snapshot), "-I", "-S", str(launcher),
+                "run", str(wt), str(envelope), "86400", "--", *provider_argv]
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith("DYLD_")
+               and key not in {"LD_PRELOAD", "LD_LIBRARY_PATH", "__PYVENV_LAUNCHER__"}}
+        env["NORTROPIC_TRUST_ROOT"] = str(snapshot_root)
+        thread_id: str | None = None
         # Protect the complete execution family first.  Every final identity
         # read is deliberately after the last successful mode transition and
         # adjacent to AGENT_START/spawn.
@@ -849,8 +845,10 @@ def run_codex(repo: Path, wt: Path, role: str, prompt: str) -> AgentRun:
                     thread_id = obj["thread_id"]
             rc = p.wait()
     finally:
-        os.chmod(snapshot_root, 0o700)
-        shutil.rmtree(snapshot_root)
+        try:
+            os.chmod(snapshot_root, 0o700)
+        finally:
+            shutil.rmtree(snapshot_root)
     if rc != 0:
         raise Stop(f"Codex role {role} failed rc={rc}; events={events}")
     try:
