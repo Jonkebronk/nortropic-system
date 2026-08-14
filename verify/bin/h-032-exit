@@ -478,6 +478,26 @@ if mode == 'output_then_fail': sys.exit(17)
     if spec is None or spec.loader is None: raise RuntimeError("cannot import subject")
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
     candidate_tree = ast.parse(source.read_text(encoding="utf-8"))
+    def r20_complete_tree_analysis(tree):
+        consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
+                   and node.name=="_consume_private_result"]
+        runs=[node for node in tree.body if isinstance(node,ast.FunctionDef)
+              and node.name=="run_codex"]
+        if len(consumers)!=1 or len(runs)!=1: return False
+        if [arg.arg for arg in consumers[0].args.args] != [
+                "sink_fd","canonical_destination","invocation_id","run_id","role"]:
+            return False
+        forbidden={"eval","exec","compile","__import__","globals","locals",
+                   "vars","getattr","setattr"}
+        if any(isinstance(call.func,ast.Name) and call.func.id in forbidden
+               for call in ast.walk(consumers[0]) if isinstance(call,ast.Call)): return False
+        process_imports=[]
+        for item in ast.walk(tree):
+            if isinstance(item,ast.Import):
+                process_imports.extend(alias for alias in item.names if alias.name=="subprocess")
+            elif isinstance(item,ast.ImportFrom) and item.module=="subprocess":
+                process_imports.extend(alias for alias in item.names if alias.name=="Popen")
+        return len(process_imports)>=1
     consume_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
                      and node.name == "_consume_private_result"]
     exact_consumer_args = ["sink_fd", "canonical_destination", "invocation_id", "run_id", "role"]
@@ -668,6 +688,8 @@ if mode == 'output_then_fail': sys.exit(17)
             if isinstance(node,ast.Name): return {node.id}
             if isinstance(node,(ast.Tuple,ast.List)):
                 return set().union(*(r17_targets(item) for item in node.elts)) if node.elts else set()
+            if isinstance(node,(ast.Attribute,ast.Subscript)):
+                return r17_targets(node.value)
             return set()
         def r17_join(*values): return frozenset().union(*values) if values else frozenset()
         helper_summaries={name:frozenset() for name in top_functions}
@@ -706,9 +728,9 @@ if mode == 'output_then_fail': sys.exit(17)
                 transferred=r17_join(*(r17_expr(item,env) for item in
                     list(node.args)+[kw.value for kw in node.keywords]))
                 if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
-                    return frozenset({CANONICAL})
+                    return r17_join(transferred,frozenset({CANONICAL}))
                 if isinstance(node.func,ast.Name) and node.func.id=="now_id":
-                    return frozenset({RUN,INVOCATION})
+                    return r17_join(transferred,frozenset({RUN,INVOCATION}))
                 callable_tags=r17_expr(node.func,env)
                 if PROCESS_CONSTRUCTOR in callable_tags: return frozenset({PROCESS_OBJECT})
                 if isinstance(node.func,ast.Name) and node.func.id in identity_helpers:
@@ -716,9 +738,8 @@ if mode == 'output_then_fail': sys.exit(17)
                 if isinstance(node.func,ast.Name) and node.func.id in helper_summaries:
                     helper=top_functions[node.func.id]
                     if node.func.id in r17_active: return frozenset({UNKNOWN})
-                    actual=[r17_expr(arg,env) for arg in node.args]
-                    seeds={formal.arg:(actual[index] if index<len(actual) else frozenset({UNKNOWN}))
-                           for index,formal in enumerate(helper.args.args)}
+                    seeds,valid=r20_bind_call(helper,node,env)
+                    if not valid: return frozenset({UNKNOWN})
                     r17_active.add(node.func.id)
                     try: returned=r17_interpret(helper,seeds)[1]
                     finally: r17_active.remove(node.func.id)
@@ -727,6 +748,42 @@ if mode == 'output_then_fail': sys.exit(17)
                     return r17_join(transferred,r17_expr(node.func.value,env))
                 return transferred
             return r17_join(*(r17_expr(item,env) for item in ast.iter_child_nodes(node)))
+        def r20_bind_call(fn,call,env):
+            positional=list(fn.args.posonlyargs)+list(fn.args.args)
+            names=[arg.arg for arg in positional]
+            kwonly=[arg.arg for arg in fn.args.kwonlyargs]
+            bound={};valid=True
+            if len(call.args)>len(positional) and fn.args.vararg is None: valid=False
+            for index,arg in enumerate(call.args[:len(positional)]):
+                bound[names[index]]=r17_expr(arg,env)
+            if len(call.args)>len(positional) and fn.args.vararg is not None:
+                bound[fn.args.vararg.arg]=r17_join(*(r17_expr(arg,env)
+                    for arg in call.args[len(positional):]))
+            for kw in call.keywords:
+                if kw.arg is None:
+                    if fn.args.kwarg is None: valid=False
+                    else: bound[fn.args.kwarg.arg]=r17_join(
+                        bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(kw.value,env))
+                    continue
+                if kw.arg in bound: valid=False;continue
+                if kw.arg in names or kw.arg in kwonly: bound[kw.arg]=r17_expr(kw.value,env)
+                elif fn.args.kwarg is not None: bound[fn.args.kwarg.arg]=r17_join(
+                    bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(kw.value,env))
+                else: valid=False
+            defaults=dict(zip(names[len(names)-len(fn.args.defaults):],fn.args.defaults))
+            kwdefaults=dict(zip(kwonly,fn.args.kw_defaults))
+            for name in names:
+                if name not in bound:
+                    if name in defaults: bound[name]=r17_expr(defaults[name],env)
+                    else: valid=False;bound[name]=frozenset({UNKNOWN})
+            for name in kwonly:
+                if name not in bound:
+                    default=kwdefaults.get(name)
+                    if default is not None: bound[name]=r17_expr(default,env)
+                    else: valid=False;bound[name]=frozenset({UNKNOWN})
+            if fn.args.vararg is not None: bound.setdefault(fn.args.vararg.arg,frozenset())
+            if fn.args.kwarg is not None: bound.setdefault(fn.args.kwarg.arg,frozenset())
+            return bound,valid
         def r17_interpret(fn,seeds):
             env={arg.arg:seeds.get(arg.arg,frozenset({UNKNOWN})) for arg in fn.args.args}
             returns=[]
@@ -769,9 +826,8 @@ if mode == 'output_then_fail': sys.exit(17)
                          and isinstance(item.func,ast.Name) and item.func.id in seen):
                 child=call.func.id
                 if child==name: recursive=True;continue
-                actual=[r17_expr(arg,env) for arg in call.args]
-                seeds={formal.arg:(actual[index] if index<len(actual) else frozenset({UNKNOWN}))
-                       for index,formal in enumerate(top_functions[child].args.args)}
+                seeds,valid=r20_bind_call(top_functions[child],call,env)
+                if not valid: recursive=True;continue
                 prior=contexts.get(child,{})
                 joined={key:r17_join(prior.get(key,frozenset()),value)
                         for key,value in seeds.items()}
@@ -811,6 +867,7 @@ if mode == 'output_then_fail': sys.exit(17)
         semantic_call_ok=False
         if len(run_calls)==1:
             call=run_calls[0];env={arg.arg:(frozenset({ROLE}) if arg.arg=="role"
+                                           else frozenset({CANONICAL}) if arg.arg=="repo"
                                            else frozenset({UNKNOWN}))
                                       for arg in run_codex_nodes[0].args.args}
             # Fixed-point assignments, with semantic origins attached to the
@@ -828,15 +885,9 @@ if mode == 'output_then_fail': sys.exit(17)
                             if joined != env.get(name): env[name]=joined;changed=True
                 if not changed: break
             actual=[r17_expr(arg,env) for arg in call.args]
-            allowed_actual=(frozenset({SINK}),
-                            frozenset({CANONICAL,RUN,ROLE}),
-                            frozenset({INVOCATION,RUN}),
-                            frozenset({RUN,INVOCATION}),frozenset({ROLE}))
-            required_actual=(SINK,CANONICAL,INVOCATION,RUN,ROLE)
-            semantic_call_ok=(len(actual)==5 and all(
-                required in tags and tags <= allowed and IDENTITY not in tags
-                and UNKNOWN not in tags
-                for tags,allowed,required in zip(actual,allowed_actual,required_actual)))
+            exact_actual=(frozenset({SINK}),frozenset({CANONICAL}),
+                          frozenset({INVOCATION}),frozenset({RUN}),frozenset({ROLE}))
+            semantic_call_ok=(len(actual)==5 and tuple(actual)==exact_actual)
             # The consumer receives exactly the proven call-site tag sets; no
             # clean re-seeding may launder helper/container aliases.
             if semantic_call_ok:
@@ -855,10 +906,8 @@ if mode == 'output_then_fail': sys.exit(17)
                         and item.func.id in seen):
                         child=helper_call.func.id
                         if child==name: recursive=True;continue
-                        values=[r17_expr(arg,child_env) for arg in helper_call.args]
-                        seeds={formal.arg:(values[index] if index<len(values)
-                                           else frozenset({UNKNOWN}))
-                               for index,formal in enumerate(top_functions[child].args.args)}
+                        seeds,valid=r20_bind_call(top_functions[child],helper_call,child_env)
+                        if not valid: recursive=True;continue
                         prior=contexts.get(child,{})
                         joined={key:r17_join(prior.get(key,frozenset()),value)
                                 for key,value in seeds.items()}
@@ -876,7 +925,9 @@ if mode == 'output_then_fail': sys.exit(17)
         # Resolve constructor values (module aliases, attributes, containers and
         # helper returns) with the same value interpreter before building CFG.
         run_flow_env,_=r17_interpret(run_codex_nodes[0],{
-            arg.arg:(frozenset({ROLE}) if arg.arg=="role" else frozenset({UNKNOWN}))
+            arg.arg:(frozenset({ROLE}) if arg.arg=="role"
+                     else frozenset({CANONICAL}) if arg.arg=="repo"
+                     else frozenset({UNKNOWN}))
             for arg in run_codex_nodes[0].args.args})
         resolved_popen=[item for item in ast.walk(candidate_tree)
             if isinstance(item,ast.Call)
@@ -910,7 +961,8 @@ if mode == 'output_then_fail': sys.exit(17)
         consumer_architecture_ok=(consumer_architecture_ok and semantic_call_ok
                                   and receiver_ok and not identity_escape and cfg_ok
                                   and len(resolved_popen)==1 and not process_binding_unresolved
-                                  and not unresolved_process_calls)
+                                  and not unresolved_process_calls
+                                  and r20_complete_tree_analysis(candidate_tree))
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -1895,35 +1947,6 @@ if mode == 'output_then_fail': sys.exit(17)
     }
     connected_reader_results={};variant_shape_ok=True
     variant_source_admissible={}
-    def r19_variant_admissible(tree,family):
-        consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
-                   and node.name=="_consume_private_result"]
-        if len(consumers)!=1 or [arg.arg for arg in consumers[0].args.args]!=exact_consumer_args:
-            return False
-        body=consumers[0]
-        forbidden={"eval","exec","compile","__import__","globals","locals",
-                   "vars","getattr","setattr"}
-        if any(isinstance(call.func,ast.Name) and call.func.id in forbidden
-               for call in ast.walk(body) if isinstance(call,ast.Call)): return False
-        nested=[node for node in ast.walk(body) if isinstance(node,ast.FunctionDef)
-                and node is not body]
-        if family=="helper":
-            if len(nested)!=1 or len(nested[0].args.args)!=2: return False
-        elif nested: return False
-        attrs={node.attr for node in ast.walk(body) if isinstance(node,ast.Attribute)}
-        required={"pread":{"pread"},"preadv":{"preadv"},"readv":{"readv","lseek"},
-                  "fdopen":{"fdopen","read"},"FileIO":{"FileIO","read"},
-                  "mmap":{"mmap"},"buffer":{"BufferedReader","read"},
-                  "raw":{"BufferedReader","raw","read"},"helper":{"pread"}}
-        if not required[family] <= attrs: return False
-        # Same admissibility vocabulary as the semantic consumer: safe
-        # positioning/decoding/binding/path-resolution operations are explicit.
-        allowed=capability_calls|{"lseek","decode","get","readlink","replace",
-            "fstat","S_ISREG","S_IMODE","sha256","loads","hexdigest","read"}
-        return all(node.attr in allowed or node.attr in {
-            "st_dev","st_ino","st_mode","st_size","st_mtime_ns","st_ctime_ns",
-            "args","O_RDONLY","O_NOFOLLOW","SEEK_SET","ACCESS_READ"}
-            for node in ast.walk(body) if isinstance(node,ast.Attribute))
     def r17_variant(family,reader_body):
         tree=copy.deepcopy(candidate_tree)
         target=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
@@ -1947,7 +1970,7 @@ if mode == 'output_then_fail': sys.exit(17)
             node.body=[ast.Pass()]
         if ast.dump(baseline,include_attributes=False)!=ast.dump(candidate,include_attributes=False):
             raise RuntimeError("R17 reader variant escaped consumer body")
-        variant_source_admissible[family]=r19_variant_admissible(tree,family)
+        variant_source_admissible[family]=r20_complete_tree_analysis(tree)
         path=work/f"r17-reader-{family}.py";path.write_text(ast.unparse(tree)+"\n",encoding="utf-8")
         return path
     if consumer_architecture_ok:
