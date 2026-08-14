@@ -748,12 +748,14 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     trace_seq = [0]
     transitions: list[tuple[int, str, int]] = []
     complete_reads: dict[str, list[int]] = {"provider": [], "codex-code-mode-host": []}
+    complete_hashes: dict[str, list[int]] = {"provider": [], "codex-code-mode-host": []}
     trace_verdict: list[bool] = []
     fd_paths: dict[int, Path] = {}
     fd_bytes: dict[int, bytearray] = {}
     originals = (builtins.open, io.open, os.open, os.read, os.close,
                  os.chmod, os.fchmod, subprocess.Popen)
     original_builtin_open, original_io_open, original_os_open, original_os_read, original_os_close, original_chmod, original_fchmod, original_popen = originals
+    original_sha256 = hashlib.sha256
     expected_by_name = {"provider": good_hash, "codex-code-mode-host": host_good_hash}
     def tick() -> int:
         trace_seq[0] += 1; return trace_seq[0]
@@ -762,8 +764,28 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
         except Exception: return None
         return path if path.name in expected_by_name and path != provider else None
     def record_complete(path: Path, payload: bytes) -> None:
-        if hashlib.sha256(payload).hexdigest() == expected_by_name[path.name]:
+        if original_sha256(payload).hexdigest() == expected_by_name[path.name]:
             complete_reads[path.name].append(tick())
+    class TracedHash:
+        def __init__(self, data=b""):
+            self._hash, self._payload, self._recorded = original_sha256(data), bytearray(data), False
+        def update(self, data): self._payload.extend(data); return self._hash.update(data)
+        def _record(self):
+            if not self._recorded:
+                digest = self._hash.hexdigest()
+                for name, expected in expected_by_name.items():
+                    if digest == expected: complete_hashes[name].append(tick())
+                self._recorded = True
+        def hexdigest(self): self._record(); return self._hash.hexdigest()
+        def digest(self): self._record(); return self._hash.digest()
+        def copy(self): return self._hash.copy()
+        @property
+        def digest_size(self): return self._hash.digest_size
+        @property
+        def block_size(self): return self._hash.block_size
+        @property
+        def name(self): return self._hash.name
+    def traced_sha256(data=b""): return TracedHash(data)
     class TracedFile:
         def __init__(self, handle, path: Path):
             self._handle, self._path, self._payload = handle, path, bytearray()
@@ -826,19 +848,22 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
                     if Path(path) in {root, snapshot, host}), default=-1)
                 protected = all((p.stat().st_mode & 0o222) == 0 for p in (root, snapshot, host))
                 fresh = all(complete_reads[name] and complete_reads[name][-1] > last_transition
+                            and complete_hashes[name] and complete_hashes[name][-1] > last_transition
                             for name in expected_by_name)
                 trace_verdict.append(protected and fresh)
         return original_popen(argv, *args, **kwargs)
     builtins.open, io.open, os.open, os.read, os.close, os.chmod, os.fchmod, subprocess.Popen = (
         traced_builtin_open, traced_io_open, traced_os_open, traced_os_read, traced_os_close,
         traced_chmod, traced_fchmod, traced_popen)
+    hashlib.sha256 = traced_sha256
     try:
         trace_result = attempt(trace_repo)
     finally:
         builtins.open, io.open, os.open, os.read, os.close, os.chmod, os.fchmod, subprocess.Popen = originals
+        hashlib.sha256 = original_sha256
     trace_ok = (trace_result[0] and trace_result[2] == 1 and trace_verdict == [True])
     check("K_FINAL_SNAPSHOT_REHASH", family_absent or trace_ok,
-          f"trace={trace_verdict} transitions={transitions} reads={complete_reads} result={trace_result}")
+          f"trace={trace_verdict} transitions={transitions} reads={complete_reads} hashes={complete_hashes} result={trace_result}")
     check("K_CODE_MODE_HOST_FINAL_REHASH", family_absent or trace_ok,
           f"host_reads={complete_reads['codex-code-mode-host']} trace={trace_verdict}")
     check("K_PROVIDER_LAUNCH_ADJACENT_FINAL_REHASH", family_absent or trace_ok,
