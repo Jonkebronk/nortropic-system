@@ -578,3 +578,172 @@ rehashed and protected; the absolute Python snapshot runs the exact `-I -S` flag
 The provider environment is otherwise retained, but `DYLD_*`, `LD_PRELOAD`, `LD_LIBRARY_PATH` and
 `__PYVENV_LAUNCHER__` are removed because they can execute or redirect code before isolation/G20. A
 constructor dylib plus hostile global/user site, PATH, HOME and Python-family inputs produced no marker.
+
+## 2026-08-14 — Fresh H-031 role routing after published H-032
+
+H-031 is rematerialized from authoritative main `32b6e07`; every historical H-031 gate and candidate
+remains forensic evidence only. The task is ordinary, depends exactly on H-032 and owns no new provider,
+session or verdict component. Its effect is the route received by the actually spawned provider process
+through H-032's exact opened-object, co-snapshot, final-rehash and G20 boundary. Provider prose, a would-be
+argv variable and a paid live response are not routing authority.
+
+The owner-frozen matrix remains `gpt-5.6-sol` for all six runtime roles, with `high` for BUILDER and
+`max` for ARCHITECT, TEST_AUTHOR, GATE_REVIEWER, REVIEWER and EMPIRICAL. This matches the machine's
+current owner configuration and active Codex model surface. Codex CLI 0.147.0 exposes `-m/--model`,
+`-c/--config`, `model_reasoning_effort` and `--ignore-user-config`; H-031 therefore binds exact actual
+argv and requires user configuration to be ignored. Backend availability and model self-report are
+deliberately outside the deterministic verdict.
+
+The frozen pre-builder baseline is exactly four product failures: absent actual role route, absent
+AGENT_START route binding, unknown-role effects before rejection, and a generic `run()` boundary that
+does not yet reject a Codex basename. H-032 itself is freshly green at 71/0. The new source-form control
+retains Design B's explicit composition boundary—one Popen site, one generic subprocess.run site and the
+literal watch clear—while auditing the whole module for methods, lambdas, defaults, containers, aliases,
+dynamic attribute access and dynamic code. It admits ordinary non-provider helpers and harmless role
+call consolidation, so it does not revive the abandoned general Python dataflow evaluator.
+
+Independent review found three gate omissions before publication. Codex accepts attached short model
+and config forms, which can carry competing routing authority; the route oracle now parses and mutates
+those forms. Dynamic `importlib` and computed `__import__` could create an uncounted process boundary,
+so the source-form audit rejects those dispatch mechanisms explicitly. Finally, persistent-state
+comparison alone could miss a provider snapshot created and cleaned before an invalid-role rejection.
+The invalid-role oracle now replaces the production snapshot function with a recording tripwire and
+requires that it is never reached, while retaining the journal, run-directory and provider-effect checks.
+
+A second review demonstrated why security oracles cannot privilege today's helper names. Attached
+profile and dangling known selectors are now part of the closed route grammar. Builtins and reflected
+module registries join importlib as prohibited alternate dispatch sources, with only production's exact
+read-only `__file__` selftest lookup admitted. Most importantly, invalid-role ordering is now observed at
+the effect boundary with a scoped audit hook: file creation/writes/removal/rename/link/chmod and process
+start are recorded even when implementation inlines, renames or cleans its snapshot helper. The existing
+persistent journal, run-directory and provider capture comparisons remain independent corroboration.
+
+Third review found that Python audit events alone are not a native-syscall sandbox: a newly imported
+`ctypes` module could call libc below the observed event set, and reflected or aliased `sys.modules`
+could recover subprocess. H-031 needs no new dependency to add a constant role policy, so the bounded
+Design B envelope now freezes the product's exact existing import inventory. Bare or reflected `sys`
+is rejected; only direct non-registry attributes already used by production remain admissible. This
+composition makes the effect hook meaningful without claiming it observes arbitrary native code.
+
+Fourth review then recovered dynamic import through private state on modules already in the frozen
+inventory. The final reflection envelope is structural: all private attributes are rejected except the
+single exact `super().__init__()` call already present, and `getattr` is admitted only for the two exact
+read-only `os.O_*` fallback constants production uses. Module dictionaries, reflected builtins, Python
+frames and function globals are explicit mutants. This closes the path that dynamically recovered FFI
+and keeps the scoped audit hook within the source domain it can actually observe.
+
+Fifth review found a remaining composition error: a safe-form check on a builtin call is ineffective if
+the builtin can first be stored under another name. Sensitive builtin names are now capabilities at
+every load site. `getattr` and `globals` must be the direct callee of their separately checked exact safe
+forms; all references or aliases reject. `vars`, `locals`, dynamic-code and import builtins reject on load.
+Mutants cover assignment aliases that previously recovered ctypes without adding an import node.
+
+Sixth review found two native process constructors omitted from both layers: `os.fork` and
+`os.forkpty`. A forked child inherits the Python audit hook but mutates a copied observation list, so
+the parent cannot rely on the child's recorded events. Both APIs are now prohibited process sites in
+the whole-module source envelope, and their audit events are also forbidden before role validation.
+Direct fork/forkpty mutants prevent the omission from recurring.
+
+Seventh review confirmed the parent-side fork observation, but found that modules already loaded can
+publicly re-export other module objects. A Name-rooted matcher therefore missed `subprocess.os.fork()`
+and equivalent chains. Attribute access to sensitive process, import and FFI module proxies is now
+forbidden independently of the root object, while direct approved modules remain governed by the exact
+import inventory and their enumerated process APIs. Proxy fork/spawn/registry mutants bind the closure.
+
+Eighth review recovered a frame without private syntax by installing public sys trace/profile callbacks;
+the frame's public globals then exposed subprocess and dynamic import. Direct sys access is now frozen to
+the six attributes the current product already uses. Trace, profile, hooks, frames and registries are not
+available to H-031 implementation. Ambient module-loader globals plus builtins that can invoke dynamic
+debug/help machinery also reject on load. Dedicated mutants bind each newly closed capability.
+
+Ninth review recovered globals from public frame carriers without calling sys: generators, coroutines,
+async generators and tracebacks expose frame objects, whose public namespaces contain subprocess and
+builtins. All frame-carrier and frame-namespace attributes are now sensitive reflection and reject in
+the whole module. None exists in current production; four independent mutants bind the carrier family.
+
+Tenth review demonstrated that a synchronous before/after oracle can be outrun by a delayed callback:
+`subprocess.threading.Timer` scheduled a real provider path after the audit window closed. Public proxies
+for threading, signal, exit handlers, schedulers, futures and finalizers now join process/import/FFI
+modules in the sensitive set. Timer, signal, atexit and weakref-finalizer mutants bind this asynchronous
+effect class; current production uses none of those proxy capabilities.
+
+Eleventh review found two delayed paths without module proxies. An atfork callback combined with
+`preexec_fn` fired on a later legitimate Popen, and cyclic `__del__`/yield-finally objects deferred work
+to GC. Atfork is now a prohibited process callback; admitted process sites reject pre-exec, shell,
+executable substitution and expanded keyword dictionaries. Since production contains no asynchronous
+function, yield or await, those language forms and `__del__` are also excluded from the bounded source
+envelope. In-place Popen mutants prove the one legitimate site itself remains constrained.
+
+Twelfth review separated a lifecycle method's name from its installation: assigning an ordinary helper
+to class key `__del__` creates the same delayed finalizer. Finalizer assignment, setattr/delattr and
+dynamic three-argument type construction now reject; only current scalar schema `type(x) is/is not`
+checks remain. The review also found direct process signaling outside both inventories. `os.kill` and
+`os.killpg` are now prohibited source/effect APIs with independent mutants and audit-event binding.
+
+Thirteenth review recovered dynamic class construction through a public `types.new_class` proxy and
+placed executable/preexec substitutions into positional Popen slots. `types` is now sensitive, and the
+sole Popen plus generic run site each require exactly one non-starred positional argument in addition to
+the existing unsafe-keyword prohibition. In-place positional and starred mutants test the legitimate
+site itself rather than adding an obviously extra process call.
+
+Fourteenth review recovered finalizer installation without `types` or a direct finalizer target: a
+metaclass `__prepare__` mapping injected the lifecycle key while Python executed an ordinary class-body
+assignment. The source envelope therefore admits only the product's existing `__init__` lifecycle
+method, rejects class keywords and literal finalizer keys, and binds the exact metaclass construction as
+a mutant. The same review changed process-global cwd, environment and umask before invalid-role
+rejection; the first three audit events had merely been omitted and umask emitted no event. Direct OS
+access is now frozen to the exact current product attributes and its sole read-only environment form,
+with process-state APIs prohibited. The runtime oracle independently snapshots cwd/environment/umask,
+restores them after measurement, and aborts audited mutation operations after recording their attempt.
+
+Fifteenth review aliased the builtin `type`, hiding dynamic class creation from the direct-call rule,
+and moved already-admitted `os.write`/`os.close` capabilities before role validation. The latter mutate
+descriptor state without Python audit events, so cwd/environment/umask snapshots alone were incomplete.
+`type` may now be loaded only as the direct scalar schema call checked separately. Every current OS
+descriptor-effect call is frozen by exact owner and count, preventing reference capture or an added site.
+The invalid-role execution additionally replaces all available OS/process mutation functions and Popen
+with recording guards that raise before invocation; stdout and stderr are isolated and must stay empty.
+Those guards compose with, rather than replace, the audit hook, process-state snapshot and persistent
+artifact comparisons.
+
+Sixteenth review moved the effect before every previous observation by creating and removing a file at
+module import. It also used the already imported `fcntl.flock` capability and stream objects captured
+before stdout/stderr redirection. Subject import is now inside the same fail-before-operation audit and
+OS/process guard boundary as invalid-role execution, with independent cwd/environment/umask and output
+comparisons. Effectful module-level methods reject structurally. `fcntl.flock` is frozen to its one
+existing lock owner/site and is guarded plus audited at runtime. Direct stdout/stderr objects are frozen
+to the product's exact existing write and error-print forms, so neither stream can be retained for a
+later bypass. Import create-clean, fcntl alias and captured-stream mutants bind each route.
+
+Seventeenth review poisoned `sys.path` from a function default during import. Python import state was
+absent from the process snapshot, even though the current product legitimately inserts its authority
+library and enables no-bytecode mode at module load. Those two mutations are now exact source forms with
+exact counts. Runtime import observation requires precisely one new leading authority path and bytecode
+suppression, then restores the prior interpreter state. More fundamentally, a rejected source envelope
+previously continued into `exec_module`; an unguarded `fcntl.fcntl/ioctl` could therefore act before the
+eventual FAIL. Source or observer rejection now terminates before upstream or subject execution, while
+fcntl/ioctl also join the audit and mutation guards as an independent backstop.
+
+Eighteenth review retained the exact admitted `sys.path.insert` syntax while changing what its operands
+meant: a reassigned `AUTHORITY_LIB` or shadowed `str` loaded attacker-controlled `core` before the
+post-import path comparison. The authority assignment is now frozen as one exact AST object, and its
+name, `Path`, builtin `str` and `__file__` cannot be rebound by assignments, parameters, functions or
+classes. The same review removed a gap in the early-stop composition: complete required API presence now
+joins task identity, upstream identity, source form and observer separation as a mandatory precondition
+before either upstream execution or subject import. Authority-shadow and missing-API mutants bind both
+transitions.
+
+Nineteenth review used two binding mechanisms outside ordinary Name(Store). An exception handler stores
+its `as` target as a string AST field, allowing temporary `AUTHORITY_LIB` replacement, and public
+assignment to `Path.resolve` changed the exact expression's semantics before restoring the class. All
+exception and global/nonlocal bindings of protected authority names now reject. `Path` itself is a
+non-capturable capability: it may appear in annotations or as the direct constructor/class-method root,
+but not as an alias, container value or class-attribute mutation target. The gate deliberately targets
+the owner Python AST version; newer pattern syntax cannot compile there and therefore cannot reach
+subject import. Exact exception-binding and public-monkeypatch mutants bind the closure.
+
+Twentieth review showed that admitting every direct `Path` class-method call still leaked the class
+through `Path.mro()`: the returned list exposed `Path` at index zero, where `resolve` could be replaced
+and restored around the otherwise exact authority assignment. The product uses only `Path.home()` as a
+class method. That exact zero-argument form is now the sole admitted class-method root; constructor calls
+remain admitted. A class-container monkeypatch mutant permanently binds the reviewed bypass.
