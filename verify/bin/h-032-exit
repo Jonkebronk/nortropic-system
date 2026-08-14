@@ -713,7 +713,8 @@ if mode == 'output_then_fail': sys.exit(17)
                     and isinstance(node.func.value,ast.Name)
                     and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
                 return {"__attrs__":{kw.arg:r38_assignment_value(kw.value,env)
-                                     for kw in node.keywords if kw.arg}}
+                                     for kw in node.keywords if kw.arg},
+                        "__attr_names__":frozenset(kw.arg for kw in node.keywords if kw.arg)}
             return r34_value(node,env)
         def r39_store_flow(target,env,delete=False):
             if isinstance(target,ast.Name):
@@ -722,7 +723,7 @@ if mode == 'output_then_fail': sys.exit(17)
             if isinstance(target,ast.Attribute):
                 base=r34_value(target.value,env)
                 if isinstance(base,dict) and "__attrs__" in base:
-                    if delete and target.attr not in base["__attrs__"]:
+                    if delete and target.attr not in base.get("__attr_names__",frozenset()):
                         return False,frozenset({"AttributeError"})
                     return True,frozenset()
                 return True,frozenset({"UNKNOWN"})
@@ -761,8 +762,11 @@ if mode == 'output_then_fail': sys.exit(17)
                 if isinstance(target,ast.Name): updated[target.id]=value
                 elif isinstance(target,ast.Attribute):
                     base=r34_value(target.value,updated)
-                    if isinstance(base,dict) and "__attrs__" in base:
-                        base["__attrs__"][target.attr]=value
+                    if (isinstance(base,dict) and "__attrs__" in base
+                            and isinstance(target.value,ast.Name)):
+                        replacement={**base,"__attrs__":{**base["__attrs__"],target.attr:value},
+                                     "__attr_names__":base.get("__attr_names__",frozenset())|{target.attr}}
+                        updated[target.value.id]=replacement
                 elif isinstance(target,ast.Starred):
                     return r37_store_target(target.value,value,updated)
                 elif isinstance(target,(ast.Tuple,ast.List)):
@@ -845,8 +849,11 @@ if mode == 'output_then_fail': sys.exit(17)
                             if one_normal and isinstance(target,ast.Name): env.pop(target.id,None)
                             if one_normal and isinstance(target,ast.Attribute):
                                 base=r34_value(target.value,env)
-                                if isinstance(base,dict) and "__attrs__" in base:
-                                    base["__attrs__"].pop(target.attr,None)
+                                if (isinstance(base,dict) and "__attrs__" in base
+                                        and isinstance(target.value,ast.Name)):
+                                    attrs=dict(base["__attrs__"]);attrs.pop(target.attr,None)
+                                    env[target.value.id]={**base,"__attrs__":attrs,
+                                        "__attr_names__":base.get("__attr_names__",frozenset())-{target.attr}}
                         if target_normal: next_normals.append(dict(env))
                     elif isinstance(statement,ast.Expr):
                         expr_normal,expr_raises=r38_expr_flow(statement.value,env)
@@ -1957,6 +1964,17 @@ if mode == 'output_then_fail': sys.exit(17)
             "import types\nholder = types.SimpleNamespace()\n"
             "try:\n    del holder.missing\n"
             "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True))
+        namespace_branch_isolation_negative=not r28_control(
+            "import types\nholder = types.SimpleNamespace()\n"
+            "try:\n    if repo:\n        holder.value = 1\n"
+            "    else:\n        del holder.value\n"
+            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        namespace_sibling_positive=r28_control(
+            "import types\nholder = types.SimpleNamespace(value=1)\n"
+            "if repo:\n    holder.value = 2\n"
+            "else:\n    holder.value = 3\n"
+            "try:\n    del holder.value\n"
+            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
         helper_multikey_positive=r28_control(
             "def _r36_types():\n    return {'runtime': RuntimeError, 'value': ValueError}\n"
             "try:\n    M = _r36_types()\n    E = M['runtime']\n"
@@ -2004,6 +2022,9 @@ if mode == 'output_then_fail': sys.exit(17)
                                and safe_store_delete_positive
                                and delete_absent_negative and delete_then_read_negative
                                and bound_delete_positive and namespace_controls)
+        r25_static_mutants_ok=(r25_static_mutants_ok
+                               and namespace_branch_isolation_negative
+                               and namespace_sibling_positive)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own

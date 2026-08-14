@@ -1220,3 +1220,8 @@ R40 makes Name deletion a path-local environment effect: a bound name is removed
 an absent name raises NameError without mutation, and later reads see the deletion.
 A bounded mutable namespace abstraction proves safe attribute set/delete and missing-member
 AttributeError; arbitrary attribute protocols remain conservatively normal plus exceptional.
+
+R41 makes abstract path environments persistent: nested namespace state is never mutated
+through a shallow-copy alias. Attribute stores and deletes create replacement values and
+environments, so one branch cannot contaminate its sibling. The bounded pure local
+SimpleNamespace constructor remains admissible without granting reflection or process power.
