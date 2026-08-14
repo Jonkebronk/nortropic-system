@@ -1049,3 +1049,11 @@ object tags propagate through aliases, containers, attributes and helper returns
 the sole-site CFG check. Exact-body admissibility now separately executes preadv, readv,
 BufferedReader.read, raw.read and a mandatory nested bounded helper through complete
 fresh-process run_codex effects, without crediting the exact production verdict.
+
+R19 preserves the exact tag sets at the run_codex-to-consumer boundary: every argument
+must contain its required provenance and no IDENTITY/UNKNOWN or position-forbidden tag,
+and those actual sets seed all consumer/helper analysis. Each generated reader body must
+also pass the gate's semantic source-admissibility vocabulary before its connected
+runtime effect can count. Import/ImportFrom subprocess origins and process constructor/
+object values are inventoried through aliases and supported stores; unresolved process-
+relevant stores or calls reject before the sole-site timeout CFG can pass.
