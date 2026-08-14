@@ -1235,3 +1235,9 @@ R43 makes that admission explicit in the same full analyzer: only exact `import 
 and direct pure `types.SimpleNamespace(...)` construction pass; aliases, ImportFrom,
 dynamic import, reflection, module mutation and other APIs reject. Allocation identity
 also includes caller context, separating repeated helper calls without breaking aliases.
+
+R44B Phase A repairs analyzer totality only. Version-dependent Match-pattern and TryStar
+classes are obtained with `getattr` and composed into safe isinstance tuples; `ast` is never
+monkeypatched. Exact timeout constant shape/type is guarded before dereference. An unconditional
+rig-only lane sends minimal parsed trees through the same analyzer and requires structured false
+verdicts, while ACTUAL_PRODUCT remains the sole source of product RED/PASS credit.
