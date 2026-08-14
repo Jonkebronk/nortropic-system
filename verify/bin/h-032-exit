@@ -700,29 +700,51 @@ if mode == 'output_then_fail': sys.exit(17)
                     if isinstance(value,tuple): choices.extend(value)
                 joined[name]=tuple(dict.fromkeys(choices)) or (frozenset({"UNKNOWN"}),)
             return joined
-        def r36_target_flow(target):
+        def r38_expr_flow(node,env):
+            if isinstance(node,ast.Name):
+                return (True,frozenset()) if node.id in env else (False,frozenset({"NameError"}))
+            return r31_expr_flow(node)
+        def r38_assignment_value(node,env):
+            if isinstance(node,(ast.Tuple,ast.List)):
+                return {"__sequence__":[r38_assignment_value(item,env) for item in node.elts]}
+            return r34_value(node,env)
+        def r36_target_flow(target,env):
             if isinstance(target,ast.Name): return True,frozenset()
-            if isinstance(target,ast.Starred): return r36_target_flow(target.value)
+            if isinstance(target,ast.Starred): return r36_target_flow(target.value,env)
             if isinstance(target,(ast.Tuple,ast.List)):
-                flows=[r36_target_flow(item) for item in target.elts]
+                flows=[r36_target_flow(item,env) for item in target.elts]
                 return all(flow[0] for flow in flows),frozenset().union(
                     *(flow[1] for flow in flows))
-            if isinstance(target,ast.Attribute): return r31_expr_flow(target.value)
+            if isinstance(target,ast.Attribute): return r38_expr_flow(target.value,env)
             if isinstance(target,ast.Subscript):
-                base=r31_expr_flow(target.value);index=r31_expr_flow(target.slice)
+                base=r38_expr_flow(target.value,env);index=r38_expr_flow(target.slice,env)
                 return base[0] and index[0],base[1]|index[1]
             return False,frozenset({"UNKNOWN"})
         def r37_store_target(target,value,env):
-            normal,raises=r36_target_flow(target)
+            normal,raises=r36_target_flow(target,env)
             updated=dict(env)
             if normal:
                 if isinstance(target,ast.Name): updated[target.id]=value
                 elif isinstance(target,ast.Starred):
                     return r37_store_target(target.value,value,updated)
                 elif isinstance(target,(ast.Tuple,ast.List)):
+                    sequence=value.get("__sequence__") if isinstance(value,dict) else None
+                    stars=[i for i,item in enumerate(target.elts) if isinstance(item,ast.Starred)]
+                    if sequence is not None:
+                        minimum=len(target.elts)-len(stars)
+                        if len(stars)>1 or len(sequence)<minimum or (not stars and len(sequence)!=minimum):
+                            return updated,False,raises|frozenset({"ValueError"})
+                    else:
+                        raises=raises|frozenset({"ValueError"})
                     for index,item in enumerate(target.elts):
                         item_value=(frozenset({"UNKNOWN"}),)
-                        if isinstance(value,dict): item_value=value.get(index,item_value)
+                        if sequence is not None:
+                            if isinstance(item,ast.Starred):
+                                suffix=len(target.elts)-index-1
+                                item_value={"__sequence__":sequence[index:len(sequence)-suffix]}
+                            elif stars and index>stars[0]:
+                                item_value=sequence[len(sequence)-(len(target.elts)-index)]
+                            else: item_value=sequence[index]
                         updated,item_normal,item_raises=r37_store_target(item,item_value,updated)
                         raises=raises|item_raises
                         if not item_normal: return updated,False,raises
@@ -733,7 +755,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 next_normals=[]
                 for env in normals:
                     if isinstance(statement,(ast.Assign,ast.AnnAssign)):
-                        value=r34_value(statement.value,env)
+                        value=r38_assignment_value(statement.value,env)
                         targets=statement.targets if isinstance(statement,ast.Assign) else [statement.target]
                         expr_normal,expr_raises=r31_expr_flow(statement.value)
                         exceptions.extend((exc,dict(env)) for exc in expr_raises)
@@ -748,7 +770,7 @@ if mode == 'output_then_fail': sys.exit(17)
                         if target_normal: next_normals.append(updated)
                     elif isinstance(statement,ast.AugAssign):
                         # Python resolves and loads the target before evaluating RHS.
-                        target_normal,target_raises=r36_target_flow(statement.target)
+                        target_normal,target_raises=r36_target_flow(statement.target,env)
                         exceptions.extend((exc,dict(env)) for exc in target_raises)
                         value_normal,value_raises=r31_expr_flow(statement.value)
                         if target_normal:
@@ -761,7 +783,7 @@ if mode == 'output_then_fail': sys.exit(17)
                     elif isinstance(statement,ast.Delete):
                         target_normal=True
                         for target in statement.targets:
-                            one_normal,one_raises=r36_target_flow(target)
+                            one_normal,one_raises=r36_target_flow(target,env)
                             exceptions.extend((exc,dict(env)) for exc in one_raises)
                             target_normal=target_normal and one_normal
                         if target_normal: next_normals.append(dict(env))
@@ -1816,14 +1838,24 @@ if mode == 'output_then_fail': sys.exit(17)
             "holder = {}\ntry:\n    holder[0] = 1\n"
             "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
         chained_target_causal_negative=not r28_control(
-            "holder = {}\nE = ValueError\ntry:\n    E = holder[1 / 0] = RuntimeError\n"
+            "holder = {}\nE = ValueError\ntry:\n    E = holder[1 / 0] = ZeroDivisionError\n"
             "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
         chained_target_reverse_positive=r28_control(
             "holder = {}\nE = ValueError\ntry:\n    holder[1 / 0] = E = RuntimeError\n"
             "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
         nested_unpack_positive=r28_control(
-            "try:\n    (E, (F, G)) = (RuntimeError, (ValueError, Exception))\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
+            "(E, (F, G)) = (RuntimeError, (ValueError, Exception))\n"
+            "try:\n    raise RuntimeError('x')\n"
+            "except E:\n    pass\n"
+            "except F:\n    _r28_spawn(subprocess.Popen)\n",True)
+        unpack_mismatch_negative=not r28_control(
+            "try:\n    (E, F) = (RuntimeError,)\n"
+            "except ValueError:\n    _r28_spawn(subprocess.Popen)\n",True)
+        starred_unpack_positive=r28_control(
+            "(E, *middle, F) = (RuntimeError, ValueError, Exception)\n"
+            "try:\n    raise RuntimeError('x')\n"
+            "except E:\n    pass\n"
+            "except F:\n    _r28_spawn(subprocess.Popen)\n",True)
         augassign_target_first_negative=not r28_control(
             "holder = {}\ntry:\n    holder[1 / 0] += repo.r37_rhs\n"
             "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
@@ -1866,6 +1898,8 @@ if mode == 'output_then_fail': sys.exit(17)
                                and chained_target_causal_negative
                                and chained_target_reverse_positive
                                and nested_unpack_positive
+                               and unpack_mismatch_negative
+                               and starred_unpack_positive
                                and augassign_target_first_negative)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch

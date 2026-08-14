@@ -1205,3 +1205,8 @@ R37 models Python target ordering rather than treating assignment as a simultane
 environment update. One RHS feeds chained targets left-to-right, nested destructuring
 stores sequentially, and an exception captures all earlier successful stores. AugAssign
 resolves and loads its target before RHS, then performs the operation and final store.
+
+R38 makes expression outcomes environment-aware and gives unpacking structural semantics.
+A proven bound safe Name is normal while an unbound Name raises or remains conservative.
+Known tuple/list structure binds nested and starred targets positionally; definite arity
+mismatch raises ValueError before impossible stores, and unknown iterables retain both paths.
