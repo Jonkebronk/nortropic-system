@@ -747,3 +747,21 @@ through `Path.mro()`: the returned list exposed `Path` at index zero, where `res
 and restored around the otherwise exact authority assignment. The product uses only `Path.home()` as a
 class method. That exact zero-argument form is now the sole admitted class-method root; constructor calls
 remain admitted. A class-container monkeypatch mutant permanently binds the reviewed bypass.
+
+## 2026-08-14 — H-031 builder: explicit provider model routing
+
+The existing H-032 provider boundary now selects its model route from one static role policy before
+creating any run state. The six admitted roles all use `gpt-5.6-sol`; BUILDER uses reasoning effort
+`high`, while ARCHITECT, TEST_AUTHOR, GATE_REVIEWER, REVIEWER and EMPIRICAL use `max`. Unknown, empty
+and case-variant roles stop before journal lookup, snapshot creation or process effects.
+
+The selected route is inserted into the actual provider argv as exactly one `--ignore-user-config`,
+one model selector and one `model_reasoning_effort` override. The same in-memory route values populate
+AGENT_START's model, effort and `AUTOPILOT_ROLE_POLICY` source, so persisted legacy routing remains
+readable but cannot select a new launch. Hostile CODEX_HOME and PATH configuration did not alter the
+spawned fake provider's observed argv.
+
+The generic subprocess helper remains available for Git, GitHub, node and controller tools, but now
+rejects any executable basename whose Unicode case-fold is `codex` before its sole subprocess.run site.
+No alternate provider process component, session store or selector was introduced. The frozen whole-
+module source audit and its process/import/reflection mutants remain the bounded enforcement surface.
