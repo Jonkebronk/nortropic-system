@@ -666,7 +666,11 @@ if mode == 'output_then_fail': sys.exit(17)
     interruption_before = quiescence_inventory(interruption_root)
     time.sleep(1.0)
     interruption_after = quiescence_inventory(interruption_root)
-    interruption_quiescent = interruption_before == interruption_after
+    interruption_quiescent = (
+        not interruption_after[0]
+        and interruption_before[1] == interruption_after[1]
+        and not interruption_after[2]
+        and not interruption_after[3])
 
     original_popen_timeout = module.subprocess.Popen
     def one_second_launcher(argv, *args, **kwargs):
@@ -681,6 +685,53 @@ if mode == 'output_then_fail': sys.exit(17)
         os.environ.pop("H032_RESULT_MODE", None)
     timeout_ok = rejected_clean(timeout_case) if 'rejected_clean' in locals() else (
         not timeout_case[0][0] and not timeout_case[2] and not timeout_case[3] and not timeout_case[4])
+
+    tracked_identities: set[tuple[int, int, str]] = set()
+    monitor_stop = threading.Event(); monitor_threads: list[threading.Thread] = []
+    original_tracked_popen = module.subprocess.Popen
+    def process_table():
+        lines = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,lstart="], text=True,
+                               stdout=subprocess.PIPE, check=True).stdout.splitlines()
+        rows = {}
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 7:
+                try: rows[int(parts[0])] = (int(parts[1]), " ".join(parts[2:7]))
+                except ValueError: pass
+        return rows
+    def monitor_family(root_pid: int):
+        while not monitor_stop.is_set():
+            rows = process_table(); family = {root_pid}; changed = True
+            while changed:
+                changed = False
+                for pid, (ppid, started) in rows.items():
+                    if ppid in family and pid not in family:
+                        family.add(pid); changed = True
+            for pid in family:
+                if pid in rows: tracked_identities.add((pid, rows[pid][0], rows[pid][1]))
+            time.sleep(0.01)
+    def tracked_popen(argv, *args, **kwargs):
+        process = original_tracked_popen(argv, *args, **kwargs)
+        if "-o" in list(argv):
+            thread = threading.Thread(target=monitor_family, args=(process.pid,), daemon=True)
+            monitor_threads.append(thread); thread.start()
+        return process
+    module.subprocess.Popen = tracked_popen
+    try:
+        tracked_interruption = result_case("interruption")
+    finally:
+        module.subprocess.Popen = original_tracked_popen
+        monitor_stop.set()
+        for thread in monitor_threads: thread.join(timeout=1)
+        os.environ.pop("H032_RESULT_MODE", None)
+    time.sleep(1.0)
+    remaining_identities = []
+    rows_after = process_table()
+    for identity in tracked_identities:
+        pid, _ppid, started = identity
+        if pid in rows_after and rows_after[pid][1] == started: remaining_identities.append(identity)
+    tracked_quiescent = (not tracked_interruption[0][0] and bool(tracked_identities)
+                         and not remaining_identities)
 
     def object_attack(kind: str):
         attack_repo = make_repo(str(provider))
@@ -952,6 +1003,59 @@ if mode == 'output_then_fail': sys.exit(17)
     read_attacks_ok = all(not outcome[0] and fired == 1
                           for outcome, fired in read_attacks.values())
 
+    def logical_consume_case(duplicate_parse: bool):
+        logical_repo = make_repo(str(provider)); parses = [0]; promotions = [0]
+        transport: list[Path] = []; canonical: list[Path] = []
+        original_popen = module.subprocess.Popen
+        original_loads = module.json.loads
+        original_replace = module.os.replace
+        original_rename = module.os.rename
+        def observe(argv, *args, **kwargs):
+            flat = list(argv)
+            if "-o" in flat:
+                transport.append(Path(flat[flat.index("-o") + 1]))
+                envelopes = [Path(value) for value in flat if isinstance(value, str)
+                             and Path(value).name == "provider-envelope.json"]
+                if envelopes: canonical.append(envelopes[-1].parent / "result.json")
+            return original_popen(argv, *args, **kwargs)
+        def loads(value, *args, **kwargs):
+            document = original_loads(value, *args, **kwargs)
+            if isinstance(document, dict) and complete_schema_valid(document, schema_document):
+                parses[0] += 1
+                if duplicate_parse:
+                    original_loads(value, *args, **kwargs); parses[0] += 1
+            return document
+        def promoted(original, src, dst, *args, **kwargs):
+            if canonical and Path(dst).absolute() == canonical[-1].absolute(): promotions[0] += 1
+            return original(src, dst, *args, **kwargs)
+        module.subprocess.Popen = observe; module.json.loads = loads
+        module.os.replace = lambda src, dst, *a, **kw: promoted(original_replace, src, dst, *a, **kw)
+        module.os.rename = lambda src, dst, *a, **kw: promoted(original_rename, src, dst, *a, **kw)
+        try:
+            outcome = attempt(logical_repo)
+        finally:
+            module.subprocess.Popen = original_popen; module.json.loads = original_loads
+            module.os.replace = original_replace; module.os.rename = original_rename
+        return outcome, parses[0], promotions[0], len(transport), len(canonical)
+    logical_once = logical_consume_case(False)
+    logical_double = logical_consume_case(True)
+    logical_once_ok = (logical_once[0][0] and logical_once[1:] == (1, 1, 1, 1))
+    logical_double_caught = (logical_double[1] == 2 and logical_double[3:] == (1, 1)
+                             and logical_double[1:3] != (1, 1))
+    subject_text = source.read_text(encoding="utf-8")
+    capability_inventory = {
+        "mmap": subject_text.count("mmap"),
+        "io.FileIO": subject_text.count("io.FileIO"),
+        "os.dup": subject_text.count("os.dup"),
+        ".raw": subject_text.count(".raw"),
+        ".buffer": subject_text.count(".buffer"),
+        ".detach(": subject_text.count(".detach("),
+        "memoryview(": subject_text.count("memoryview("),
+    }
+    capability_inventory_ok = capability_inventory == {
+        "mmap": 0, "io.FileIO": 0, "os.dup": 0, ".raw": 0,
+        ".buffer": 0, ".detach(": 0, "memoryview(": 2}
+
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
     # its own .git/control plane, and imports its own controller/launcher ROT.
@@ -1005,9 +1109,10 @@ if mode == 'output_then_fail': sys.exit(17)
         valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok
+        and logical_once_ok and logical_double_caught and capability_inventory_ok
         and oversized_positive[0][0] and exactly_once_ok
         and atomic_ok and timeout_ok and object_attacks_ok
-        and cleanup_error_ok and interruption_quiescent
+        and cleanup_error_ok and interruption_quiescent and tracked_quiescent
         and valid_output.is_absolute()
         and valid_output != valid_canonical
         and repo not in valid_output.parents and valid_repo not in valid_output.parents
@@ -1021,7 +1126,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} transport_reads={transport_consume_reads} canonical_observer_reads={canonical_observer_reads} exactly_once={exactly_once_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} transport_reads={transport_consume_reads} canonical_observer_reads={canonical_observer_reads} exactly_once={exactly_once_ok} logical_once={logical_once, logical_once_ok} logical_double={logical_double, logical_double_caught} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
