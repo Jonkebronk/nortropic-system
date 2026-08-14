@@ -105,6 +105,47 @@ def strict_json(raw: str):
         return out
     return json.loads(raw, object_pairs_hook=pairs)
 
+def complete_schema_valid(value, schema_node) -> bool:
+    """Independent complete validator for every keyword used by the frozen report schema."""
+    if not isinstance(schema_node, dict):
+        return False
+    allowed_keywords = {"$schema", "type", "properties", "required",
+                        "additionalProperties", "items", "enum"}
+    if not set(schema_node).issubset(allowed_keywords):
+        return False
+    types = schema_node.get("type")
+    if types is not None:
+        names = [types] if isinstance(types, str) else types
+        if not isinstance(names, list) or not names or not all(isinstance(x, str) for x in names):
+            return False
+        matches = {
+            "object": isinstance(value, dict),
+            "array": isinstance(value, list),
+            "string": isinstance(value, str),
+            "integer": type(value) is int,
+            "boolean": type(value) is bool,
+            "null": value is None,
+        }
+        if any(name not in matches for name in names) or not any(matches[name] for name in names):
+            return False
+    if "enum" in schema_node and value not in schema_node["enum"]:
+        return False
+    if isinstance(value, dict):
+        props = schema_node.get("properties", {})
+        required = schema_node.get("required", [])
+        if not isinstance(props, dict) or not isinstance(required, list):
+            return False
+        if not all(isinstance(key, str) for key in required) or not set(required).issubset(value):
+            return False
+        if schema_node.get("additionalProperties") is False and not set(value).issubset(props):
+            return False
+        for key, child in value.items():
+            if key in props and not complete_schema_valid(child, props[key]):
+                return False
+    if isinstance(value, list) and "items" in schema_node:
+        return all(complete_schema_valid(item, schema_node["items"]) for item in value)
+    return True
+
 def authority_shape(raw: str) -> tuple[bool, str]:
     try:
         value = strict_json(raw)
@@ -260,11 +301,39 @@ payload={'role':'TEST_AUTHOR','outcome':'READY','summary':'physical result ancho
  'frozen_artifacts_modified':False,'production_files_modified':False,
  'frozen_gate_ready':True,'baseline_red_for_right_reason':True,
  'owner_decision_required':False,'stop_reason':'NONE','next_action':'BUILD','next_task_id':'h-032'}
+mutations={
+ 'wrong_role':lambda p:p.update(role='BUILDER'),
+ 'wrong_outcome':lambda p:p.update(outcome='INVALID'),
+ 'wrong_summary_type':lambda p:p.update(summary=7),
+ 'wrong_changed_files_type':lambda p:p.update(changed_files=[7]),
+ 'wrong_finding_shape':lambda p:p.update(blocking_findings=[{'id':'x','summary':'x'}]),
+ 'wrong_test_shape':lambda p:p.update(tests=[{'name':'x','command':'x','exit':'zero','result':'PASS','decisive_evidence':'x'}]),
+ 'wrong_nullable_bool':lambda p:p.update(allowed_write_violation='false'),
+ 'wrong_owner_bool':lambda p:p.update(owner_decision_required=0),
+ 'wrong_next_action':lambda p:p.update(next_action='SHIP'),
+ 'wrong_next_task':lambda p:p.update(next_task_id=7),
+}
 if mode == 'extra': payload['unexpected']='worker-controlled'
+if mode in mutations: mutations[mode](payload)
+encoded=json.dumps(payload,separators=(',',':'))
 if mode == 'malformed': out.write_text('{')
-elif mode != 'missing': out.write_text(json.dumps(payload))
+elif mode == 'empty': out.write_bytes(b'')
+elif mode == 'partial': out.write_text(encoded[:max(1,len(encoded)//2)])
+elif mode == 'trailing': out.write_text(encoded+' x')
+elif mode == 'concatenated': out.write_text(encoded+encoded)
+elif mode == 'duplicate': out.write_text(encoded[:-1]+',"role":"TEST_AUTHOR"}')
+elif mode == 'invalid_utf8': out.write_bytes(bytes([255]))
+elif mode == 'preseed': out.write_text('stale'); out.write_text(encoded)
+elif mode == 'copied': out.write_text(encoded)
+elif mode == 'disconnected_writer':
+    subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
+elif mode != 'missing': out.write_text(encoded)
 pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'canonical_result':str(canonical),'mode':mode,'hostile_path':str(hostile),'hostile_error':hostile_error}))
-print(json.dumps({'type':'thread.started','thread_id':'h032'}))
+thread='h032'
+if mode == 'wrong_thread': thread='foreign-thread'
+if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
+if mode == 'multiple_thread': print(json.dumps({'type':'thread.started','thread_id':'second-thread'}))
+if mode in {'output_then_fail','timeout','interruption'}: sys.exit(17)
 """, encoding="utf-8")
     provider.chmod(0o700)
     good_bytes = provider.read_bytes(); good_hash = hashlib.sha256(good_bytes).hexdigest()
@@ -454,36 +523,80 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     valid_canonical = Path(cap.get("canonical_result", "/private/tmp/h032-missing-canonical"))
     valid_schema = False
     try:
-        valid_document = strict_json(valid_canonical.read_text(encoding="utf-8"))
-        valid_schema = (isinstance(valid_document, dict)
-            and set(valid_document) == {"role", "outcome", "summary", "changed_files",
-                "blocking_findings", "tests", "allowed_write_violation",
-                "frozen_artifacts_modified", "production_files_modified", "frozen_gate_ready",
-                "baseline_red_for_right_reason", "owner_decision_required", "stop_reason",
-                "next_action", "next_task_id"}
-            and valid_document["role"] == "TEST_AUTHOR" and valid_document["outcome"] == "READY"
-            and type(valid_document["owner_decision_required"]) is bool
-            and isinstance(valid_document["blocking_findings"], list))
+        schema_document = strict_json(schema_source.read_text(encoding="utf-8"))
+        valid_raw = valid_canonical.read_bytes()
+        valid_document = strict_json(valid_raw.decode("utf-8", errors="strict"))
+        valid_schema = (len(valid_raw) <= 1024 * 1024
+            and complete_schema_valid(valid_document, schema_document)
+            and valid_document["role"] == "TEST_AUTHOR")
     except Exception: pass
-    extra_case = result_case("extra")
-    malformed_case = result_case("malformed")
-    missing_case = result_case("missing")
-    hostile_case = result_case("hostile")
+    negative_modes = (
+        "extra", "malformed", "missing", "empty", "partial", "trailing",
+        "concatenated", "duplicate", "invalid_utf8", "wrong_role", "wrong_outcome",
+        "wrong_summary_type", "wrong_changed_files_type", "wrong_finding_shape",
+        "wrong_test_shape", "wrong_nullable_bool", "wrong_owner_bool",
+        "wrong_next_action", "wrong_next_task", "preseed", "copied",
+        "disconnected_writer", "wrong_thread", "missing_thread", "multiple_thread",
+        "output_then_fail", "timeout", "interruption", "hostile")
+    negative_cases = {mode: result_case(mode) for mode in negative_modes}
     os.environ.pop("H032_RESULT_MODE", None)
+
+    # Reproduce the production topology, not merely a standalone fixture repo:
+    # a temporary linked worktree has the authoritative repository's exact
+    # common Git directory as LIVE_GIT while the controller source/launcher ROT
+    # remains this exact candidate.  Every touched controller journal byte and
+    # worktree-admin entry is restored in the enclosing finally.
+    physical_repo = work / "physical-live-git-worktree"
+    live_git = module.common_git_dir(repo).resolve()
+    live_journal = live_git / "nortropic-codex-autopilot"
+    live_events = live_journal / "events.jsonl"
+    events_existed = live_events.exists()
+    events_before = live_events.read_bytes() if events_existed else b""
+    runs_root = live_journal / "runs"
+    runs_before = {p.name for p in runs_root.iterdir()} if runs_root.is_dir() else set()
+    physical_case = None
+    physical_capture = {}
+    try:
+        sh(GIT, "worktree", "add", "--detach", "-q", str(physical_repo), "HEAD", cwd=repo)
+        physical_authority = physical_repo / "config/codex-provider-identity.json"
+        physical_authority.write_text(json.dumps(authority_document(str(provider))), encoding="utf-8")
+        os.environ["H032_RESULT_MODE"] = "valid"
+        physical_case = attempt(physical_repo)
+        physical_capture = json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else {}
+    finally:
+        os.environ.pop("H032_RESULT_MODE", None)
+        if runs_root.is_dir():
+            for child in list(runs_root.iterdir()):
+                if child.name not in runs_before:
+                    shutil.rmtree(child) if child.is_dir() and not child.is_symlink() else child.unlink()
+        if events_existed:
+            live_events.write_bytes(events_before)
+        elif live_events.exists():
+            live_events.unlink()
+        if physical_repo.exists():
+            sh(GIT, "worktree", "remove", "--force", str(physical_repo), cwd=repo)
+        sh(GIT, "worktree", "prune", cwd=repo)
+    physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
+    physical_canonical = Path(physical_capture.get("canonical_result", "/private/tmp/h032-missing-physical-canonical"))
+    physical_topology_ok = (
+        physical_case is not None and physical_case[0]
+        and module.common_git_dir(repo).resolve() == live_git
+        and live_git in physical_canonical.parents
+        and live_git not in physical_output.parents
+        and not physical_output.exists())
     def rejected_clean(case) -> bool:
         result, _capture, output_exists, canonical_exists, hostile_exists = case
         return not result[0] and result[2] == 1 and not output_exists and not canonical_exists and not hostile_exists
     result_delivery_ok = (
-        valid[0] and valid_schema and valid_output.is_absolute()
+        valid[0] and valid_schema and physical_topology_ok and valid_output.is_absolute()
         and valid_output != valid_canonical
         and repo not in valid_output.parents and valid_repo not in valid_output.parents
         and module.journal_root(valid_repo) not in valid_output.parents
         and not valid_output.exists() and valid_canonical.is_file()
-        and rejected_clean(extra_case) and rejected_clean(malformed_case)
-        and rejected_clean(missing_case) and rejected_clean(hostile_case)
-        and hostile_case[1].get("hostile_error") != "WRITE_SUCCEEDED")
+        and all(rejected_clean(case) for case in negative_cases.values())
+        and negative_cases["hostile"][1].get("hostile_error") != "WRITE_SUCCEEDED")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} extra={extra_case} malformed={malformed_case} missing={missing_case} hostile={hostile_case}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
