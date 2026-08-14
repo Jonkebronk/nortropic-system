@@ -148,6 +148,28 @@ def complete_schema_valid(value, schema_node) -> bool:
         return all(complete_schema_valid(item, schema_node["items"]) for item in value)
     return True
 
+MAX_RESULT_BYTES = 4 * 1024 * 1024
+def bounded_stable_result(path: Path) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode): raise ValueError("result is nonregular")
+        chunks: list[bytes] = []; total = 0
+        while total <= MAX_RESULT_BYTES:
+            chunk = os.read(fd, min(65536, MAX_RESULT_BYTES + 1 - total))
+            if not chunk: break
+            chunks.append(chunk); total += len(chunk)
+        after = os.fstat(fd)
+        if total > MAX_RESULT_BYTES: raise ValueError("result exceeds exact bound")
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError("result changed during read")
+        if total != before.st_size: raise ValueError("short result read")
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
 def authority_shape(raw: str) -> tuple[bool, str]:
     try:
         value = strict_json(raw)
@@ -317,8 +339,11 @@ mutations={
 }
 if mode == 'extra': payload['unexpected']='worker-controlled'
 if mode in mutations: mutations[mode](payload)
-if mode == 'oversized_valid': payload['summary']='v'*(2*1024*1024)
-if mode == 'oversized': payload['summary']='x'*(4*1024*1024+1)
+if mode in {'exact_max','over_max'}:
+    payload['summary']=''
+    base=json.dumps(payload,separators=(',',':'))
+    target=4*1024*1024+(1 if mode == 'over_max' else 0)
+    payload['summary']='x'*(target-len(base))
 encoded=json.dumps(payload,separators=(',',':'))
 if mode == 'timeout':
     import time; time.sleep(3)
@@ -539,9 +564,9 @@ if mode == 'output_then_fail': sys.exit(17)
     valid_schema = False
     try:
         schema_document = strict_json(schema_source.read_text(encoding="utf-8"))
-        valid_raw = valid_canonical.read_bytes()
+        valid_raw = bounded_stable_result(valid_canonical)
         valid_document = strict_json(valid_raw.decode("utf-8", errors="strict"))
-        valid_schema = (len(valid_raw) <= 4 * 1024 * 1024
+        valid_schema = (len(valid_raw) <= MAX_RESULT_BYTES
             and complete_schema_valid(valid_document, schema_document)
             and valid_document["role"] == "TEST_AUTHOR")
     except Exception: pass
@@ -550,11 +575,20 @@ if mode == 'output_then_fail': sys.exit(17)
         "concatenated", "duplicate", "invalid_utf8", "wrong_role", "wrong_outcome",
         "wrong_summary_type", "wrong_changed_files_type", "wrong_finding_shape",
         "wrong_test_shape", "wrong_nullable_bool", "wrong_owner_bool",
-        "wrong_next_action", "wrong_next_task", "oversized",
+        "wrong_next_action", "wrong_next_task", "over_max",
         "disconnected_writer", "wrong_thread", "missing_thread", "multiple_thread",
         "output_then_fail", "interruption", "hostile")
     negative_cases = {mode: result_case(mode) for mode in negative_modes}
     os.environ.pop("H032_RESULT_MODE", None)
+    interruption_repo = Path(negative_cases["interruption"][1].get("canonical_result", work))
+    interruption_root = (interruption_repo.parents[3] if interruption_repo != work
+                         and len(interruption_repo.parents) > 3 else work)
+    interruption_before = sorted((str(p), p.stat().st_size) for p in interruption_root.rglob("*")
+                                 if p.is_file())
+    time.sleep(1.0)
+    interruption_after = sorted((str(p), p.stat().st_size) for p in interruption_root.rglob("*")
+                                if p.is_file())
+    interruption_quiescent = interruption_before == interruption_after
 
     original_popen_timeout = module.subprocess.Popen
     def one_second_launcher(argv, *args, **kwargs):
@@ -598,11 +632,49 @@ if mode == 'output_then_fail': sys.exit(17)
             if path.is_symlink() or path.is_file(): path.unlink()
             elif path.is_dir(): path.rmdir()
         return outcome, len(seeded) == 1, intact
-    object_attacks = {kind: object_attack(kind) for kind in ("symlink", "directory", "hardlink")}
-    object_attacks_ok = all(not value[0][0] and value[0][2] == 0
-                            and value[1] and value[2] for value in object_attacks.values())
+    selected_transport = ("stream" if str(valid_output).startswith("/dev/fd/")
+                          else "filesystem")
+    object_attacks = ({kind: object_attack(kind) for kind in ("symlink", "directory", "hardlink")}
+                      if selected_transport == "filesystem" else {})
+    object_attacks_ok = (selected_transport != "filesystem" or
+        all(not value[0][0] and value[0][2] == 0
+            and value[1] and value[2] for value in object_attacks.values()))
 
-    oversized_positive = result_case("oversized_valid")
+    def framed_stream_oracle(raw: bytes) -> bool:
+        if len(raw) < 4: return False
+        size = int.from_bytes(raw[:4], "big")
+        if size > MAX_RESULT_BYTES or len(raw) != size + 4: return False
+        try:
+            document = strict_json(raw[4:].decode("utf-8", errors="strict"))
+        except Exception:
+            return False
+        return complete_schema_valid(document, schema_document)
+    stream_payload = bounded_stable_result(valid_canonical)
+    stream_frame = len(stream_payload).to_bytes(4, "big") + stream_payload
+    stream_reference_ok = (
+        framed_stream_oracle(stream_frame)
+        and not framed_stream_oracle(stream_frame[:-1])
+        and not framed_stream_oracle(stream_frame + b"x")
+        and not framed_stream_oracle((MAX_RESULT_BYTES + 1).to_bytes(4, "big") + stream_payload))
+
+    cleanup_repo = make_repo(str(provider))
+    original_rmtree_result = module.shutil.rmtree
+    cleanup_failures = [0]
+    def fail_first_transport_cleanup(path, *args, **kwargs):
+        target = Path(path)
+        if target.name.startswith("nortropic-provider-") and cleanup_failures[0] == 0:
+            cleanup_failures[0] += 1
+            raise OSError("H032 injected transient cleanup failure")
+        return original_rmtree_result(path, *args, **kwargs)
+    module.shutil.rmtree = fail_first_transport_cleanup
+    try:
+        cleanup_error_case = attempt(cleanup_repo)
+    finally:
+        module.shutil.rmtree = original_rmtree_result
+    cleanup_error_ok = (cleanup_failures[0] == 1 and not cleanup_error_case[0]
+                        and not cleanup_error_case[4])
+
+    oversized_positive = result_case("exact_max")
     os.environ.pop("H032_RESULT_MODE", None)
 
     atomic_repo = make_repo(str(provider))
@@ -650,6 +722,28 @@ if mode == 'output_then_fail': sys.exit(17)
         replay_case = (False, f"{type(exc).__name__}:{exc}")
     replay_rejects = (not replay_case[0] and replay_result.read_bytes() == stale_bytes)
 
+    # Replay an already accepted value into a fresh invocation through an
+    # unrelated controller-side writer.  The genuine provider emits no result;
+    # acceptance would therefore prove disconnected replay/second consumption.
+    external_repo = make_repo(str(provider))
+    original_external_popen = module.subprocess.Popen
+    external_writes: list[Path] = []
+    def external_replay_writer(argv, *args, **kwargs):
+        flat = list(argv)
+        if "-o" in flat:
+            target = Path(flat[flat.index("-o") + 1])
+            target.write_bytes(stale_bytes); external_writes.append(target)
+        return original_external_popen(argv, *args, **kwargs)
+    module.subprocess.Popen = external_replay_writer
+    os.environ["H032_RESULT_MODE"] = "missing"
+    try:
+        external_replay_case = attempt(external_repo)
+    finally:
+        module.subprocess.Popen = original_external_popen
+        os.environ.pop("H032_RESULT_MODE", None)
+    external_replay_ok = (len(external_writes) == 1 and not external_replay_case[0]
+                          and external_replay_case[2] == 1)
+
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
     # its own .git/control plane, and imports its own controller/launcher ROT.
@@ -694,7 +788,9 @@ if mode == 'output_then_fail': sys.exit(17)
         return not result[0] and result[2] == 1 and not output_exists and not canonical_exists and not hostile_exists
     result_delivery_ok = (
         valid[0] and valid_schema and physical_topology_ok and stale_rejects and replay_rejects
+        and external_replay_ok
         and oversized_positive[0][0] and atomic_ok and timeout_ok and object_attacks_ok
+        and stream_reference_ok and cleanup_error_ok and interruption_quiescent
         and valid_output.is_absolute()
         and valid_output != valid_canonical
         and repo not in valid_output.parents and valid_repo not in valid_output.parents
@@ -703,7 +799,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(rejected_clean(case) for case in negative_cases.values())
         and negative_cases["hostile"][1].get("hostile_error") != "WRITE_SUCCEEDED")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup_error={cleanup_error_case, cleanup_error_ok} transport={selected_transport} objects={object_attacks, object_attacks_ok} stream_alternative={stream_reference_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),

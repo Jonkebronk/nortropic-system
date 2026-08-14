@@ -906,3 +906,11 @@ authority domain, so no canonical journal rollback or global worktree pruning oc
 Causal stale/replay controls predate their invocation, an active reader observes partial
 canonical publication, a real one-second launcher timeout and signal interruption run,
 and the frozen result ceiling is exactly 4 MiB with a valid 2 MiB positive.
+
+R4 makes the ceiling controls byte-exact: a complete schema-valid encoding of exactly
+4 MiB is admitted and 4 MiB + 1 rejects through a no-follow, same-opened, stable bounded
+reader. An accepted value is replayed into a fresh invocation by an unrelated writer,
+transient cleanup failure and delayed interruption quiescence are observed, and the
+gate classifies filesystem versus descriptor/stream transport before applying attacks.
+A length-framed bounded stream positive plus EOF/partial/trailing/oversize negatives
+keeps the frozen criterion open to a legitimate non-path implementation.
