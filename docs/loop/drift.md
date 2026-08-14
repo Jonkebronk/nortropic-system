@@ -1075,3 +1075,12 @@ provenance satisfiable without name-based tag splitting. Formal environments inc
 positional-only, positional, keyword-only, vararg tuple and kwarg mapping categories;
 literal star and double-star expansion follows Python duplicate/missing/default rules,
 while unresolved dynamic expansions reject.
+
+R22 grants RUN/INVOCATION tags only after the complete zero-argument origin helper body
+passes a provider-independent secrets.token_hex(16)/uuid.uuid4 entropy audit. Multiple
+runtime calls must be shaped, nonempty, pairwise fresh and disjoint across the two
+classes. `analyze_candidate_tree` no longer mutates AST nodes; its single semantic
+vocabulary admits the owner-frozen reader templates. Process constructor sites are
+recorded during context-sensitive actual-to-formal interpretation rather than a global
+call rescan. Positional-only keywords reject, literal star/double-star expansions bind
+faithfully, and unresolved dynamic expansions remain fail-closed.

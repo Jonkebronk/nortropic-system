@@ -524,17 +524,21 @@ if mode == 'output_then_fail': sys.exit(17)
             run_calls = [node for node in ast.walk(run_codex_nodes[0]) if isinstance(node, ast.Call)
                          and isinstance(node.func, ast.Name)
                          and node.func.id == "_consume_private_result"]
-            top_functions = {node.name:node for node in candidate_tree.body
-                             if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
+            function_nodes=[node for node in ast.walk(candidate_tree)
+                            if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))]
+            top_functions={node.name:node for node in function_nodes
+                           if sum(1 for other in function_nodes if other.name==node.name)==1}
             pure_names = {"len","min","max","isinstance","type","bytes","bytearray",
                           "memoryview","range","enumerate","all","any","bool","str","int"}
             pure_attrs = {("os","fstat"),("os","read"),("os","pread"),("os","readv"),
                           ("os","preadv"),("os","fdopen"),("os","dup"),("os","close"),
-                          ("os","fsync"),("os","open"),("os","replace"),
-                          ("io","FileIO"),("mmap","mmap"),("hashlib","sha256"),
-                          ("json","loads"),("stat","S_ISREG"),("stat","S_IMODE")}
+                      ("os","fsync"),("os","open"),("os","replace"),
+                      ("os","lseek"),("os","readlink"),
+                      ("io","FileIO"),("mmap","mmap"),("hashlib","sha256"),
+                      ("io","BufferedReader"),("json","loads"),
+                      ("stat","S_ISREG"),("stat","S_IMODE")}
             capability_methods = {"read","readinto","read1","readinto1","readall",
-                                  "seek","tell","fileno","close","flush"}
+                                  "seek","tell","fileno","close","flush","decode","get"}
             forbidden_dynamic = {"globals","locals","vars","getattr","setattr","eval","exec",
                                  "compile","__import__","import_module","open"}
             graph_nodes=[];graph_ok=True;pending=[consumer.name];seen=set()
@@ -614,7 +618,6 @@ if mode == 'output_then_fail': sys.exit(17)
                 and "role" in [arg.arg for arg in run_codex_nodes[0].args.args])
             parent_map={child:parent for parent in ast.walk(candidate_tree)
                         for child in ast.iter_child_nodes(parent)}
-            for child,parent in parent_map.items(): setattr(child,"_r15_parent",parent)
             helper_direct=all(isinstance(parent_map.get(item),ast.Call)
                               and parent_map[item].func is item for item in helper_loads)
             all_popen_sites=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Call)
@@ -701,11 +704,38 @@ if mode == 'output_then_fail': sys.exit(17)
                 or {part.value for part in ast.walk(node) if isinstance(part,ast.Constant)
                     and isinstance(part.value,str)} >= {
                         "executable_path","executable_sha256",
-                        "code_mode_host_path","code_mode_host_sha256"}}
+                    "code_mode_host_path","code_mode_host_sha256"}}
+            origin_names={"_new_run_id","_new_invocation_id"}
+            origin_body_ok={}
+            for origin_name in origin_names:
+                origin=top_functions.get(origin_name);ok=origin is not None
+                if ok:
+                    calls=[item for item in ast.walk(origin) if isinstance(item,ast.Call)]
+                    allowed_entropy=all(
+                        (isinstance(call.func,ast.Attribute)
+                         and isinstance(call.func.value,ast.Name)
+                         and (call.func.value.id,call.func.attr) in {
+                             ("secrets","token_hex"),("uuid","uuid4")})
+                        or (isinstance(call.func,ast.Name)
+                            and call.func.id in {"str"})
+                        for call in calls)
+                    token_calls=[call for call in calls if isinstance(call.func,ast.Attribute)
+                        and isinstance(call.func.value,ast.Name)
+                        and (call.func.value.id,call.func.attr)==("secrets","token_hex")]
+                    token_shape=all(len(call.args)==1 and isinstance(call.args[0],ast.Constant)
+                                    and call.args[0].value==16 and not call.keywords
+                                    for call in token_calls)
+                    forbidden_load=any(isinstance(item,ast.Name) and isinstance(item.ctx,ast.Load)
+                        and (item.id in identity_helpers or item.id in {
+                            "provider","authority","code_mode_host"})
+                        for item in ast.walk(origin))
+                    ok=allowed_entropy and token_shape and bool(calls) and not forbidden_load
+                origin_body_ok[origin_name]=ok
             capability_calls={"read","readinto","read1","readinto1","readall",
                               "pread","preadv","readv","fdopen","FileIO","mmap",
                               "dup","fileno","raw","buffer","seek","tell"}
             r17_active=set()
+            process_sites=set()
             def r17_expr(node,env):
                 if node is None: return frozenset()
                 if isinstance(node,ast.Name):
@@ -730,12 +760,16 @@ if mode == 'output_then_fail': sys.exit(17)
                         list(node.args)+[kw.value for kw in node.keywords]))
                     if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
                         return r17_join(transferred,frozenset({CANONICAL}))
-                    if isinstance(node.func,ast.Name) and node.func.id=="_new_run_id":
+                    if (isinstance(node.func,ast.Name) and node.func.id=="_new_run_id"
+                            and origin_body_ok.get("_new_run_id",False)):
                         return r17_join(transferred,frozenset({RUN}))
-                    if isinstance(node.func,ast.Name) and node.func.id=="_new_invocation_id":
+                    if (isinstance(node.func,ast.Name) and node.func.id=="_new_invocation_id"
+                            and origin_body_ok.get("_new_invocation_id",False)):
                         return r17_join(transferred,frozenset({INVOCATION}))
                     callable_tags=r17_expr(node.func,env)
-                    if PROCESS_CONSTRUCTOR in callable_tags: return frozenset({PROCESS_OBJECT})
+                    if PROCESS_CONSTRUCTOR in callable_tags:
+                        process_sites.add((getattr(node,"lineno",-1),getattr(node,"col_offset",-1)))
+                        return frozenset({PROCESS_OBJECT})
                     if isinstance(node.func,ast.Name) and node.func.id in identity_helpers:
                         return r17_join(transferred,frozenset({IDENTITY}))
                     if isinstance(node.func,ast.Name) and node.func.id in helper_summaries:
@@ -754,6 +788,7 @@ if mode == 'output_then_fail': sys.exit(17)
             def r20_bind_call(fn,call,env):
                 positional=list(fn.args.posonlyargs)+list(fn.args.args)
                 names=[arg.arg for arg in positional]
+                posonly={arg.arg for arg in fn.args.posonlyargs}
                 kwonly=[arg.arg for arg in fn.args.kwonlyargs]
                 bound={};valid=True
                 expanded=[]
@@ -784,6 +819,7 @@ if mode == 'output_then_fail': sys.exit(17)
                             else: valid=False
                         continue
                     if kw.arg in bound: valid=False;continue
+                    if kw.arg in posonly: valid=False;continue
                     if kw.arg in names or kw.arg in kwonly: bound[kw.arg]=r17_expr(kw.value,env)
                     elif fn.args.kwarg is not None: bound[fn.args.kwarg.arg]=r17_join(
                         bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(kw.value,env))
@@ -959,7 +995,22 @@ if mode == 'output_then_fail': sys.exit(17)
                          or id_origin_nodes[name][0].args.kwarg)
                 and len(id_origin_calls[name])==1 and not id_origin_calls[name][0].args
                 and not id_origin_calls[name][0].keywords
+                and origin_body_ok.get(name,False)
                 for name in id_origin_nodes)
+            origin_runtime_ok=False
+            if id_origins_ok:
+                try:
+                    run_values=[module._new_run_id() for _ in range(3)]
+                    invocation_values=[module._new_invocation_id() for _ in range(3)]
+                    all_values=run_values+invocation_values
+                    origin_runtime_ok=(all(isinstance(value,str)
+                        and re.fullmatch(r"[A-Za-z0-9_-]{16,128}",value)
+                        for value in all_values)
+                        and len(set(run_values))==len(run_values)
+                        and len(set(invocation_values))==len(invocation_values)
+                        and set(run_values).isdisjoint(invocation_values))
+                except Exception:
+                    origin_runtime_ok=False
 
             # Resolve constructor values (module aliases, attributes, containers and
             # helper returns) with the same value interpreter before building CFG.
@@ -968,9 +1019,10 @@ if mode == 'output_then_fail': sys.exit(17)
                          else frozenset({CANONICAL}) if arg.arg=="repo"
                          else frozenset({UNKNOWN}))
                 for arg in run_codex_nodes[0].args.args})
-            resolved_popen=[item for item in ast.walk(candidate_tree)
-                if isinstance(item,ast.Call)
-                and PROCESS_CONSTRUCTOR in r17_expr(item.func,run_flow_env)]
+            # Constructor sites are recorded only while the context-sensitive
+            # interpreter evaluates a reachable call with actual→formal tags.
+            # No global rescan under one unrelated run environment is allowed.
+            resolved_popen=set(process_sites)
 
             # Conservative structured CFG.  A wait nested in any conditional,
             # loop, with or exception region cannot dominate the success exits.
@@ -1002,7 +1054,7 @@ if mode == 'output_then_fail': sys.exit(17)
                                       and len(resolved_popen)==1 and not process_binding_unresolved
                                       and not unresolved_process_calls
                                       and r20_complete_tree_analysis(candidate_tree)
-                                      and id_origins_ok)
+                                      and id_origins_ok and origin_runtime_ok)
         return {"verdict": consumer_architecture_ok,
                 "exact_consumer_args": exact_consumer_args,
                 "tree_shape": r20_complete_tree_analysis}
