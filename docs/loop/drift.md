@@ -914,3 +914,11 @@ transient cleanup failure and delayed interruption quiescence are observed, and 
 gate classifies filesystem versus descriptor/stream transport before applying attacks.
 A length-framed bounded stream positive plus EOF/partial/trailing/oversize negatives
 keeps the frozen criterion open to a legitimate non-path implementation.
+
+R5 removes that unconnected parser demonstration and freezes the least-authority
+primitive actually exposed by the authority-bound Codex CLI: an exclusive private
+regular filesystem result object beneath a controller-owned staging root, outside
+LIVE_ROOT/LIVE_GIT. Path construction, helper and bounded read APIs remain free to
+refactor. Cleanup faults are now injected against the observed result transport itself,
+with transient retry and persistent-exhaustion outcomes separated, while delayed signal
+quiescence inventories object type/content/dev-inode/mode plus process and descriptor state.
