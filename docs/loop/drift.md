@@ -1110,3 +1110,12 @@ subscript, computed `__dict__`, update-method or reflective mutation are rejecte
 Capability-reader provenance is accumulated monotonically across every reachable
 context, so neither safe/unsafe traversal order can erase an unsafe receiver while
 all-safe contexts remain admissible.
+
+R26 adds an exact lexical entropy rule: every `secrets` name and `token_hex`
+attribute load must be the precise call node in one of the two frozen origin return
+bodies, so conditional, boolean, container, helper and callable aliases reject even
+without mutation. Receiver ordering controls now use an otherwise admitted
+`io.BytesIO.read` wrong capability and separately prove that graph/source analysis
+passes while receiver provenance fails. The structured interpreter also evaluates
+augmented-assignment targets and right-hand effects; a helper-mediated
+`x += spawn(Popen)` adds a real process site and rejects.
