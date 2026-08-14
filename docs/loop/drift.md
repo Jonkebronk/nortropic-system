@@ -1127,3 +1127,11 @@ so its `read` wrong-receiver controls prove graph admissibility rather than rely
 on an accidental default. Assignment interpretation evaluates RHS and then target
 effects for attributes, subscript values/slices, nested tuple/list/star targets,
 annotated/named forms and deletes; target-side Popen calls therefore count.
+
+R28 explicitly models structural pattern matching and exception handlers. Match
+subjects, value/class/mapping-key patterns, guards and reachable bodies all contribute
+semantic effects; exception types and handler bodies do likewise. The interpreter
+also inventories every reachable `ast.stmt` class supported by the gate runtime and
+fails closed on an unmodeled class instead of silently ignoring it. Subject, guard,
+class-pattern and exception-type Popen mutants reject, while ordinary nonprocess
+match and except forms remain admissible.
