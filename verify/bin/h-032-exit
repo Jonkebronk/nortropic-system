@@ -797,6 +797,26 @@ if mode == 'output_then_fail': sys.exit(17)
                 if origin is not None and len(origin.body)==1
                 and isinstance(origin.body[0],ast.Return)
                 and isinstance(origin.body[0].value,ast.Call)}
+            allowed_entropy_names={id(call.func.value) for call in
+                (origin.body[0].value for origin in
+                 (top_functions.get(name) for name in origin_names)
+                 if origin is not None and len(origin.body)==1
+                 and isinstance(origin.body[0],ast.Return)
+                 and isinstance(origin.body[0].value,ast.Call))
+                if isinstance(call.func,ast.Attribute)}
+            allowed_entropy_attrs={id(call.func) for call in
+                (origin.body[0].value for origin in
+                 (top_functions.get(name) for name in origin_names)
+                 if origin is not None and len(origin.body)==1
+                 and isinstance(origin.body[0],ast.Return)
+                 and isinstance(origin.body[0].value,ast.Call))
+                if isinstance(call.func,ast.Attribute)}
+            lexical_entropy_ok=(all(id(item) in allowed_entropy_names for item in
+                ast.walk(candidate_tree) if isinstance(item,ast.Name)
+                and isinstance(item.ctx,ast.Load) and item.id=="secrets")
+                and all(id(item) in allowed_entropy_attrs for item in
+                    ast.walk(candidate_tree) if isinstance(item,ast.Attribute)
+                    and isinstance(item.ctx,ast.Load) and item.attr=="token_hex"))
             for item in (part for part in ast.walk(candidate_tree) if isinstance(part,ast.Call)):
                 receiver=item.func.value if isinstance(item.func,ast.Attribute) else None
                 touches_receiver=entropy_value(receiver)
@@ -808,6 +828,9 @@ if mode == 'output_then_fail': sys.exit(17)
                     and item.args[0].value==16 and not item.keywords)
                 if (touches_receiver or passes_capability) and not exact_allowed:
                     entropy_mutations.append("capability-use")
+            for name in origin_body_ok:
+                origin_body_ok[name]=origin_body_ok[name] and lexical_entropy_ok \
+                    and not entropy_mutations
             capability_calls={"read","readinto","read1","readinto1","readall",
                               "pread","preadv","readv","fdopen","FileIO","mmap",
                               "dup","fileno","raw","buffer","seek","tell"}
@@ -941,6 +964,15 @@ if mode == 'output_then_fail': sys.exit(17)
                                 for name in names:
                                     joined=r17_join(env.get(name,frozenset()),value)
                                     if joined != env.get(name): env[name]=joined;changed=True
+                        elif isinstance(item,ast.AugAssign):
+                            value=r17_join(r17_expr(item.target,env),r17_expr(item.value,env))
+                            names=r17_targets(item.target)
+                            if not names and value & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,
+                                                      PROCESS_OBJECT}:
+                                process_binding_unresolved.append(type(item.target).__name__)
+                            for name in names:
+                                joined=r17_join(env.get(name,frozenset()),value)
+                                if joined != env.get(name): env[name]=joined;changed=True
                         elif isinstance(item,ast.Return): returns.append(r17_expr(item.value,env))
                         elif isinstance(item,ast.Expr): r17_expr(item.value,env)
                         elif isinstance(item,(ast.If,ast.While,ast.Assert)):
@@ -1159,14 +1191,17 @@ if mode == 'output_then_fail': sys.exit(17)
                 if isinstance(call,ast.Call) and UNKNOWN in r17_expr(call.func,run_flow_env)
                 and any(isinstance(part,ast.Name) and part.id in module_bindings
                         for part in ast.walk(call.func))]
-            consumer_architecture_ok=(consumer_architecture_ok and semantic_call_ok
-                                      and receiver_ok and not identity_escape and cfg_ok
+            non_receiver_verdict=(consumer_architecture_ok and semantic_call_ok
+                                      and not identity_escape and cfg_ok
                                       and len(resolved_popen)==1 and not process_binding_unresolved
                                       and not unresolved_process_calls
                                       and r20_complete_tree_analysis(candidate_tree)
                                       and id_origins_ok and origin_runtime_ok)
+            consumer_architecture_ok=non_receiver_verdict and receiver_ok
         return {"verdict": consumer_architecture_ok,
                 "exact_consumer_args": exact_consumer_args,
+                "receiver_ok": receiver_ok if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
+                "non_receiver_verdict": non_receiver_verdict if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "tree_shape": r20_complete_tree_analysis}
     candidate_analysis = analyze_candidate_tree(candidate_tree)
     consumer_architecture_ok = candidate_analysis["verdict"]
@@ -1183,20 +1218,37 @@ if mode == 'output_then_fail': sys.exit(17)
                       "_r25_entropy.__dict__['token_' + 'hex'] = lambda n: '0' * n\n")
         dict_update=("_r25_box = {'cap': secrets}\n"
                      "_r25_box['cap'].__dict__.update({'token_hex': lambda n: '0' * n})\n")
+        ifexp="_r26_entropy = secrets if True else None\n"
+        boolop="_r26_entropy = secrets or None\n"
+        callable_alias="_r26_entropy = secrets.token_hex\n"
         entropy_rejects=all(not analyze_candidate_tree(r25_tree_with_module(source))["verdict"]
-                            for source in (computed_key,dict_update))
+                            for source in (computed_key,dict_update,ifexp,boolop,callable_alias))
         def r25_receiver_variant(first,second):
             tree=copy.deepcopy(candidate_tree)
             seam=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
                       and node.name=="_consume_private_result")
             seam.body=ast.parse(first).body+seam.body+ast.parse(second).body
-            ast.fix_missing_locations(tree);return analyze_candidate_tree(tree)["verdict"]
+            ast.fix_missing_locations(tree);return analyze_candidate_tree(tree)
         safe="os.pread(sink_fd, 0, 0)\n"
-        unsafe="Path('.').read_bytes()\n"
-        receiver_rejects=(not r25_receiver_variant(unsafe,safe)
-                          and not r25_receiver_variant(safe,unsafe))
-        receiver_positive=r25_receiver_variant(safe,safe)
-        r25_static_mutants_ok=entropy_rejects and receiver_rejects and receiver_positive
+        unsafe="io.BytesIO(b'x').read(0)\n"
+        unsafe_first=r25_receiver_variant(unsafe,safe)
+        unsafe_last=r25_receiver_variant(safe,unsafe)
+        all_safe=r25_receiver_variant(safe,safe)
+        receiver_rejects=(unsafe_first["non_receiver_verdict"] and not unsafe_first["receiver_ok"]
+                          and not unsafe_first["verdict"]
+                          and unsafe_last["non_receiver_verdict"] and not unsafe_last["receiver_ok"]
+                          and not unsafe_last["verdict"])
+        receiver_positive=(all_safe["non_receiver_verdict"] and all_safe["receiver_ok"]
+                           and all_safe["verdict"])
+        aug_tree=copy.deepcopy(candidate_tree)
+        aug_tree.body.append(ast.parse("def _r26_spawn(ctor):\n    return ctor(['/usr/bin/true'])\n").body[0])
+        aug_run=next(node for node in aug_tree.body if isinstance(node,ast.FunctionDef)
+                     and node.name=="run_codex")
+        aug_run.body=ast.parse("_r26_x = 0\n_r26_x += _r26_spawn(subprocess.Popen)\n").body+aug_run.body
+        ast.fix_missing_locations(aug_tree)
+        augassign_rejects=not analyze_candidate_tree(aug_tree)["verdict"]
+        r25_static_mutants_ok=(entropy_rejects and receiver_rejects
+                               and receiver_positive and augassign_rejects)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
