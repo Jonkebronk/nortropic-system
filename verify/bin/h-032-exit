@@ -70,7 +70,7 @@ AST_MATCH_STAR=getattr(ast,"MatchStar",())
 AST_MATCH_CLASS=getattr(ast,"MatchClass",())
 AST_MATCH_MAPPING=getattr(ast,"MatchMapping",())
 AST_TRY_STAR=getattr(ast,"TryStar",())
-AST_TRY_TYPES=(ast.Try,)+( (AST_TRY_STAR,) if isinstance(AST_TRY_STAR,type) else () )
+AST_TRY_TYPES=(ast.Try,)
 import copy
 import builtins
 import fcntl
@@ -490,6 +490,23 @@ if mode == 'output_then_fail': sys.exit(17)
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
     candidate_tree = ast.parse(source.read_text(encoding="utf-8"))
     def analyze_candidate_tree(candidate_tree):
+        r44c_unsupported=("TryStar",) if isinstance(AST_TRY_STAR,type) and any(
+            isinstance(node,AST_TRY_STAR) for node in ast.walk(candidate_tree)) else ()
+        r44c_markers={
+            "timeout_guard":any(isinstance(node,(ast.Assign,ast.AnnAssign)) and
+                any(isinstance(target,ast.Name) and target.id=="CODEX_RUN_TIMEOUT_SECONDS"
+                    for target in (node.targets if isinstance(node,ast.Assign) else [node.target]))
+                for node in ast.walk(candidate_tree)),
+            "cfg":any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+                and node.func.attr in {"wait","communicate"} for node in ast.walk(candidate_tree)),
+            "helper":any(isinstance(node,ast.FunctionDef) and node.name=="journal_root"
+                for node in candidate_tree.body),
+            "provenance":any(isinstance(node,ast.Attribute) and node.attr=="O_NOFOLLOW"
+                for node in ast.walk(candidate_tree)),
+            "heap":any(isinstance(node,ast.Attribute) and node.attr=="SimpleNamespace"
+                for node in ast.walk(candidate_tree)),
+            "try_dispatch":any(isinstance(node,ast.Try) for node in ast.walk(candidate_tree)),
+        }
         def r20_complete_tree_analysis(tree):
             consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
                        and node.name=="_consume_private_result"]
@@ -1728,19 +1745,60 @@ if mode == 'output_then_fail': sys.exit(17)
                                       and r20_complete_tree_analysis(candidate_tree)
                                       and id_origins_ok and origin_runtime_ok)
             consumer_architecture_ok=non_receiver_verdict and receiver_ok
+        if r44c_unsupported: consumer_architecture_ok=False
         return {"verdict": consumer_architecture_ok,
                 "exact_consumer_args": exact_consumer_args,
                 "receiver_ok": receiver_ok if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
                 "non_receiver_verdict": non_receiver_verdict if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
-                "tree_shape": r20_complete_tree_analysis}
-    r44b_totality_results=[]
-    for r44b_source in ("pass\n", "def run_codex(role):\n    return role\n",
-                        "def _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):\n    return role\n"):
-        r44b_result=analyze_candidate_tree(ast.parse(r44b_source))
-        if not isinstance(r44b_result,dict) or set(r44b_result)!={"verdict","exact_consumer_args","receiver_ok","non_receiver_verdict","tree_shape"}:
-            raise RuntimeError("R44B_TOTALITY_BAD_RESULT")
-        r44b_totality_results.append(r44b_result["verdict"] is False)
-    r44b_totality_ok=all(r44b_totality_results)
+                "tree_shape": r20_complete_tree_analysis,
+                "unsupported":r44c_unsupported,"markers":r44c_markers}
+    r44c_source='''import os
+import subprocess
+import secrets
+import types
+CODEX_RUN_TIMEOUT_SECONDS = 86400
+def _new_run_id():
+    return secrets.token_hex(16)
+def _new_invocation_id():
+    return secrets.token_hex(16)
+def journal_root(repo):
+    return repo
+def _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
+    try:
+        raw = os.read(sink_fd, 1)
+        marker = types.SimpleNamespace(value=raw)
+    except Exception:
+        raise
+    return role
+def run_codex(repo, role):
+    run_id = _new_run_id()
+    invocation_id = _new_invocation_id()
+    canonical_destination = journal_root(repo)
+    sink_fd = os.open(repo, os.O_RDONLY | os.O_NOFOLLOW)
+    process = subprocess.Popen(['/usr/bin/true'])
+    process.communicate(timeout=CODEX_RUN_TIMEOUT_SECONDS)
+    return _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role)
+'''
+    r44c_tree=ast.parse(r44c_source);r44c_base=analyze_candidate_tree(r44c_tree)
+    required_r44c_markers={"timeout_guard","cfg","helper","provenance","heap","try_dispatch"}
+    r44c_deep_ok=(set(r44c_base)=={"verdict","exact_consumer_args","receiver_ok",
+        "non_receiver_verdict","tree_shape","unsupported","markers"}
+        and required_r44c_markers=={key for key,value in r44c_base["markers"].items() if value})
+    r44c_timeout=copy.deepcopy(r44c_tree)
+    next(node for node in r44c_timeout.body if isinstance(node,ast.Assign)
+         and any(isinstance(target,ast.Name) and target.id=="CODEX_RUN_TIMEOUT_SECONDS" for target in node.targets)).value=ast.Name(id="BAD_TIMEOUT",ctx=ast.Load())
+    r44c_keyword=copy.deepcopy(r44c_tree)
+    wait_call=next(node for node in ast.walk(r44c_keyword) if isinstance(node,ast.Call)
+        and isinstance(node.func,ast.Attribute) and node.func.attr=="communicate")
+    wait_call.keywords=[ast.keyword(arg="wrong",value=ast.Name(id="CODEX_RUN_TIMEOUT_SECONDS",ctx=ast.Load()))]
+    ast.fix_missing_locations(r44c_timeout);ast.fix_missing_locations(r44c_keyword)
+    r44c_mutants=[analyze_candidate_tree(r44c_timeout),analyze_candidate_tree(r44c_keyword)]
+    r44c_mutants_ok=all(result["verdict"] is False and not result["unsupported"] for result in r44c_mutants)
+    r44c_trystar_ok=True
+    if isinstance(AST_TRY_STAR,type):
+        r44c_star=analyze_candidate_tree(ast.parse("try:\n    pass\nexcept* Exception:\n    pass\n"))
+        r44c_trystar_ok=(r44c_star["verdict"] is False and r44c_star["unsupported"]==("TryStar",))
+    r44b_totality_ok=r44c_deep_ok and r44c_mutants_ok and r44c_trystar_ok
     candidate_analysis = analyze_candidate_tree(candidate_tree)
     consumer_architecture_ok = candidate_analysis["verdict"]
     exact_consumer_args = candidate_analysis["exact_consumer_args"]
@@ -3255,8 +3313,8 @@ if mode == 'output_then_fail': sys.exit(17)
         exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
-    check("J_R44B_ANALYZER_TOTALITY_COMPAT", r44b_totality_ok,
-          "same analyzer returned structured false verdicts for unconditional Python-3.9 minimal trees")
+    check("J_R44C_ANALYZER_DEEP_TOTALITY_COMPAT", r44b_totality_ok,
+          "same analyzer reached timeout/CFG/helper/provenance/heap/try markers; malformed timeout/keyword and conditional TryStar reject without throw")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")

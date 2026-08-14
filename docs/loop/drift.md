@@ -1241,3 +1241,9 @@ classes are obtained with `getattr` and composed into safe isinstance tuples; `a
 monkeypatched. Exact timeout constant shape/type is guarded before dereference. An unconditional
 rig-only lane sends minimal parsed trees through the same analyzer and requires structured false
 verdicts, while ACTUAL_PRODUCT remains the sole source of product RED/PASS credit.
+
+R44C separates TryStar from ordinary Try and marks it explicitly unsupported when the
+runtime can parse it. The unconditional source is now architecture-shaped and must reach
+timeout guard, CFG, helper, provenance, heap and ordinary-try dispatch markers. Causal
+timeout-name/wrong-keyword mutants and conditional except* return structured rejection,
+never an exception; these effects remain rig-only and cannot credit ACTUAL_PRODUCT.
