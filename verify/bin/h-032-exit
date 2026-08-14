@@ -247,9 +247,23 @@ attacks={
 }
 host_run=subprocess.run([str(host_path)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
     env={**os.environ,'H032_EXPECT_PROVIDER_PID':str(os.getpid())}).returncode
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks}))
 args=sys.argv[1:]; out=pathlib.Path(args[args.index('-o')+1])
-out.write_text(json.dumps({'role':'TEST_AUTHOR','outcome':'READY','owner_decision_required':False,'blocking_findings':[]}))
+canonical=pathlib.Path(os.environ['NORTROPIC_KUVERT']).parent/'result.json'
+mode=os.environ.get('H032_RESULT_MODE','valid')
+hostile=canonical.parent/'worker-hostile-result-write'
+hostile_error='NOT_ATTEMPTED'
+if mode == 'hostile':
+    try: hostile.write_text('worker-owned'); hostile_error='WRITE_SUCCEEDED'
+    except Exception as exc: hostile_error=type(exc).__name__
+payload={'role':'TEST_AUTHOR','outcome':'READY','summary':'physical result anchor','changed_files':[],
+ 'blocking_findings':[],'tests':[],'allowed_write_violation':False,
+ 'frozen_artifacts_modified':False,'production_files_modified':False,
+ 'frozen_gate_ready':True,'baseline_red_for_right_reason':True,
+ 'owner_decision_required':False,'stop_reason':'NONE','next_action':'BUILD','next_task_id':'h-032'}
+if mode == 'extra': payload['unexpected']='worker-controlled'
+if mode == 'malformed': out.write_text('{')
+elif mode != 'missing': out.write_text(json.dumps(payload))
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'canonical_result':str(canonical),'mode':mode,'hostile_path':str(hostile),'hostile_error':hostile_error}))
 print(json.dumps({'type':'thread.started','thread_id':'h032'}))
 """, encoding="utf-8")
     provider.chmod(0o700)
@@ -425,6 +439,51 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     family_effect_ok = family_effect_ok and host_ancestry_ok
     check("K_CODE_MODE_HOST_IDENTITY_BOUNDARY", family_effect_ok,
           f"valid={valid} argv0={argv0} host={host_snapshot} main_hash={cap.get('sha256')} host_hash={cap.get('host_sha256')} attacks={cap.get('attacks')} host_records={host_records} ancestry={host_ancestry_ok} cleanup={not argv0.parent.exists()}")
+    def result_case(mode: str):
+        os.environ["H032_RESULT_MODE"] = mode
+        case_result = attempt(make_repo(str(provider)))
+        case_capture = json.loads(capture.read_text(encoding="utf-8")) if capture.exists() else {}
+        output = Path(case_capture.get("output_path", "/private/tmp/h032-missing-output"))
+        canonical = Path(case_capture.get("canonical_result", "/private/tmp/h032-missing-canonical"))
+        hostile = Path(case_capture.get("hostile_path", "/private/tmp/h032-missing-hostile"))
+        observed = (case_result, case_capture, output.exists(), canonical.exists(), hostile.exists())
+        if hostile.exists(): hostile.unlink()
+        return observed
+    os.environ.pop("H032_RESULT_MODE", None)
+    valid_output = Path(cap.get("output_path", "/private/tmp/h032-missing-output"))
+    valid_canonical = Path(cap.get("canonical_result", "/private/tmp/h032-missing-canonical"))
+    valid_schema = False
+    try:
+        valid_document = strict_json(valid_canonical.read_text(encoding="utf-8"))
+        valid_schema = (isinstance(valid_document, dict)
+            and set(valid_document) == {"role", "outcome", "summary", "changed_files",
+                "blocking_findings", "tests", "allowed_write_violation",
+                "frozen_artifacts_modified", "production_files_modified", "frozen_gate_ready",
+                "baseline_red_for_right_reason", "owner_decision_required", "stop_reason",
+                "next_action", "next_task_id"}
+            and valid_document["role"] == "TEST_AUTHOR" and valid_document["outcome"] == "READY"
+            and type(valid_document["owner_decision_required"]) is bool
+            and isinstance(valid_document["blocking_findings"], list))
+    except Exception: pass
+    extra_case = result_case("extra")
+    malformed_case = result_case("malformed")
+    missing_case = result_case("missing")
+    hostile_case = result_case("hostile")
+    os.environ.pop("H032_RESULT_MODE", None)
+    def rejected_clean(case) -> bool:
+        result, _capture, output_exists, canonical_exists, hostile_exists = case
+        return not result[0] and result[2] == 1 and not output_exists and not canonical_exists and not hostile_exists
+    result_delivery_ok = (
+        valid[0] and valid_schema and valid_output.is_absolute()
+        and valid_output != valid_canonical
+        and repo not in valid_output.parents and valid_repo not in valid_output.parents
+        and module.journal_root(valid_repo) not in valid_output.parents
+        and not valid_output.exists() and valid_canonical.is_file()
+        and rejected_clean(extra_case) and rejected_clean(malformed_case)
+        and rejected_clean(missing_case) and rejected_clean(hostile_case)
+        and hostile_case[1].get("hostile_error") != "WRITE_SUCCEEDED")
+    check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} extra={extra_case} malformed={malformed_case} missing={missing_case} hostile={hostile_case}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
@@ -1447,7 +1506,9 @@ print(json.dumps({'type':'thread.started','thread_id':'h032'}))
     print(f"SAMMANFATTNING {passed} PASS / {len(checks)-passed} FAIL")
     material_failed = failed - ({"K_G20_NAMESPACE"} if g20_odom else set()) \
                              - ({"K_H033_FRESH_UPSTREAM_PROVENANCE"} if h033_odom else set())
-    if material_failed == {"K_CODE_MODE_HOST_IDENTITY_BOUNDARY"}:
+    if material_failed == {"K_STRUCTURED_RESULT_DELIVERY_BOUNDARY"}:
+        print("CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT")
+    elif material_failed == {"K_CODE_MODE_HOST_IDENTITY_BOUNDARY"}:
         print("CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
     elif material_failed:
         print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(material_failed)))
