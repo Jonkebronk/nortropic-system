@@ -131,12 +131,16 @@ EXPECTED_OS_EFFECT_COUNTS = {
 DIRECT_OS_EFFECT_ATTRS = {"chmod", "close", "fdopen", "fsync", "open", "read", "write"}
 EXPECTED_FCNTL_EFFECT_COUNTS = {"acquire_lock:flock": 1}
 EXPECTED_SYS_STREAM_COUNTS = {"main:stderr.print": 4, "run_codex:stdout.write": 1}
+EXPECTED_SYS_STATE_COUNTS = {
+    "<module>:dont_write_bytecode=True": 1,
+    "<module>:path.insert": 1,
+}
 AUDIT_MUTATION_EVENTS = {
     "os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.replace",
     "os.link", "os.symlink", "os.truncate", "os.chmod",
     "os.fork", "os.forkpty", "os.posix_spawn", "os.posix_spawnp", "os.system",
     "os.register_at_fork", "os.kill", "os.killpg", "os.chdir", "os.fchdir",
-    "os.putenv", "os.unsetenv", "fcntl.flock",
+    "os.putenv", "os.unsetenv", "fcntl.fcntl", "fcntl.flock", "fcntl.ioctl",
     "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "subprocess.Popen",
 }
 GUARDED_OS_NAMES = {
@@ -189,6 +193,11 @@ def install_effect_guards(effects):
     subprocess.Popen = effect_guard(effects, "subprocess.Popen")
     saved.append((fcntl, "flock", fcntl.flock))
     fcntl.flock = effect_guard(effects, "fcntl.flock")
+    for name in ("fcntl", "ioctl"):
+        function = getattr(fcntl, name, None)
+        if callable(function):
+            saved.append((fcntl, name, function))
+            setattr(fcntl, name, effect_guard(effects, "fcntl." + name))
     return saved
 
 
@@ -304,6 +313,7 @@ def process_shape(text: str) -> dict[str, object]:
     os_effect_counts: dict[str, int] = {}
     fcntl_effect_counts: dict[str, int] = {}
     sys_stream_counts: dict[str, int] = {}
+    sys_state_counts: dict[str, int] = {}
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
@@ -379,6 +389,43 @@ def process_shape(text: str) -> dict[str, object]:
                 violations.append((owner, node.lineno, "bare-sys-module"))
             elif parent.attr not in ALLOWED_SYS_ATTRS:
                 violations.append((owner, node.lineno, f"unapproved-sys-attribute:sys.{parent.attr}"))
+            elif parent.attr == "dont_write_bytecode":
+                state_parent = parents.get(parent)
+                safe_bytecode_state = (
+                    owner == "<module>"
+                    and isinstance(state_parent, ast.Assign)
+                    and state_parent.targets == [parent]
+                    and isinstance(state_parent.value, ast.Constant)
+                    and state_parent.value.value is True
+                )
+                if safe_bytecode_state:
+                    key = f"{owner}:dont_write_bytecode=True"
+                    sys_state_counts[key] = sys_state_counts.get(key, 0) + 1
+                else:
+                    violations.append((owner, node.lineno, "mutable-sys-dont-write-bytecode"))
+            elif parent.attr == "path":
+                state_parent = parents.get(parent)
+                state_grandparent = parents.get(state_parent)
+                state_args = state_grandparent.args if isinstance(state_grandparent, ast.Call) else []
+                safe_path_insert = (
+                    owner == "<module>"
+                    and isinstance(state_parent, ast.Attribute)
+                    and state_parent.value is parent and state_parent.attr == "insert"
+                    and isinstance(state_grandparent, ast.Call)
+                    and state_grandparent.func is state_parent and not state_grandparent.keywords
+                    and len(state_args) == 2
+                    and isinstance(state_args[0], ast.Constant) and state_args[0].value == 0
+                    and isinstance(state_args[1], ast.Call)
+                    and isinstance(state_args[1].func, ast.Name) and state_args[1].func.id == "str"
+                    and len(state_args[1].args) == 1 and not state_args[1].keywords
+                    and isinstance(state_args[1].args[0], ast.Name)
+                    and state_args[1].args[0].id == "AUTHORITY_LIB"
+                )
+                if safe_path_insert:
+                    key = f"{owner}:path.insert"
+                    sys_state_counts[key] = sys_state_counts.get(key, 0) + 1
+                else:
+                    violations.append((owner, node.lineno, "mutable-sys-path"))
             elif parent.attr == "stdout":
                 stream_parent = parents.get(parent)
                 stream_grandparent = parents.get(stream_parent)
@@ -589,6 +636,8 @@ def process_shape(text: str) -> dict[str, object]:
         violations.append(("<module>", 0, f"fcntl-effect-inventory:{fcntl_effect_counts}"))
     if sys_stream_counts != EXPECTED_SYS_STREAM_COUNTS:
         violations.append(("<module>", 0, f"sys-stream-inventory:{sys_stream_counts}"))
+    if sys_state_counts != EXPECTED_SYS_STATE_COUNTS:
+        violations.append(("<module>", 0, f"sys-state-inventory:{sys_state_counts}"))
     exact = counts == {"run": 1, "run_codex": 1, "clear": 1}
     return {
         "boundary_ok": exact and not violations,
@@ -703,6 +752,8 @@ try:
           f"present={sorted(required_api & shape['funcs'])}")
     check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"]), str(shape["detail"]))
     check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
+    if not shape["boundary_ok"] or not shape["observer_ok"]:
+        raise ProductFailure("source envelope rejected before subject import")
 
     shape_mutants = {
         "DIRECT_POPEN": "\nsubprocess.Popen(['/bin/true'])\n",
@@ -778,6 +829,11 @@ try:
         "FCNTL_FLOCK_REFERENCE": "\nh031_flock = fcntl.flock\n",
         "SYS_STDOUT_REFERENCE": "\nH031_CAPTURED_STDOUT = sys.stdout\n",
         "SYS_STDERR_REFERENCE": "\nH031_CAPTURED_STDERR = sys.stderr\n",
+        "SYS_PATH_DEFAULT_EFFECT": (
+            "\ndef h031_path_default(value=sys.path.append('/private/tmp/h031-shadow')):\n"
+            "    return value\n"
+        ),
+        "SYS_BYTECODE_STATE_EFFECT": "\ndef h031_bytecode():\n    sys.dont_write_bytecode = False\n",
         "MODULE_CREATE_CLEAN": (
             "\nh031_import_path = Path('/private/tmp/h031-import-mutant')\n"
             "h031_import_path.write_text('effect', encoding='utf-8')\n"
@@ -892,6 +948,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
         import_guarded_effects = []
         sys.addaudithook(audit_effect_hook(import_active, import_effects))
         import_before = (os.getcwd(), dict(os.environ), measure_umask())
+        import_sys_before = (list(sys.path), sys.dont_write_bytecode)
         import_output = io.StringIO()
         import_error = None
         import_guards = install_effect_guards(import_guarded_effects)
@@ -905,16 +962,23 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
             import_active[0] = False
             restore_effect_guards(import_guards)
         import_after = (os.getcwd(), dict(os.environ), measure_umask())
+        import_sys_after = (list(sys.path), sys.dont_write_bytecode)
+        expected_authority_path = str(root / "controller/authority")
+        import_sys_ok = (import_sys_after[0] == [expected_authority_path] + import_sys_before[0]
+                         and import_sys_after[1] is True)
         os.chdir(import_before[0])
         os.environ.clear()
         os.environ.update(import_before[1])
         os.umask(import_before[2])
+        sys.path[:] = import_sys_before[0]
+        sys.dont_write_bytecode = import_sys_before[1]
         import_output_ok = not import_output.closed and import_output.getvalue() == ""
         import_ok = (import_error is None and not import_effects and not import_guarded_effects
-                     and import_output_ok and import_before == import_after)
+                     and import_output_ok and import_before == import_after and import_sys_ok)
         check("K_MODULE_IMPORT_PRE_EFFECT", import_ok,
               f"error={import_error} audit={import_effects} guarded={import_guarded_effects} "
-              f"output_ok={import_output_ok} process_unchanged={import_before == import_after}")
+              f"output_ok={import_output_ok} process_unchanged={import_before == import_after} "
+              f"sys_state_exact={import_sys_ok}")
         if import_error is not None:
             raise ProductFailure(f"subject import failed: {import_error}")
         seq = [0]

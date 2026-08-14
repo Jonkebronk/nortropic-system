@@ -714,3 +714,12 @@ comparisons. Effectful module-level methods reject structurally. `fcntl.flock` i
 existing lock owner/site and is guarded plus audited at runtime. Direct stdout/stderr objects are frozen
 to the product's exact existing write and error-print forms, so neither stream can be retained for a
 later bypass. Import create-clean, fcntl alias and captured-stream mutants bind each route.
+
+Seventeenth review poisoned `sys.path` from a function default during import. Python import state was
+absent from the process snapshot, even though the current product legitimately inserts its authority
+library and enables no-bytecode mode at module load. Those two mutations are now exact source forms with
+exact counts. Runtime import observation requires precisely one new leading authority path and bytecode
+suppression, then restores the prior interpreter state. More fundamentally, a rejected source envelope
+previously continued into `exec_module`; an unguarded `fcntl.fcntl/ioctl` could therefore act before the
+eventual FAIL. Source or observer rejection now terminates before upstream or subject execution, while
+fcntl/ioctl also join the audit and mutation guards as an independent backstop.
