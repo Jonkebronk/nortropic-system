@@ -542,3 +542,12 @@ The frozen gate's deterministic identity negatives, opened-object races, final-r
 cleanup controls are judgeable in the builder sandbox. Actual provider success, namespace denials and
 fresh protected H-033 provenance require the ordinary owner runner because nested Seatbelt is rejected
 inside the builder sandbox; those effects remain explicitly ODÖMBART here rather than being simulated.
+
+Independent review then found a boundary ordering defect: the absolute G20 launcher still had an
+`/usr/bin/env python3.12` shebang, so caller PATH could execute attacker code before the launcher
+installed Seatbelt. The provider path now reads the already frozen Python interpreter authority,
+verifies its canonical no-follow regular executable and exact digest, and invokes that absolute
+interpreter with isolated `-I -S` flags. It does not sanitize or replace the provider environment;
+PATH reaches the provider only after the trusted controller process has established G20. A disposable
+fake `python3.12` placed first in caller PATH was not invoked, while the provider remained a descendant
+of the real launcher and all six namespace attacks stayed denied.
