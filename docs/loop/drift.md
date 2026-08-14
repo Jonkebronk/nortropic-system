@@ -1215,3 +1215,8 @@ R39 treats target resolution and the resulting STORE/DELETE as separate stages, 
 AugAssign as target load, RHS, operator, then store. Known tuple/list/dict and bounded
 literal arithmetic outcomes carry precise exceptions; unknown attribute setters/deleters
 retain both normal and exceptional paths rather than being silently treated as safe.
+
+R40 makes Name deletion a path-local environment effect: a bound name is removed,
+an absent name raises NameError without mutation, and later reads see the deletion.
+A bounded mutable namespace abstraction proves safe attribute set/delete and missing-member
+AttributeError; arbitrary attribute protocols remain conservatively normal plus exceptional.
