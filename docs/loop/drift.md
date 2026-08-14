@@ -679,3 +679,9 @@ to class key `__del__` creates the same delayed finalizer. Finalizer assignment,
 dynamic three-argument type construction now reject; only current scalar schema `type(x) is/is not`
 checks remain. The review also found direct process signaling outside both inventories. `os.kill` and
 `os.killpg` are now prohibited source/effect APIs with independent mutants and audit-event binding.
+
+Thirteenth review recovered dynamic class construction through a public `types.new_class` proxy and
+placed executable/preexec substitutions into positional Popen slots. `types` is now sensitive, and the
+sole Popen plus generic run site each require exactly one non-starred positional argument in addition to
+the existing unsafe-keyword prohibition. In-place positional and starred mutants test the legitimate
+site itself rather than adding an obviously extra process call.

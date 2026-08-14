@@ -98,6 +98,7 @@ SENSITIVE_MODULE_PROXIES = {
     "os", "sys", "subprocess", "builtins", "ctypes", "importlib", "pty",
     "asyncio", "multiprocessing", "posix", "_posixsubprocess", "threading", "_thread",
     "signal", "atexit", "sched", "concurrent", "weakref",
+    "types",
 }
 ALLOWED_SYS_ATTRS = {
     "dont_write_bytecode", "path", "stderr", "stdout", "version", "version_info",
@@ -348,6 +349,10 @@ def process_shape(text: str) -> dict[str, object]:
         )
         if unsafe_keywords:
             violations.append((owner, node.lineno, f"unsafe-process-keywords:{unsafe_keywords}"))
+        if module == "subprocess" and attr in {"Popen", "run"}:
+            if len(node.args) != 1 or any(isinstance(arg, ast.Starred) for arg in node.args):
+                violations.append((owner, node.lineno,
+                                   f"unsafe-process-positional-arity:{module}.{attr}:{len(node.args)}"))
         literal = ""
         if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
             literal = node.args[0].value
@@ -539,6 +544,7 @@ try:
         "FINALIZER_ASSIGNMENT": "\ndef h031_later(self):\n    run_codex(None, None, 'BUILDER', 'late')\nclass H031AliasFinalizer:\n    __del__ = h031_later\n",
         "FINALIZER_SETATTR": "\nsetattr(H031Finalizer, '__del__', run_codex)\n",
         "FINALIZER_DYNAMIC_TYPE": "\nH031Dynamic = type('H031Dynamic', (), {'__del__': run_codex})\n",
+        "FINALIZER_TYPES_NEW_CLASS": "\nsubprocess.types.new_class('H031Dynamic', (), {}, lambda ns: ns.update({'__del__': run_codex}))\n",
         "OS_KILL": "\nos.kill(1, 0)\n",
         "OS_KILLPG": "\nos.killpg(1, 0)\n",
         "JSON_BUILTINS_DICTIONARY": "\njson.__dict__['__builtins__']['__import__']('ctypes')\n",
@@ -564,6 +570,20 @@ try:
     ):
         mutant = source_text.replace(
             popen_anchor, popen_anchor[:-1] + ", " + keyword + ")", 1)
+        mutant_shape = process_shape(mutant)
+        check("J_PROCESS_POPEN_" + label + "_REJECT",
+              mutant != source_text and not mutant_shape["boundary_ok"],
+              str(mutant_shape["detail"]))
+    positional_mutants = {
+        "POSITIONAL_EXECUTABLE": "subprocess.Popen(argv, -1, '/bin/sh', cwd=",
+        "POSITIONAL_PREEXEC": (
+            "subprocess.Popen(argv, -1, None, None, subprocess.PIPE, "
+            "subprocess.STDOUT, lambda: None, cwd="
+        ),
+        "STARRED_ARGV": "subprocess.Popen(*[argv], cwd=",
+    }
+    for label, replacement in positional_mutants.items():
+        mutant = source_text.replace("subprocess.Popen(argv, cwd=", replacement, 1)
         mutant_shape = process_shape(mutant)
         check("J_PROCESS_POPEN_" + label + "_REJECT",
               mutant != source_text and not mutant_shape["boundary_ok"],
