@@ -502,15 +502,80 @@ if mode == 'output_then_fail': sys.exit(17)
         run_calls = [node for node in ast.walk(run_codex_nodes[0]) if isinstance(node, ast.Call)
                      and isinstance(node.func, ast.Name)
                      and node.func.id == "_consume_private_result"]
+        top_functions = {node.name:node for node in candidate_tree.body
+                         if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
+        pure_names = {"len","min","max","isinstance","type","bytes","bytearray",
+                      "memoryview","range","enumerate","all","any","bool","str","int"}
+        pure_attrs = {("os","fstat"),("os","read"),("os","close"),("os","fsync"),
+                      ("os","open"),("os","replace"),("hashlib","sha256"),
+                      ("json","loads"),("stat","S_ISREG"),("stat","S_IMODE")}
+        forbidden_dynamic = {"globals","locals","vars","getattr","setattr","eval","exec",
+                             "compile","__import__","import_module","open"}
+        graph_nodes=[];graph_ok=True;pending=[consumer.name];seen=set()
+        while pending:
+            name=pending.pop()
+            if name in seen: continue
+            seen.add(name);node=top_functions.get(name)
+            if node is None: graph_ok=False;continue
+            graph_nodes.append(node)
+            for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)):
+                if isinstance(call.func,ast.Name):
+                    called=call.func.id
+                    if called in top_functions: pending.append(called)
+                    elif called not in pure_names: graph_ok=False
+                    if called in forbidden_dynamic: graph_ok=False
+                elif isinstance(call.func,ast.Attribute) and isinstance(call.func.value,ast.Name):
+                    if (call.func.value.id,call.func.attr) not in pure_attrs: graph_ok=False
+                else: graph_ok=False
+        rebound=[]
+        for node in graph_nodes:
+            for item in ast.walk(node):
+                if isinstance(item,(ast.Import,ast.ImportFrom,ast.ClassDef,ast.Global,ast.Nonlocal)):
+                    rebound.append(type(item).__name__)
+                if isinstance(item,ast.NamedExpr): rebound.append("NamedExpr")
+                if isinstance(item,ast.ExceptHandler) and item.name: rebound.append("ExceptName")
+                if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del)) \
+                        and item.id in set(exact_consumer_args)|{"_consume_private_result"}:
+                    rebound.append(item.id)
+                if isinstance(item,ast.Subscript) and isinstance(item.ctx,ast.Store):
+                    rebound.append("SubscriptStore")
+                if isinstance(item,ast.Call) and isinstance(item.func,ast.Name) \
+                        and item.func.id=="setattr": rebound.append("setattr")
+        seam_loads=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Name)
+                    and isinstance(item.ctx,ast.Load) and item.id=="_consume_private_result"]
+        exact_call_args=(len(run_calls)==1 and not run_calls[0].keywords
+                         and [arg.id for arg in run_calls[0].args if isinstance(arg,ast.Name)]
+                             == exact_consumer_args
+                         and len(run_calls[0].args)==len(exact_consumer_args))
+        popen_assignments=[]
+        for item in ast.walk(run_codex_nodes[0]):
+            if isinstance(item,ast.Assign) and isinstance(item.value,ast.Call) \
+                    and isinstance(item.value.func,ast.Attribute) \
+                    and isinstance(item.value.func.value,ast.Name) \
+                    and (item.value.func.value.id,item.value.func.attr)==("subprocess","Popen"):
+                names=[target.id for target in item.targets if isinstance(target,ast.Name)]
+                popen_assignments.extend(names)
+        timeout_calls=[]
+        for item in ast.walk(run_codex_nodes[0]):
+            if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute) \
+                    and isinstance(item.func.value,ast.Name) \
+                    and item.func.value.id in popen_assignments \
+                    and item.func.attr in {"wait","communicate"}:
+                kws=[kw for kw in item.keywords if kw.arg=="timeout"
+                     and isinstance(kw.value,ast.Name)
+                     and kw.value.id=="CODEX_RUN_TIMEOUT_SECONDS"]
+                if len(kws)==1: timeout_calls.append(item)
         consumer_architecture_ok = (
             [arg.arg for arg in consumer.args.args] == exact_consumer_args
             and consumer.args.vararg is None and consumer.args.kwarg is None
             and not consumer.args.kwonlyargs and not consumer.decorator_list
-            and len(consumer_calls) == len(run_calls) == 1 and not tainted
+            and len(consumer_calls) == len(run_calls) == len(seam_loads) == 1
+            and exact_call_args and not tainted and graph_ok and not rebound
             and len(timeout_assignments) == 1
             and isinstance(timeout_assignments[0].value, ast.Constant)
             and timeout_assignments[0].value.value == 86400
-            and len(timeout_loads) == 1)
+            and len(timeout_loads) == 1 and len(popen_assignments)==1
+            and len(timeout_calls)==1)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -1304,15 +1369,22 @@ if mode == 'output_then_fail': sys.exit(17)
     # intrinsic to a separately hashed provider authority; neither environment
     # modes nor monkeypatch state crosses into the subject process.
     r12_runner = work / "r12-real-popen-runner.py"
-    r12_runner.write_text("""import importlib.util,pathlib,sys\n"
+    r12_runner.write_text("""import importlib.util,json,pathlib,sys\n"
 "source,repo=map(pathlib.Path,sys.argv[1:3])\n"
 "spec=importlib.util.spec_from_file_location('r12_exact_subject',source)\n"
 "mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)\n"
 "if len(sys.argv)==4: mod.CODEX_RUN_TIMEOUT_SECONDS=int(sys.argv[3])\n"
 "import subprocess\n"
+"held_transition_fds=[]\n"
 "def audit(event,args):\n"
 " if event=='os.rename' and len(args)>=2 and str(args[1]).endswith('/result.json'):\n"
-"  print('R14_CANONICAL_TRANSITION '+str(args[1]),flush=True)\n"
+"  os=__import__('os');hashlib=__import__('hashlib');fd=os.open(args[0],os.O_RDONLY|getattr(os,'O_NOFOLLOW',0));st=os.fstat(fd);raw=b''\n"
+"  while True:\n"
+"   chunk=os.read(fd,65536)\n"
+"   if not chunk: break\n"
+"   raw+=chunk\n"
+"  held_transition_fds.append(fd)\n"
+"  print('R15_CANONICAL_TRANSITION '+json.dumps({'src':str(args[0]),'dst':str(args[1]),'dev':st.st_dev,'ino':st.st_ino,'mode':st.st_mode,'size':st.st_size,'digest':hashlib.sha256(raw).hexdigest()},separators=(',',':')),flush=True)\n"
 " if event=='subprocess.Popen':\n"
 "  for value in args:\n"
 "   if isinstance(value,(list,tuple)) and '-o' in value:\n"
@@ -1390,8 +1462,8 @@ if mode == 'output_then_fail': sys.exit(17)
             for key,_mask in events:
                 line=key.fileobj.readline().strip()
                 if line.startswith("R12_POPEN_TYPE="): popen_type=line.split("=",1)[1]
-                elif line.startswith("R14_CANONICAL_TRANSITION "):
-                    canonical_transitions.append(line.split(" ",1)[1])
+                elif line.startswith("R15_CANONICAL_TRANSITION "):
+                    canonical_transitions.append(strict_json(line.split(" ",1)[1]))
                 elif line.startswith("R12_SINK_CLOSED "):
                     _,_,number,path_text=line.split(" ",3); sink=Path(path_text)
                     fd=os.open(sink,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
@@ -1404,8 +1476,13 @@ if mode == 'output_then_fail': sys.exit(17)
                     if sink_attack == "swap":
                         old=sink.with_name(sink.name+".held");sink.rename(old);sink.write_bytes(raw)
                     elif sink_attack == "mutate":
+                        alternate=strict_json(raw.decode("utf-8"))
+                        alternate["summary"]=alternate["summary"][::-1]
+                        alternate_raw=json.dumps(alternate,separators=(",",":")).encode()
+                        if len(alternate_raw)!=len(raw) or hashlib.sha256(alternate_raw).digest()==hashlib.sha256(raw).digest():
+                            raise RuntimeError("R15 equal-length mutation fixture invalid")
                         writer=os.open(sink,os.O_WRONLY|getattr(os,"O_NOFOLLOW",0))
-                        os.write(writer,b"X");os.fsync(writer);os.close(writer)
+                        os.write(writer,alternate_raw);os.fsync(writer);os.close(writer)
                     after=os.fstat(fd);os.close(fd)
                     value=strict_json(raw.decode("utf-8"))
                     identities.append((before.st_dev,before.st_ino,before.st_mode,before.st_size,
@@ -1427,8 +1504,8 @@ if mode == 'output_then_fail': sys.exit(17)
         for line in proc.stdout:
             line=line.strip()
             if line.startswith("R12_OUTCOME="): outcome=line.split("=",1)[1]
-            elif line.startswith("R14_CANONICAL_TRANSITION "):
-                canonical_transitions.append(line.split(" ",1)[1])
+            elif line.startswith("R15_CANONICAL_TRANSITION "):
+                canonical_transitions.append(strict_json(line.split(" ",1)[1]))
         post_canonical=None; staging_absent=(sink is None or not sink.parent.exists())
         if canonical is not None and canonical.is_file():
             try:
@@ -1499,6 +1576,9 @@ if mode == 'output_then_fail': sys.exit(17)
         and r12_once[4] is not None and r12_once[4][7]
         and r12_once[4][6] == r12_once[2][0][12] and r12_once[5]
         and len(r12_once[6]) == 1
+        and r12_once[6][0].get("dev")==r12_once[2][0][0]
+        and r12_once[6][0].get("ino")==r12_once[2][0][1]
+        and r12_once[6][0].get("digest")==r12_once[2][0][12]
         and r12_two[0].startswith("REJECTED:") and len(r12_two[2]) == 2
         and len({item[12] for item in r12_two[2]}) == 2
         and r12_promote[0].startswith("REJECTED:") and len(r12_promote[2]) == 1
@@ -1552,8 +1632,8 @@ if mode == 'output_then_fail': sys.exit(17)
             raise RuntimeError("R13 exact owner provider unavailable: auth/network/runtime")
         output_lines=[line.split(" ",1)[1] for line in live_stdout.splitlines()
                       if line.startswith("R13_OUTPUT_PATH ")]
-        live_transitions=[line.split(" ",1)[1] for line in live_stdout.splitlines()
-                          if line.startswith("R14_CANONICAL_TRANSITION ")]
+        live_transitions=[strict_json(line.split(" ",1)[1]) for line in live_stdout.splitlines()
+                          if line.startswith("R15_CANONICAL_TRANSITION ")]
         live_runs=sorted((module.journal_root(live_repo)/"runs").iterdir())
         if len(output_lines)!=1 or len(live_runs)!=1:
             raise RuntimeError("R13 exact owner provider observation incomplete")
@@ -1570,7 +1650,9 @@ if mode == 'output_then_fail': sys.exit(17)
             and before.st_size==after.st_size==len(raw) and len(raw)<=MAX_RESULT_BYTES
             and complete_schema_valid(document,schema_document)
             and document.get("role")=="TEST_AUTHOR"
-            and len(live_transitions)==1 and Path(live_transitions[0])==live_canonical
+            and len(live_transitions)==1
+            and Path(live_transitions[0].get("dst",""))==live_canonical
+            and live_transitions[0].get("digest")==hashlib.sha256(raw).hexdigest()
             and not live_sink.exists() and not live_sink.parent.exists()
             and sha256(apath)==digest and sha256(host_path)==host_digest
             and sha(live_repo)==sha(repo)

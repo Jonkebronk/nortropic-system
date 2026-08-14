@@ -1010,3 +1010,13 @@ identity now includes mode, size, mtime and ctime as well as dev/inode before an
 the complete bounded read. Success requires one audit-observed atomic publication;
 mutation, swap, double-value and promotion paths require zero. The final exact-family
 call runs from an isolated no-hardlink clone at exact HEAD/tree with its own `.git`.
+
+R15 closes the recursive project-helper graph rooted at the consumer. Only explicit
+pure builtin and stdlib calls are admitted; reflection, dynamic attributes/imports,
+aliases, indirect calls and argument/seam rebinding are rejected. The seam name has one
+load: the exact direct run_codex call using the five exact provenance locals. The sole
+timeout load must be `timeout=CODEX_RUN_TIMEOUT_SECONDS` on wait/communicate of the
+sole Popen result. Before canonical rename/replace, the audit hook nofollow-opens and
+retains the source object, records fstat/digest, and later binds destination identity and
+digest. The mutation control now writes a complete schema-valid equal-length alternate
+value, while the swap control replaces the path behind the retained accepted fd.
