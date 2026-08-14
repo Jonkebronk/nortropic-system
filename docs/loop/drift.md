@@ -936,3 +936,11 @@ Path/io/builtin-handle reads and os.open/os.read descriptors are instrumented by
 result identity. Path replacement after open, same-inode rewrite, growth and valid
 shortening occur immediately before the real read. Each must reject; the exact-bound
 positive and +1 negative remain connected through the same provider/run_codex route.
+
+R7 counts consumption on the captured private transport `output_path`, not on the
+canonical observer file: exactly one transport read is required, while atomic publish
+may return without reopening canonical. The connected read harness now also wraps
+fdopen, readline/readlines/readall/iteration and positional/vector read capabilities.
+Object attacks require removal of every seeded leaf and moved parent before verdict.
+Timeout/SIGTERM quiescence derives the actual staging root from the audited provider
+argv and inventories surviving provider commands plus each survivor's lsof fd table.

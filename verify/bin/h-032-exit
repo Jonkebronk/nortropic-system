@@ -498,7 +498,14 @@ if mode == 'output_then_fail': sys.exit(17)
     last_attempt_observed: list[dict[str, object] | None] = [None]
     def audit_inventory(event: str, args: tuple[object, ...]) -> None:
         active = audit_active[0]
-        if active is None or event not in {"os.mkdir", "open", "os.remove", "os.rename"}:
+        if active is None or event not in {"os.mkdir", "open", "os.remove", "os.rename", "subprocess.Popen"}:
+            return
+        if event == "subprocess.Popen":
+            outputs = active["provider_outputs"]
+            assert isinstance(outputs, list)
+            for value in args:
+                if isinstance(value, (list, tuple)) and "-o" in value:
+                    outputs.append(str(value[value.index("-o") + 1]))
             return
         created = active["created"]
         assert isinstance(created, set)
@@ -529,7 +536,7 @@ if mode == 'output_then_fail': sys.exit(17)
         subprocess.run([GIT, "--version"], env=dict(os.environ),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         arena_before = {str(path.absolute()) for path in arena.rglob("*")}
-        observed: dict[str, object] = {"created": set(), "opened": []}
+        observed: dict[str, object] = {"created": set(), "opened": [], "provider_outputs": []}
         audit_active[0] = observed
         try:
             try:
@@ -564,6 +571,7 @@ if mode == 'output_then_fail': sys.exit(17)
 
     valid_repo = make_repo(str(provider))
     valid = attempt(valid_repo)
+    valid_observed = last_attempt_observed[0] or {"opened": []}
     family_absent = (not valid[0]
                      and "provider identity authority has unexpected keys" in valid[1])
     cap = safe_capture()
@@ -593,6 +601,8 @@ if mode == 'output_then_fail': sys.exit(17)
         os.environ["H032_RESULT_MODE"] = mode
         case_result = attempt(make_repo(str(provider)))
         case_capture = safe_capture()
+        observed = last_attempt_observed[0] or {}
+        case_capture["_gate_output_paths"] = list(observed.get("provider_outputs", []))
         output = Path(case_capture.get("output_path", "/private/tmp/h032-missing-output"))
         canonical = Path(case_capture.get("canonical_result", "/private/tmp/h032-missing-canonical"))
         hostile = Path(case_capture.get("hostile_path", "/private/tmp/h032-missing-hostile"))
@@ -621,9 +631,9 @@ if mode == 'output_then_fail': sys.exit(17)
         "output_then_fail", "interruption", "hostile")
     negative_cases = {mode: result_case(mode) for mode in negative_modes}
     os.environ.pop("H032_RESULT_MODE", None)
-    interruption_repo = Path(negative_cases["interruption"][1].get("canonical_result", work))
-    interruption_root = (interruption_repo.parents[3] if interruption_repo != work
-                         and len(interruption_repo.parents) > 3 else work)
+    interruption_paths = negative_cases["interruption"][1].get("_gate_output_paths", [])
+    interruption_output = Path(interruption_paths[-1]) if interruption_paths else work
+    interruption_root = interruption_output.parent if interruption_output != work else work
     def quiescence_inventory(root: Path):
         entries = []
         for path in root.rglob("*"):
@@ -642,7 +652,17 @@ if mode == 'output_then_fail': sys.exit(17)
         ps = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,command="], text=True,
                             stdout=subprocess.PIPE, check=True).stdout.splitlines()
         owned = sorted(line.strip() for line in ps if str(work) in line)
-        return sorted(entries), sorted(fd_state), owned
+        descendant_fds = []
+        lsof = Path("/usr/sbin/lsof")
+        if lsof.is_file():
+            for line in owned:
+                try: pid = line.split(None, 1)[0]
+                except Exception: continue
+                listing = subprocess.run([str(lsof), "-n", "-p", pid], text=True,
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                         check=False).stdout.splitlines()
+                descendant_fds.extend(f"{pid}:{item}" for item in listing[1:])
+        return sorted(entries), sorted(fd_state), owned, sorted(descendant_fds)
     interruption_before = quiescence_inventory(interruption_root)
     time.sleep(1.0)
     interruption_after = quiescence_inventory(interruption_root)
@@ -665,6 +685,7 @@ if mode == 'output_then_fail': sys.exit(17)
     def object_attack(kind: str):
         attack_repo = make_repo(str(provider))
         seeded: list[Path] = []
+        moved_parents: list[Path] = []
         target_guard = work / f"object-attack-{kind}-guard"
         target_guard.write_text("guard", encoding="utf-8")
         original = module.subprocess.Popen
@@ -682,7 +703,7 @@ if mode == 'output_then_fail': sys.exit(17)
                 sock = socket.socket(socket.AF_UNIX); sock.bind(str(target)); sock.close()
             elif kind == "parent_swap":
                 moved = target.parent.with_name(target.parent.name + "-moved")
-                target.parent.rename(moved); target.parent.mkdir()
+                target.parent.rename(moved); moved_parents.append(moved); target.parent.mkdir()
             else: raise RuntimeError(kind)
             seeded.append(target)
             return original(["1" if value == "86400" else value for value in flat], *args, **kwargs)
@@ -692,14 +713,19 @@ if mode == 'output_then_fail': sys.exit(17)
         finally:
             module.subprocess.Popen = original
         intact = target_guard.read_text(encoding="utf-8") == "guard"
+        residue_free = (not any(path.exists() or path.is_symlink() for path in seeded)
+                        and not any(path.exists() for path in moved_parents))
         for path in seeded:
             if path.is_symlink() or (path.exists() and not path.is_dir()): path.unlink()
             elif path.is_dir(): path.rmdir()
-        return outcome, len(seeded) == 1, intact
+        for path in moved_parents:
+            if path.exists(): shutil.rmtree(path)
+        return outcome, len(seeded) == 1, intact, residue_free
     object_attacks = {kind: object_attack(kind) for kind in
                       ("symlink", "directory", "hardlink", "fifo", "socket", "parent_swap")}
     object_attacks_ok = all(not value[0][0] and value[0][2] == 0
-                            and value[1] and value[2] for value in object_attacks.values())
+                            and value[1] and value[2] and value[3]
+                            for value in object_attacks.values())
 
     def cleanup_failure_case(persistent: bool):
         cleanup_repo = make_repo(str(provider))
@@ -746,22 +772,20 @@ if mode == 'output_then_fail': sys.exit(17)
     oversized_positive = result_case("exact_max")
     os.environ.pop("H032_RESULT_MODE", None)
 
-    consume_case = result_case("valid")
-    consume_capture = consume_case[1]
-    consume_path = Path(consume_capture.get("canonical_result", "/private/tmp/h032-missing-consume"))
-    consume_observed = last_attempt_observed[0] or {"opened": []}
-    consume_reads = 0
-    for opened in consume_observed.get("opened", []):
+    transport_consume_reads = 0
+    canonical_observer_reads = 0
+    for opened in valid_observed.get("opened", []):
         if not opened or not isinstance(opened[0], (str, bytes, os.PathLike)):
             continue
-        if Path(opened[0]).absolute() != consume_path.absolute():
-            continue
+        opened_path = Path(opened[0]).absolute()
         mode = opened[1] if len(opened) > 1 else None
         flags = opened[2] if len(opened) > 2 else None
-        if (isinstance(mode, str) and mode.startswith("r")) or (
-                isinstance(flags, int) and flags & os.O_ACCMODE == os.O_RDONLY):
-            consume_reads += 1
-    exactly_once_ok = consume_case[0][0] and consume_reads == 1
+        is_read = ((isinstance(mode, str) and mode.startswith("r")) or
+                   (isinstance(flags, int) and flags & os.O_ACCMODE == os.O_RDONLY))
+        if is_read and opened_path == valid_output.absolute(): transport_consume_reads += 1
+        if is_read and opened_path == valid_canonical.absolute(): canonical_observer_reads += 1
+    exactly_once_ok = (valid[0] and transport_consume_reads == 1
+                       and (valid_output == valid_canonical or canonical_observer_reads == 0))
 
     atomic_repo = make_repo(str(provider))
     atomic_box: list[tuple[bool, str, int, int, list[str]]] = []
@@ -837,6 +861,10 @@ if mode == 'output_then_fail': sys.exit(17)
         original_builtin_open = builtins.open
         original_os_open = os.open
         original_os_read = os.read
+        original_os_fdopen = os.fdopen
+        original_os_pread = getattr(os, "pread", None)
+        original_os_readv = getattr(os, "readv", None)
+        original_os_preadv = getattr(os, "preadv", None)
         tracked_fds: set[int] = set(); moved: list[Path] = []
         def observe(argv, *args, **kwargs):
             flat = list(argv)
@@ -867,6 +895,11 @@ if mode == 'output_then_fail': sys.exit(17)
             def readinto(self, *args, **kwargs): mutate(self.path); return self.inner.readinto(*args, **kwargs)
             def read1(self, *args, **kwargs): mutate(self.path); return self.inner.read1(*args, **kwargs)
             def readinto1(self, *args, **kwargs): mutate(self.path); return self.inner.readinto1(*args, **kwargs)
+            def readline(self, *args, **kwargs): mutate(self.path); return self.inner.readline(*args, **kwargs)
+            def readlines(self, *args, **kwargs): mutate(self.path); return self.inner.readlines(*args, **kwargs)
+            def readall(self, *args, **kwargs): mutate(self.path); return self.inner.readall(*args, **kwargs)
+            def __iter__(self): return self
+            def __next__(self): mutate(self.path); return next(self.inner)
         def wrap_open(original, file, mode="r", *args, **kwargs):
             inner = original(file, mode, *args, **kwargs)
             try: path = Path(file).absolute()
@@ -884,14 +917,33 @@ if mode == 'output_then_fail': sys.exit(17)
         def os_read(fd, count):
             if fd in tracked_fds and targets: mutate(targets[-1])
             return original_os_read(fd, count)
+        def os_fdopen(fd, *args, **kwargs):
+            inner = original_os_fdopen(fd, *args, **kwargs)
+            return WrappedReader(inner, targets[-1]) if fd in tracked_fds and targets else inner
+        def os_pread(fd, count, offset):
+            if fd in tracked_fds and targets: mutate(targets[-1])
+            return original_os_pread(fd, count, offset)
+        def os_readv(fd, buffers):
+            if fd in tracked_fds and targets: mutate(targets[-1])
+            return original_os_readv(fd, buffers)
+        def os_preadv(fd, buffers, offset, *args):
+            if fd in tracked_fds and targets: mutate(targets[-1])
+            return original_os_preadv(fd, buffers, offset, *args)
         module.subprocess.Popen = observe
-        io.open = io_open; builtins.open = builtin_open; os.open = os_open; os.read = os_read
+        io.open = io_open; builtins.open = builtin_open
+        os.open = os_open; os.read = os_read; os.fdopen = os_fdopen
+        if original_os_pread is not None: os.pread = os_pread
+        if original_os_readv is not None: os.readv = os_readv
+        if original_os_preadv is not None: os.preadv = os_preadv
         try:
             outcome = attempt(attack_repo)
         finally:
             module.subprocess.Popen = original_popen
             io.open = original_io_open; builtins.open = original_builtin_open
-            os.open = original_os_open; os.read = original_os_read
+            os.open = original_os_open; os.read = original_os_read; os.fdopen = original_os_fdopen
+            if original_os_pread is not None: os.pread = original_os_pread
+            if original_os_readv is not None: os.readv = original_os_readv
+            if original_os_preadv is not None: os.preadv = original_os_preadv
         for path in moved:
             if path.exists(): path.unlink()
         return outcome, fired[0]
@@ -969,7 +1021,7 @@ if mode == 'output_then_fail': sys.exit(17)
         and all(value != 0 for value in
                 negative_cases["hostile"][1].get("live_attacks", {}).values()))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} consume={consume_case[0], consume_reads, exactly_once_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} transport_reads={transport_consume_reads} canonical_observer_reads={canonical_observer_reads} exactly_once={exactly_once_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} read_attacks={read_attacks, read_attacks_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
