@@ -898,3 +898,11 @@ restores every journal/worktree-admin effect, and still executes the verified pr
 family through G20. Its negative family now exercises strict UTF-8/duplicate/framing and
 the complete frozen JSON Schema recursively, plus binding, writer, failure and cleanup
 variants; all remain aggregated under the single intentional product RED.
+
+R3 replaces that shared linked-worktree control entirely. The physical composition is
+now a no-hardlink disposable Git/control-plane root made from the exact candidate bytes;
+its imported controller, launcher ROT, repository and LIVE_GIT are the same isolated
+authority domain, so no canonical journal rollback or global worktree pruning occurs.
+Causal stale/replay controls predate their invocation, an active reader observes partial
+canonical publication, a real one-second launcher timeout and signal interruption run,
+and the frozen result ceiling is exactly 4 MiB with a valid 2 MiB positive.
