@@ -1000,3 +1000,13 @@ oracle retains its nofollow descriptor through before/after fstat, read and muta
 swap injection, then requires exact canonical digest/schema and total staging cleanup.
 Literal source-expression variants are removed; timeout acceleration is a semantic
 candidate seam whose absence is ordinary RED.
+
+R14 owner-freezes `_consume_private_result(sink_fd, canonical_destination,
+invocation_id, run_id, role)` as the sole result-consumer security seam. AST/dataflow
+checks require one definition, exact capability/binding arguments, one run_codex call
+and no provider/host/authority/fixture identity loads. The sole timeout seam is exactly
+86400 with one production load; only the fresh test runner may set it to one. Held-fd
+identity now includes mode, size, mtime and ctime as well as dev/inode before and after
+the complete bounded read. Success requires one audit-observed atomic publication;
+mutation, swap, double-value and promotion paths require zero. The final exact-family
+call runs from an isolated no-hardlink clone at exact HEAD/tree with its own `.git`.
