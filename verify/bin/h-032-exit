@@ -60,6 +60,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import ast
+import copy
 import builtins
 import fcntl
 import io
@@ -643,6 +644,165 @@ if mode == 'output_then_fail': sys.exit(17)
             and len(timeout_loads) == 1 and len(all_popen_sites)==1
             and len(popen_assignments)==1 and len(popen_reassign)==1
             and len(timeout_calls)==1 and timeout_dominates and timeout_reachable)
+
+        # R17 semantic overlay.  The earlier syntax inventory remains a useful
+        # closed-language check, but it never grants PASS by itself.  This
+        # monotone def-use analysis attaches security types to values and
+        # propagates them through aliases, containers, parameters and returns.
+        IDENTITY="IDENTITY"; SINK="SINK"; CANONICAL="CANONICAL"
+        INVOCATION="INVOCATION"; RUN="RUN"; ROLE="ROLE"; UNKNOWN="UNKNOWN"
+        def r17_targets(node):
+            if isinstance(node,ast.Name): return {node.id}
+            if isinstance(node,(ast.Tuple,ast.List)):
+                return set().union(*(r17_targets(item) for item in node.elts)) if node.elts else set()
+            return set()
+        def r17_join(*values): return frozenset().union(*values) if values else frozenset()
+        helper_summaries={name:frozenset() for name in top_functions}
+        capability_calls={"read","readinto","read1","readinto1","readall",
+                          "pread","preadv","readv","fdopen","FileIO","mmap",
+                          "dup","fileno","raw","buffer","seek","tell"}
+        def r17_expr(node,env):
+            if node is None: return frozenset()
+            if isinstance(node,ast.Name): return env.get(node.id,frozenset({UNKNOWN}))
+            if isinstance(node,ast.Constant): return frozenset()
+            if isinstance(node,(ast.List,ast.Tuple,ast.Set)):
+                return r17_join(*(r17_expr(item,env) for item in node.elts))
+            if isinstance(node,ast.Dict):
+                return r17_join(*(r17_expr(item,env) for item in node.keys+node.values if item))
+            if isinstance(node,(ast.Subscript,ast.Attribute)):
+                return r17_expr(node.value,env)
+            if isinstance(node,ast.Call):
+                transferred=r17_join(*(r17_expr(item,env) for item in
+                    list(node.args)+[kw.value for kw in node.keywords]))
+                if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
+                    return r17_join(transferred,frozenset({CANONICAL}))
+                if isinstance(node.func,ast.Name) and node.func.id=="now_id":
+                    return r17_join(transferred,frozenset({RUN,INVOCATION}))
+                if isinstance(node.func,ast.Name) and node.func.id in helper_summaries:
+                    return r17_join(transferred,helper_summaries[node.func.id])
+                if isinstance(node.func,ast.Attribute) and node.func.attr in capability_calls:
+                    return r17_join(transferred,r17_expr(node.func.value,env))
+                return transferred
+            return r17_join(*(r17_expr(item,env) for item in ast.iter_child_nodes(node)))
+        def r17_interpret(fn,seeds):
+            env={arg.arg:seeds.get(arg.arg,frozenset({UNKNOWN})) for arg in fn.args.args}
+            returns=[]
+            for _ in range(max(2,len(list(ast.walk(fn))))):
+                changed=False;returns=[]
+                for item in ast.walk(fn):
+                    if isinstance(item,(ast.Assign,ast.AnnAssign,ast.NamedExpr)):
+                        targets=item.targets if isinstance(item,ast.Assign) else [item.target]
+                        value=r17_expr(item.value,env)
+                        for target in targets:
+                            for name in r17_targets(target):
+                                joined=r17_join(env.get(name,frozenset()),value)
+                                if joined != env.get(name): env[name]=joined;changed=True
+                    elif isinstance(item,ast.Return): returns.append(r17_expr(item.value,env))
+                if not changed: break
+            return env,r17_join(*returns)
+        for _ in range(len(top_functions)+2):
+            prior=dict(helper_summaries)
+            for name in seen:
+                _,helper_summaries[name]=r17_interpret(top_functions[name],{})
+            if prior==helper_summaries: break
+        seam_seeds={"sink_fd":frozenset({SINK}),
+                    "canonical_destination":frozenset({CANONICAL}),
+                    "invocation_id":frozenset({INVOCATION}),"run_id":frozenset({RUN}),
+                    "role":frozenset({ROLE})}
+        seam_env,_=r17_interpret(consumer,seam_seeds)
+        receiver_ok=True
+        for node in graph_nodes:
+            env,_=r17_interpret(node,seam_seeds if node is consumer else {})
+            for call in (item for item in ast.walk(node) if isinstance(item,ast.Call)
+                         and isinstance(item.func,ast.Attribute)
+                         and item.func.attr in capability_calls):
+                flow=r17_join(r17_expr(item.func.value,env),
+                              *(r17_expr(arg,env) for arg in call.args))
+                if SINK not in flow: receiver_ok=False
+        identity_escape=any(IDENTITY in value for value in seam_env.values())
+
+        # Exact capability provenance is established at the producer call, not
+        # by a conveniently named local.  The open must use O_RDONLY and
+        # O_NOFOLLOW as actual flag operands; the resulting value then seeds
+        # def-use propagation into the direct seam call.
+        def r17_open(node):
+            if not (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
+                    and isinstance(node.func.value,ast.Name)
+                    and (node.func.value.id,node.func.attr)==("os","open")): return False
+            flags=node.args[1] if len(node.args)>1 else next((kw.value for kw in node.keywords
+                                                              if kw.arg=="flags"),None)
+            attrs={(part.value.id,part.attr) for part in ast.walk(flags)
+                   if isinstance(part,ast.Attribute) and isinstance(part.value,ast.Name)} if flags else set()
+            return {("os","O_RDONLY"),("os","O_NOFOLLOW")} <= attrs
+        semantic_call_ok=False
+        if len(run_calls)==1:
+            call=run_calls[0];env={arg.arg:(frozenset({ROLE}) if arg.arg=="role"
+                                           else frozenset({UNKNOWN}))
+                                      for arg in run_codex_nodes[0].args.args}
+            # Fixed-point assignments, with semantic origins attached to the
+            # operation that creates each authority rather than its target name.
+            for _ in range(max(2,len(list(ast.walk(run_codex_nodes[0]))))):
+                changed=False
+                for item in ast.walk(run_codex_nodes[0]):
+                    if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
+                    targets=item.targets if isinstance(item,ast.Assign) else [item.target]
+                    value=r17_expr(item.value,env)
+                    if r17_open(item.value): value=frozenset({SINK})
+                    for target in targets:
+                        for name in r17_targets(target):
+                            joined=r17_join(env.get(name,frozenset()),value)
+                            if joined != env.get(name): env[name]=joined;changed=True
+                if not changed: break
+            actual=[r17_expr(arg,env) for arg in call.args]
+            semantic_call_ok=(len(actual)==5 and SINK in actual[0]
+                              and CANONICAL in actual[1] and INVOCATION in actual[2]
+                              and RUN in actual[3] and ROLE in actual[4])
+
+        # Resolve aliases of subprocess.Popen before counting creation sites.
+        popen_aliases={"subprocess.Popen"};changed=True
+        while changed:
+            changed=False
+            for item in ast.walk(candidate_tree):
+                if not isinstance(item,ast.Assign): continue
+                if isinstance(item.value,ast.Name): value=item.value.id
+                elif isinstance(item.value,ast.Attribute) and isinstance(item.value.value,ast.Name):
+                    value=f"{item.value.value.id}.{item.value.attr}"
+                else: continue
+                if value in popen_aliases:
+                    for target in item.targets:
+                        if isinstance(target,ast.Name) and target.id not in popen_aliases:
+                            popen_aliases.add(target.id);changed=True
+        def r17_popen(call):
+            if isinstance(call.func,ast.Name): return call.func.id in popen_aliases
+            return (isinstance(call.func,ast.Attribute) and isinstance(call.func.value,ast.Name)
+                    and f"{call.func.value.id}.{call.func.attr}" in popen_aliases)
+        resolved_popen=[item for item in ast.walk(candidate_tree)
+                        if isinstance(item,ast.Call) and r17_popen(item)]
+
+        # Conservative structured CFG.  A wait nested in any conditional,
+        # loop, with or exception region cannot dominate the success exits.
+        # This rejects bypass edges rather than guessing from line numbers.
+        cfg_ok=False
+        if len(timeout_calls)==1 and len(resolved_popen)==1:
+            call=timeout_calls[0];ancestor=parent_map.get(call);guarded=False
+            while ancestor is not None and ancestor is not run_codex_nodes[0]:
+                if isinstance(ancestor,(ast.If,ast.For,ast.AsyncFor,ast.While,ast.Try,
+                                        ast.TryStar,ast.ExceptHandler,ast.With,ast.AsyncWith)):
+                    guarded=True
+                ancestor=parent_map.get(ancestor)
+            top={node:index for index,node in enumerate(run_codex_nodes[0].body)}
+            stmt=call
+            while parent_map.get(stmt) is not run_codex_nodes[0]: stmt=parent_map[stmt]
+            call_index=top.get(stmt,-1);return_indices=[]
+            for ret in successful_returns:
+                stmt=ret
+                while parent_map.get(stmt) is not run_codex_nodes[0]: stmt=parent_map[stmt]
+                return_indices.append(top.get(stmt,-1))
+            cfg_ok=(not guarded and call_index>=0
+                    and all(index>call_index for index in return_indices))
+        consumer_architecture_ok=(consumer_architecture_ok and semantic_call_ok
+                                  and receiver_ok and not identity_escape and cfg_ok
+                                  and len(resolved_popen)==1)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -1609,7 +1769,62 @@ if mode == 'output_then_fail': sys.exit(17)
     # absence is part of the intended prebuilder RED, never a rig error.
     timeout_seam = getattr(module, "CODEX_RUN_TIMEOUT_SECONDS", None)
     timeout_variant_ok = (timeout_seam == 86400 and consumer_architecture_ok)
-    read_variants_actual_ok = True
+    # Owner-authorized admissibility variants replace only the frozen seam
+    # FunctionDef body.  The outer run_codex, authority, Popen topology and all
+    # other candidate bytes remain AST-identical.  They never credit the exact
+    # candidate's product verdict; they prove only that the gate admits each
+    # legitimate capability reader through a complete real-Popen run_codex.
+    reader_templates={
+      "pread":"raw = os.pread(sink_fd, MAX_RESULT_BYTES + 1, 0)",
+      "readv":"buf = bytearray(MAX_RESULT_BYTES + 1)\nn = os.preadv(sink_fd, [buf], 0)\nraw = bytes(buf[:n])",
+      "fdopen":"with os.fdopen(os.dup(sink_fd), 'rb') as stream:\n    raw = stream.read(MAX_RESULT_BYTES + 1)",
+      "FileIO":"with io.FileIO(os.dup(sink_fd), 'rb', closefd=True) as stream:\n    raw = stream.read(MAX_RESULT_BYTES + 1)",
+      "mmap":"with mmap.mmap(sink_fd, 0, access=mmap.ACCESS_READ) as view:\n    raw = bytes(view[:MAX_RESULT_BYTES + 1])",
+      "raw_buffer":"with io.BufferedReader(io.FileIO(os.dup(sink_fd), 'rb', closefd=True)) as stream:\n    raw = stream.raw.read(MAX_RESULT_BYTES + 1)",
+      "helper":"raw = _bounded_private_read(sink_fd, MAX_RESULT_BYTES + 1)",
+    }
+    connected_reader_results={};variant_shape_ok=True
+    reader_has_helper=any(isinstance(node,ast.FunctionDef)
+                          and node.name=="_bounded_private_read"
+                          for node in candidate_tree.body)
+    def r17_variant(family,reader_body):
+        tree=copy.deepcopy(candidate_tree)
+        target=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                    and node.name=="_consume_private_result")
+        body=ast.parse(
+            "before = os.fstat(sink_fd)\n"+reader_body+"\n"
+            "after = os.fstat(sink_fd)\n"
+            "if len(raw) > MAX_RESULT_BYTES: raise Stop('private result oversized')\n"
+            "if (before.st_dev,before.st_ino,before.st_mode,before.st_size,before.st_mtime_ns,before.st_ctime_ns) != (after.st_dev,after.st_ino,after.st_mode,after.st_size,after.st_mtime_ns,after.st_ctime_ns): raise Stop('private result changed')\n"
+            "report = json.loads(raw.decode('utf-8', errors='strict'))\n"
+            "if report.get('role') != role: raise Stop('private result binding mismatch')\n"
+            "sink_path = Path(os.readlink('/dev/fd/' + str(sink_fd)))\n"
+            "os.replace(sink_path, canonical_destination)\n"
+            "return report\n").body
+        target.body=body;ast.fix_missing_locations(tree)
+        # Remove only the two consumer bodies before comparing complete trees.
+        baseline=copy.deepcopy(candidate_tree);candidate=copy.deepcopy(tree)
+        for subject in (baseline,candidate):
+            node=next(item for item in subject.body if isinstance(item,ast.FunctionDef)
+                      and item.name=="_consume_private_result")
+            node.body=[ast.Pass()]
+        if ast.dump(baseline,include_attributes=False)!=ast.dump(candidate,include_attributes=False):
+            raise RuntimeError("R17 reader variant escaped consumer body")
+        path=work/f"r17-reader-{family}.py";path.write_text(ast.unparse(tree)+"\n",encoding="utf-8")
+        return path
+    if consumer_architecture_ok:
+        for family,template in reader_templates.items():
+            # The helper variant preserves an existing audited bounded helper;
+            # if absent it is not fabricated and cannot receive PASS credit.
+            if family=="helper" and not reader_has_helper: continue
+            variant=r17_variant(family,template)
+            connected_reader_results[family]=r12_real_case("one",subject_source=variant)
+    required_reader_variants=set(reader_templates)-({"helper"} if not reader_has_helper else set())
+    read_variants_actual_ok=(variant_shape_ok
+        and set(connected_reader_results)==required_reader_variants
+        and all(result[0]=="ADMITTED" and result[3] and result[4] is not None
+                and result[4][7] and result[5] and len(result[6])==1
+                and not result[7] for result in connected_reader_results.values()))
     def r12_escape_case():
         fixture=r12_provider("escape",work/"r12-unused-release")
         host=fixture.parent/"codex-code-mode-host"
