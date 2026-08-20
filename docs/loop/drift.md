@@ -1314,3 +1314,280 @@ The bounded lexical inventory also follows Python 3.9 assignment-expression sema
 R52's remaining observer recursion state was a depth bit: while the judge performed its retained nofollow open of the publication source, any later audit hook could trigger another filesystem event and inherit the judge's blanket bypass. R53 removes that state entirely. Every auditable judge operation now installs an ordered, thread-local, one-use ticket for the exact captured callable/event, normalized path tuple, flags, mode, dir-fd, available object identity and phase. Only the queue head with an exact match is consumed; mismatch, replay, wrong thread and out-of-order activity follow the ordinary subject policy. Multi-event work uses a finite explicit ticket sequence and newly opened objects are immediately fstat-bound to the existing retained identity/digest oracle.
 
 The causal control installs a later product audit hook that recognizes the judge's canonical-source open and attempts to unlink an outside victim. The nested unlink is observed and denied, the victim remains unchanged, and the exact ticketed judge open plus atomic publication still succeed. Wrong-path, wrong-flags, replay, cross-thread and ordered-ticket controls run unconditionally in every fresh child. This is rig sensitivity only: production is unchanged, no live provider call runs, and the missing structured-result boundary remains the sole product RED.
+
+### 2026-08-20 — H032/H031 R54 measurable result transport
+
+The first legitimate H032 builder exposed fixture contradictions rather than security failures. R54 separates the provider's raw report from the controller's canonical binding envelope, discovers the canonical leaf from the controller journal, and reproduces the physical G20 topology with an isolated exact controller repository plus a distinct linked writable worktree. The provider receives only the private `-o` sink. Causal synchronization reuses that exact precreated sink object; it does not grant writable sibling-marker or canonical authority. Object attacks replace the real sink after launch and the judge removes only its own injected residue after recording rejection.
+
+Sequential valid provider rewrites before exit prove observer sensitivity but cannot be a product rejection oracle: the consumer safely judges the single stable value presented at its call boundary. Material multi-value controls remain duplicate/trailing/concatenated input, second consumption/promotion and mutation during the bounded same-opened read. Provider stdout thread/session claims remain non-authoritative. Cleanup and timeout tests bind the production-created process group guaranteed by H017; a trusted exact provider deliberately escaping that group with `setsid` is not invented as authority H017 never supplies.
+
+H031 now freezes the one import topology that works under `python -I -S`: one protected repository-root insertion imports both `controller.authority.core` and `controller.result.consumer`, with no later path mutation. Only the exact private result-staging `open`, `close`, `fsync` and identifier `urandom` calls are added to its source-effect inventory. The sole Popen/run sites, generic Codex rejection, role policy, route argv and AGENT_START binding remain intact. Production and provider configuration are unchanged; the H032 owner gate stays RED only for the missing product boundary and performs no live model call while RED.
+
+### 2026-08-20 — H032 R55 publication epochs and complete residue
+
+R54's retained-source/final-object binding proved the last atomic replacement, but it did not enumerate the canonical destination's whole lifetime. A consumer could first create, fsync and unlink a complete canonical value, then replace the same pathname with an identical complete envelope; the polling observer could miss that first visibility interval and identical digests made its sample set look benign. R55 records every canonical visibility epoch and direct write effect. The unconditional reference mutant performs the two publications with distinct live objects and the same digest; the oracle observes both and rejects. The legitimate path has exactly one absent-to-present epoch sourced by the retained fsynced publication object. Polling remains diagnostic only.
+
+R55 also closes the cleanup accounting gap. Every provider-started negative path is now tied to the full attempt residue inventory returned in `result[4]`, the exact private output parent must be absent, and helper-created residue cannot be hidden by deleting only the sink leaf. Transient and persistent injected cleanup cases retain both the complete attempt inventory and the parent/tree observation before exact judge-owned cleanup. This does not change production authority, H031 routing, G20 or the intended prebuilder state: H032 remains RED only for the absent structured-result kernel and connected integration, and the guarded live model phase remains skipped.
+
+### 2026-08-20 — H032 R56 pre-provider setup/spawn cleanup
+
+R55 covered complete residue after a provider had started but could not represent a correct rejection with zero provider processes. R56 separates actual provider-process creation from the controller's journal event and injects four connected failures into the real `run_codex` lifecycle: after the private staging root but before its sink, during creation/open of that sink, after the retained read-only sink capability but before Popen, and at a Popen exception before delegation. Each requires the canonical and exact staging parent absent, the complete attempt residue and created private-root inventory empty, no live descriptor alias for the observed sink object, and zero actual provider starts. Provider-started cases retain their exact one-start/one-output requirement.
+
+The unconditional rig now admits a clean zero-start failure and rejects otherwise identical false-start, helper-residue, private-root and fd-alias mutants. The injected observations are retained before the judge removes only exact gate-owned diagnostic residue. Existing valid execution and bounded transient cleanup recovery remain positive anchors. No cleanup API is prescribed, production is unchanged, and H032 stays RED only for the missing structured-result kernel/integration; the live provider phase remains skipped.
+
+### 2026-08-20 — H032 R57 effect-neutral setup lifecycle
+
+Independent R56 review showed that the four setup controls still depended on when
+`_provider_snapshot` happened and whether `AGENT_START` had already been journaled. R57
+removes both dependencies. A valid connected run inventories every private allocation and
+identifies the result root only because it is the parent of the actual `-o` sink. Later
+faults target that root and sink by path plus dev/inode/access-mode effects; provider-family
+allocation order and journal chronology are not verdict inputs. Zero or one journal start
+record is accepted when its actual route fields are correct, while provider process starts
+remain an independent effect.
+
+The matrix now faults the first and second observed root-validation operations, the
+pre-create/open boundary, a returned writable create descriptor during fsync and close,
+the next setup step, the retained read-only descriptor's fstat, and the Popen boundary
+before delegation. The judge never precloses the product descriptor. Every case records
+`injected=true`, zero provider starts, exact result-root identity, empty complete attempt
+residue, absent staging/helper roots and zero remaining sink fd aliases. Metamorphic root
+allocation and journal schedules prove that reordering remains admissible. This changes no
+production or H017/G20 authority and keeps the absent structured-result implementation as
+the sole actual-product RED.
+
+### 2026-08-20 — H032 R58 attempt-scoped journal and distinct effect fault
+
+R57's journal helper caught JSON errors and discarded non-object lines before counting
+AGENT_START. A malformed append could therefore coexist with one valid route record and
+still satisfy the count. R58 snapshots the pre-attempt `events.jsonl` by no-follow opened
+object identity and bounded stable bytes, then parses exactly the appended suffix. The
+suffix must be complete newline-terminated UTF-8; every line is duplicate-free strict JSON
+and an event object; an AGENT_START has the full frozen route shape. Malformed unrelated,
+non-object, truncated, valid-plus-truncated, duplicate-valid, invalid-UTF8, replaced-object
+and changed-prefix controls reject. Legitimate prior history remains the identical prefix
+and only the current append contributes to the attempt count.
+
+R58 also separates the two final zero-start cleanup intervals. Once the product has
+returned and validated a live read-only sink capability, one injector fires at the first
+subsequent observed fallible non-Popen setup effect. The other fires only at the actual
+Popen boundary before delegation. Their traces and effects are disjoint, while both bind
+the sink dev/inode/access mode and require `injected=true`, zero provider processes, no fd
+aliases and no staging/helper/result residue. Metamorphic effect labels and order remain
+admitted; no provider helper name or AGENT_START chronology is verdict authority. The
+partial-builder host diagnostic produced `post_retained:Path.iterdir` versus
+`popen_before_delegate`, and all five connected journal corruptions rejected cleanly.
+Production, H017, G20 and provider authority remain unchanged.
+
+### 2026-08-20 — H032 R59 journal continuity and dynamic pre-Popen effects
+
+R58's stable same-fd journal read retained the file mode in its observation but compared
+only device/inode and prefix across the attempt. R59 requires every present attempt
+journal to remain an exact mode-0600 regular nlink-one object, and a pre-existing journal
+must preserve device, inode, type, link count, mode, complete prefix and exact size
+accounting. The connected chmod control keeps the same device/inode, widens 0600 to 0666,
+appends a valid unrelated event and is rejected. Existing strict history stays admissible,
+and a Popen failure may legitimately have appended either zero or one correctly shaped
+current AGENT_START.
+
+The post-retained cleanup control no longer selects one of six owner-named operations. It
+mechanically resolves the exact candidate `run_codex` direct OS, concrete Path and project
+helper call capabilities, discovers the actual dynamic effect sequence after the first
+successful retained-sink fstat and before Popen, and replays one fresh failure at every
+ordinal. Repeated capabilities remain separate intervals. Every replay binds the actual
+sink dev/inode plus a live read-only alias and requires zero provider starts and complete
+descriptor/staging/helper cleanup. Removing one discovered replay fails the matrix.
+
+The disposable partial-builder composition discovered 26 real intervals and injected all
+26 cleanly. A complete source variant with a second `os.fstat(sink_fd)` exposed that new
+call as ordinal zero and rejected cleanly. A mechanically constrained complete variant
+moved all fallible preparation before retained validation, produced an empty interval and
+was admitted until the separately injected Popen boundary. These are connected executions,
+not literal trace claims. Production, H017, G20 and H031 remain unchanged; the owner
+baseline stays 131 PASS / 1 FAIL solely for
+`STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT`, and no live model call runs while RED.
+
+### 2026-08-20 — H032/H031 R60 captured capabilities and dependent-gate rebind
+
+R59's ordinal replay covered every effect that entered its wrappers, but those wrappers
+were installed after a connected variant had executed. A default such as
+`captured_fstat=os.fstat` therefore retained the genuine C callable: its second sink
+validation executed while the source-spelling matrix saw only the first direct call.
+The same gap applied to a project helper retained through a default or alias.
+
+R60 resolves the capability actually entered. An invocation-local `sys.setprofile`
+router is installed before the complete connected variant is executed, remains inert
+until the measured run, and is armed only after the first successful retained read-only
+sink validation. C-call object identity and Python code identity cover direct wrappers,
+captured genuine callables, captured project helpers and their admitted internal
+filesystem capabilities without depending on a Name/Attribute spelling. The hook is
+removed in `finally`; no environment, fixture mode or provider claim selects it. H031's
+same source audit admits genuine `os.fstat`/helper capture but rejects `sys.getprofile`
+and default-captured observer access, so the judge mechanism cannot become a product
+branch input.
+
+The connected partial-builder run observed 27 actual base ordinals and injected all 27
+with zero starts and no descriptor/staging/helper residue. The captured-fstat variant
+recorded both the retained and post-retained sink fstats and rejected when the latter was
+injected before its syscall. The captured-helper variant separately observed helper
+entry followed by its internal fstat and rejected both connected injections. Direct
+repeated-fstat and the legitimate empty interval remain admitted.
+
+R59 also left H031 pinned to the previous H032 bytes, causing a 9/2 static abort. R60
+updates that binding only after the final H032 gate hash is fixed; the required H031
+baseline is the complete 94-control execution with only `K_H032_FRESH_UPSTREAM` and
+`K_PRODUCT_EXECUTION` failing for the unchanged structured-result product gap. No
+production, provider authority, G20, H017 or live-model behavior changes.
+
+### 2026-08-20 — H032/H031 R61 protected C-callback transfer boundary
+
+R60's identity profiler closes captured callables only at events CPython actually
+reports. A captured `os.fstat` called directly from Python emits `c_call`, and a Python
+helper or closure emits a Python `call` before its internal filesystem effect. In
+contrast, `next(map(captured_fstat, (sink_fd,)))` lets the C implementation of `map`
+invoke the C implementation of `fstat` without a nested profile event. The result is
+real but there is no ordinal for R60 to replay.
+
+R61 resolves that one observability boundary in H031 rather than claiming a stronger
+profiler. Its source-form control has two narrow provenances: the actual unaliased
+`os.fstat` result-setup capability and the exact unshadowed built-in C executors
+`map`, `filter`, `sorted`, `min` and `max`. Assignments, defaults, helper
+arguments/returns, aliases and explicit containers preserve those provenances. The
+gate rejects only when the protected capability is stored in a literal container or
+when both provenances meet at a call. It does not interpret Python control flow.
+
+Connected full-source controls place each route inside the real `run_codex` body.
+Direct captured invocation, a Python helper, an aliased Python relay, a closure and
+unrelated `next(map(lambda ...))` remain source-admissible. Protected map/filter/key
+callbacks, aliases and executor containers, capability containers and helper-return
+laundering reject with the exact protected-callback finding. Thus H032's existing
+27-ordinal direct matrix and captured-helper cases cover every newly admissible route;
+no H032 instrumentation, production, provider authority, G20, H017 or live-model
+behavior changes. H031 remains bound to the final unchanged H032 gate bytes and its
+prebuilder result remains 94 PASS / 2 FAIL solely for the structured-result product gap.
+
+### 2026-08-20 — H032/H031 R62 direct protected-fstat reset
+
+Independent review found that R61's narrow-looking provenance graph was neither
+complete nor precise: valid sibling values could inherit a container taint, while
+`*args`, `**kwargs`, lambda defaults, comprehensions and several C callback surfaces
+could still transfer the genuine `os.fstat` callable outside the observable ordinal
+router. Owner R62 expressly supersedes the R60/R61 captured-C and transfer-legitimacy
+clauses instead of extending that graph.
+
+The closed replacement is one local source rule over the complete H031 autopilot
+source envelope. Every actual unaliased `os.fstat` Attribute must itself be the direct
+`Call.func` in `os.fstat(...)`. Capturing the C callable in a default or lambda,
+assigning, returning, storing, passing, expanding through `*`/`**`, comprehending or
+supplying it to `map`, `sort` or another callback therefore rejects at the origin.
+The existing exact unaliased `os` import, proxy and reflection restrictions remain the
+module-identity boundary. No replacement dataflow or control-flow interpreter exists.
+
+Python helpers and closures remain ordinary refactoring surfaces when their body
+directly invokes `os.fstat`; aliases of those Python callables do not transfer the C
+capability. Connected controls place direct, helper, helper-alias and nested-helper
+positives in the actual `run_codex` body, alongside unrelated `map`/`next`, and place
+default/map/sort/star/keyword/lambda/container/return/comprehension/object-store
+negatives in that same body. H032 removes the captured-C connected case and retains
+only direct C events plus Python helper-frame/internal-effect ordinals. After H032
+bytes are final, H031 alone binds their exact digest. Production, provider authority,
+G20, H017 and live-model behavior remain untouched; the structured-result boundary
+remains the sole intended product RED.
+
+### 2026-08-20 — H032/H031 R63 lexical protected-fstat authority
+
+R62 applied its local Attribute-to-Call rule to every Name spelled `os`. That spelling
+is not authority: a parameter, local, comprehension target, exception target or
+nonlocal binding may independently expose an attribute named `fstat`, and R51 had
+already frozen those lexical shadows as ordinary values.
+
+R63 resolves each `os` load through a bounded Python-3.9 lexical scope table. Only a
+load that resolves to the exact unaliased module-level `import os` receives the R62
+protected-capability rule. A global reference to that intact module remains protected;
+a module rebind, conflicting import/store or ambiguous global/nonlocal binding rejects
+fail closed. No generic provenance or control-flow graph is restored.
+
+Connected full-`run_codex` controls retain genuine direct, helper, helper-alias and
+nested-helper positives and every R62 transfer negative. Separate positives cover
+parameter, local, comprehension, exception, nonlocal and unrelated local
+`list.sort(key=os.fstat)` shadows; module and ambiguous rebinding mutants reject. H032
+and its direct-C/Python-helper ordinal router are byte-identical at the frozen digest.
+The expected owner result remains H032 131 PASS / 1 FAIL and H031 94 PASS / 2 FAIL,
+solely for the absent structured-result production boundary. Production, provider
+authority, G20, H017 and live execution remain untouched.
+
+### 2026-08-20 — H032/H031 R64 declaration routing and class-body ambiguity
+
+R63's lexical model correctly distinguished ordinary shadows from the imported
+module, but three non-Name binding forms still bypassed declaration routing:
+exception targets and function or class definition names. A `global os` declaration
+could therefore leave one of those stores looking local rather than conflicting with
+the protected module binding. R64 routes every visited binding construct through the
+same global/nonlocal-aware operation.
+
+Class bodies need a separate conservative rule. Python executes them sequentially
+with `LOAD_NAME` fallback, so a set-only lexical inventory cannot soundly decide a
+load before a later assignment, a load after deletion, or a conditionally executed
+binding. R64 does not introduce a class control-flow interpreter: every direct
+class-body load, bind, delete, global declaration or nonlocal declaration involving
+the protected spelling `os` rejects fail closed. R51's ordinary-scope list covered
+parameters, locals, comprehensions, exceptions and nonlocals but did not promise
+class-body `LOAD_NAME` behavior, so this is an explicit compatible amendment. Nested
+method, lambda and comprehension scopes remain ordinary lexical scopes.
+
+Connected controls reject later, deleted and conditional class bindings and global
+exception/function/class rebinding. An ordinary class and class-method parameter,
+local and comprehension shadows pass alongside all six R63 shadow positives; every
+R62 protected-callable transfer negative remains rejected. H032 stays byte-identical,
+no R61 graph or generic dataflow/control-flow interpreter returns, and production,
+provider authority, G20, H017 and live execution remain untouched.
+
+### 2026-08-20 — H032/H031 R65 lexical process-module identity
+
+R64 fixed lexical authority for the protected `os.fstat` rule, but several older
+process guards still granted authority by spelling. A local `os` used in a truth
+guard or passed through a helper/container was therefore reported as a bare process
+module; assigning that ordinary object to a local alias was reported as module
+capture. Equivalent false positives existed for the other PROCESS_ATTRS spellings.
+
+R65 reuses one existing resolver predicate throughout those legacy checks. A Name is
+a process module only when it resolves exactly to its unaliased imported module
+binding. Module assignment, bare-module, process dictionary/reference, dynamic
+access, call keyword/arity, process-site enumeration and resulting effect counts all
+share that decision. Exact module-level `os` and `subprocess` singleton imports remain
+mandatory; aliases, rebindings and imported-module ambiguity reject fail closed.
+R64's direct class-body `os` ambiguity is unchanged and runs before this distinction.
+
+Connected full-`run_codex` positives cover guarded method parameter/local values,
+lambda and comprehension use, an identity relay, alias/container use, local
+`list.sort`/`map`, and module-shaped ordinary `os`, `subprocess`, `asyncio` and `pty`
+objects. Separate connected negatives retain imported module assignment/containers,
+bare modules, aliases, rebinding and process references, alongside every prior
+protected-fstat transfer and process-site mutant. This is local resolver reuse—not a
+provenance graph or control-flow interpreter. H032, production, provider authority,
+G20, H017 and live execution remain untouched.
+
+### 2026-08-20 — H032/H031 R66 conditional class process fallback
+
+R65 correctly made the legacy process restrictions lexical, but R64's separate
+class-body `LOAD_NAME` guard still named only `os`. A class could therefore read the
+real global `subprocess.Popen` before a later class-local `subprocess` assignment,
+after deleting that assignment, or when a conditional assignment never ran. The
+unordered lexical set then classified the load as ordinary and hid an actual process
+reference or start.
+
+R66 generalizes the existing class event inventory across every PROCESS_ATTRS
+spelling, while conditioning rejection on an exact imported-module fallback for that
+same name. A class-local binding forces a missing `LOAD_NAME` to module globals;
+nested class namespaces are skipped because they are not closure scopes. A class
+`nonlocal` that resolves to an ordinary enclosing-function value remains ordinary.
+This bounded lexical rule covers loads, binds, deletes, declarations, method defaults,
+decorators, comprehension outer iterables and direct starts without interpreting
+branch order or constructing a dataflow graph.
+
+Connected negatives cover `subprocess` later/delete/conditional bindings, direct
+Popen, method default, decorator, comprehension, global, nested-function and nested-
+class fallback. Positives retain every R62-R65 case and add direct class-local
+`asyncio`/`pty`, an enclosing-function ordinary `subprocess` closure and an explicit
+class `nonlocal`. H032, production, provider authority, G20, H017 and live execution
+remain untouched.

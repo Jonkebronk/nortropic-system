@@ -85,7 +85,7 @@ PROCESS_ATTRS = {
     "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
     "pty": {"spawn"},
 }
-EXPECTED_IMPORT_INVENTORY = sorted([
+LEGACY_EXPECTED_IMPORT_INVENTORY = sorted([
     "F:0:__future__:annotations:",
     "I:argparse:", "I:datetime:dt", "I:fcntl:", "I:hashlib:", "I:json:",
     "I:os:", "I:re:", "I:shutil:", "I:stat:", "I:subprocess:", "I:sys:",
@@ -94,6 +94,19 @@ EXPECTED_IMPORT_INVENTORY = sorted([
     "F:0:typing:Any:", "F:0:typing:Iterable:",
     "F:0:core:AuthorityError:", "F:0:core:canonical_path:",
     "F:0:core:permits:", "F:0:core:strict_json_bytes:",
+])
+RESULT_KERNEL_EXPECTED_IMPORT_INVENTORY = sorted([
+    "F:0:__future__:annotations:",
+    "I:argparse:", "I:datetime:dt", "I:fcntl:", "I:hashlib:", "I:json:",
+    "I:os:", "I:re:", "I:shutil:", "I:stat:", "I:subprocess:", "I:sys:",
+    "I:tempfile:", "I:time:",
+    "F:0:dataclasses:dataclass:", "F:0:pathlib:Path:",
+    "F:0:typing:Any:", "F:0:typing:Iterable:",
+    "F:0:controller.authority.core:AuthorityError:",
+    "F:0:controller.authority.core:canonical_path:",
+    "F:0:controller.authority.core:permits:",
+    "F:0:controller.authority.core:strict_json_bytes:",
+    "F:0:controller.result.consumer:consume_private_result:",
 ])
 SENSITIVE_MODULE_PROXIES = {
     "os", "sys", "subprocess", "builtins", "ctypes", "importlib", "pty",
@@ -107,9 +120,9 @@ ALLOWED_SYS_ATTRS = {
 ALLOWED_OS_ATTRS = {
     "O_CREAT", "O_EXCL", "O_RDONLY", "O_WRONLY", "X_OK", "access", "chmod",
     "close", "environ", "fdopen", "fstat", "fsync", "getpid", "getuid", "open",
-    "read", "sep", "system", "write",
+    "read", "sep", "system", "urandom", "write",
 }
-EXPECTED_OS_EFFECT_COUNTS = {
+RESULT_KERNEL_EXPECTED_OS_EFFECT_COUNTS = {
     "_read_stable_opened:read": 1,
     "_strict_provider_authority:close": 1,
     "_strict_provider_authority:open": 1,
@@ -127,8 +140,16 @@ EXPECTED_OS_EFFECT_COUNTS = {
     "publish:fdopen": 1,
     "publish:open": 1,
     "run_codex:chmod": 5,
+    "run_codex:close": 2,
+    "run_codex:fsync": 1,
+    "run_codex:open": 2,
+    "run_codex:urandom": 2,
 }
-DIRECT_OS_EFFECT_ATTRS = {"chmod", "close", "fdopen", "fsync", "open", "read", "write"}
+LEGACY_EXPECTED_OS_EFFECT_COUNTS = {
+    key:value for key,value in RESULT_KERNEL_EXPECTED_OS_EFFECT_COUNTS.items()
+    if not key.startswith("run_codex:") or key=="run_codex:chmod"
+}
+DIRECT_OS_EFFECT_ATTRS = {"chmod", "close", "fdopen", "fsync", "open", "read", "urandom", "write"}
 EXPECTED_FCNTL_EFFECT_COUNTS = {"acquire_lock:flock": 1}
 EXPECTED_SYS_STREAM_COUNTS = {"main:stderr.print": 4, "run_codex:stdout.write": 1}
 EXPECTED_SYS_STATE_COUNTS = {
@@ -297,12 +318,282 @@ def owner_map(tree: ast.Module) -> dict[ast.AST, str]:
     return owners
 
 
+def lexical_bindings(tree: ast.Module):
+    """Resolve import capability names without interpreting control flow."""
+    scope_parent: dict[ast.AST, ast.AST | None] = {tree: None}
+    scope_bindings: dict[ast.AST, dict[str, set[tuple[str, str | None]]]] = {
+        tree: {}
+    }
+    node_scope: dict[ast.AST, ast.AST] = {}
+    scope_globals: dict[ast.AST, set[str]] = {tree: set()}
+    scope_nonlocals: dict[ast.AST, set[str]] = {tree: set()}
+    class_process_events: set[tuple[ast.ClassDef, str, int, str]] = set()
+
+    def bind(scope: ast.AST, name: str, kind: str, value: str | None = None) -> None:
+        scope_bindings.setdefault(scope, {}).setdefault(name, set()).add((kind, value))
+
+    def bind_target(scope: ast.AST, name: str, kind: str = "local",
+                    value: str | None = None, node: ast.AST | None = None) -> None:
+        if isinstance(scope, ast.ClassDef) and name in PROCESS_ATTRS:
+            class_process_events.add(
+                (scope, name, getattr(node, "lineno", 0), kind))
+        if name in scope_globals.get(scope, set()):
+            bind(tree, name, kind, value)
+        elif name not in scope_nonlocals.get(scope, set()):
+            bind(scope, name, kind, value)
+
+    def bind_arguments(scope: ast.AST, args: ast.arguments) -> None:
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            bind(scope, arg.arg, "local")
+        if args.vararg is not None:
+            bind(scope, args.vararg.arg, "local")
+        if args.kwarg is not None:
+            bind(scope, args.kwarg.arg, "local")
+
+    class LexicalBindings(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope: ast.AST = tree
+
+        def visit(self, node: ast.AST):
+            node_scope.setdefault(node, self.scope)
+            return super().visit(node)
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(self.scope, ast.ClassDef) and node.id in PROCESS_ATTRS:
+                class_process_events.add(
+                    (self.scope, node.id, node.lineno, type(node.ctx).__name__))
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                bind_target(self.scope, node.id, node=node)
+
+        def visit_Global(self, node: ast.Global) -> None:
+            scope_globals.setdefault(self.scope, set()).update(node.names)
+            if isinstance(self.scope, ast.ClassDef):
+                for name in set(node.names) & set(PROCESS_ATTRS):
+                    class_process_events.add(
+                        (self.scope, name, node.lineno, "Global"))
+
+        def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+            scope_nonlocals.setdefault(self.scope, set()).update(node.names)
+            if isinstance(self.scope, ast.ClassDef):
+                for name in set(node.names) & set(PROCESS_ATTRS):
+                    class_process_events.add(
+                        (self.scope, name, node.lineno, "Nonlocal"))
+
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.type is not None:
+                self.visit(node.type)
+            if isinstance(node.name, str):
+                bind_target(self.scope, node.name, node=node)
+            for statement in node.body:
+                self.visit(statement)
+
+        def generic_visit(self, node: ast.AST):
+            node_name = type(node).__name__
+            if (node_name in {"MatchAs", "MatchStar"}
+                    and isinstance(getattr(node, "name", None), str)):
+                bind_target(self.scope, node.name, node=node)
+            if (node_name == "MatchMapping"
+                    and isinstance(getattr(node, "rest", None), str)):
+                bind_target(self.scope, node.rest, node=node)
+            return super().generic_visit(node)
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                bind_target(self.scope, alias.asname or root, "module", alias.name,
+                            node)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for alias in node.names:
+                bind_target(self.scope, alias.asname or alias.name, "member",
+                            f"{node.module}.{alias.name}", node)
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            bind_target(self.scope, node.name, node=node)
+            for item in node.decorator_list:
+                self.visit(item)
+            for item in (*node.args.defaults, *node.args.kw_defaults):
+                if item is not None:
+                    self.visit(item)
+            for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
+                if arg.annotation is not None:
+                    self.visit(arg.annotation)
+            if node.args.vararg and node.args.vararg.annotation:
+                self.visit(node.args.vararg.annotation)
+            if node.args.kwarg and node.args.kwarg.annotation:
+                self.visit(node.args.kwarg.annotation)
+            if node.returns is not None:
+                self.visit(node.returns)
+            outer = self.scope
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            bind_arguments(node, node.args)
+            for statement in node.body:
+                self.visit(statement)
+            self.scope = outer
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            for item in (*node.args.defaults, *node.args.kw_defaults):
+                if item is not None:
+                    self.visit(item)
+            outer = self.scope
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            bind_arguments(node, node.args)
+            self.visit(node.body)
+            self.scope = outer
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            bind_target(self.scope, node.name, node=node)
+            for item in node.decorator_list:
+                self.visit(item)
+            for item in node.bases:
+                self.visit(item)
+            for item in node.keywords:
+                self.visit(item.value)
+            outer = self.scope
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            for statement in node.body:
+                self.visit(statement)
+            self.scope = outer
+
+        def visit_comprehension_scope(self, node: ast.AST,
+                                      value_nodes: tuple[ast.AST, ...]) -> None:
+            outer = self.scope
+            generators = node.generators
+            if generators:
+                self.visit(generators[0].iter)
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            for index, generator in enumerate(generators):
+                if index:
+                    self.visit(generator.iter)
+                self.visit(generator.target)
+                for condition in generator.ifs:
+                    self.visit(condition)
+            for value in value_nodes:
+                self.visit(value)
+            self.scope = outer
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self.visit(node.value)
+            target_scope = self.scope
+            while isinstance(target_scope, (ast.ListComp, ast.SetComp,
+                                             ast.DictComp, ast.GeneratorExp)):
+                target_scope = scope_parent.get(target_scope)
+            if isinstance(node.target, ast.Name):
+                node_scope[node.target] = target_scope
+                bind_target(target_scope, node.target.id, node=node.target)
+            else:
+                outer = self.scope
+                self.scope = target_scope
+                self.visit(node.target)
+                self.scope = outer
+
+        def visit_ListComp(self, node: ast.ListComp) -> None:
+            self.visit_comprehension_scope(node, (node.elt,))
+
+        visit_SetComp = visit_ListComp
+        visit_GeneratorExp = visit_ListComp
+
+        def visit_DictComp(self, node: ast.DictComp) -> None:
+            self.visit_comprehension_scope(node, (node.key, node.value))
+
+    LexicalBindings().visit(tree)
+
+    def resolve_outside_class(scope: ast.ClassDef,
+                              name: str) -> tuple[str, str | None]:
+        """Model the binding used when a class LOAD_NAME misses its namespace."""
+        if name in scope_globals.get(scope, set()):
+            records = scope_bindings.get(tree, {}).get(name, set())
+            return (next(iter(records)) if len(records) == 1
+                    else ("ambiguous", None))
+
+        parent = scope_parent.get(scope)
+        if (name not in scope_nonlocals.get(scope, set())
+                and scope_bindings.get(scope, {}).get(name, set())):
+            # A class-local binding forces LOAD_NAME. Before that binding exists (or
+            # after deletion), LOAD_NAME falls back to module globals rather than an
+            # enclosing function's fast locals.
+            parent = tree
+
+        while parent is not None:
+            if isinstance(parent, ast.ClassDef):
+                parent = scope_parent.get(parent)
+                continue
+            if name in scope_globals.get(parent, set()):
+                parent = tree
+            elif name in scope_nonlocals.get(parent, set()):
+                parent = scope_parent.get(parent)
+                continue
+            records = scope_bindings.get(parent, {}).get(name, set())
+            if records:
+                return (next(iter(records)) if len(records) == 1
+                        else ("ambiguous", None))
+            parent = scope_parent.get(parent)
+        return ("unbound", None)
+
+    class_process_ambiguities = sorted(
+        (line, name, binding_kind)
+        for scope, name, line, binding_kind in class_process_events
+        if resolve_outside_class(scope, name) == ("module", name)
+    )
+
+    def enclosing_scope(scope: ast.AST) -> ast.AST | None:
+        """Function-like scopes do not close over an intervening class namespace."""
+        parent = scope_parent.get(scope)
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                              ast.ListComp, ast.SetComp, ast.DictComp,
+                              ast.GeneratorExp)):
+            while isinstance(parent, ast.ClassDef):
+                parent = scope_parent.get(parent)
+        return parent
+
+    def resolve(node: ast.Name) -> tuple[str, str | None]:
+        scope: ast.AST | None = node_scope.get(node, tree)
+        while scope is not None:
+            if node.id in scope_globals.get(scope, set()):
+                scope = tree
+            elif node.id in scope_nonlocals.get(scope, set()):
+                scope = enclosing_scope(scope)
+                while scope is not None and scope is not tree:
+                    records = scope_bindings.get(scope, {}).get(node.id, set())
+                    if records:
+                        return (next(iter(records)) if len(records) == 1
+                                else ("ambiguous", None))
+                    scope = enclosing_scope(scope)
+                return ("unbound", None)
+            records = scope_bindings.get(scope, {}).get(node.id, set())
+            if records:
+                return next(iter(records)) if len(records) == 1 else ("ambiguous", None)
+            scope = enclosing_scope(scope)
+        return ("unbound", None)
+
+    return resolve, scope_bindings, class_process_ambiguities
+
+
 def process_shape(text: str) -> dict[str, object]:
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
         return {"boundary_ok": False, "observer_ok": False, "detail": f"syntax:{exc}"}
     owners = owner_map(tree)
+    resolve_binding, scope_bindings, class_process_ambiguities = lexical_bindings(tree)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     annotation_nodes: set[ast.AST] = set()
     for candidate in ast.walk(tree):
@@ -326,41 +617,68 @@ def process_shape(text: str) -> dict[str, object]:
     sys_stream_counts: dict[str, int] = {}
     sys_state_counts: dict[str, int] = {}
     authority_assignments = 0
+    expected_repository_root_assignment = ast.parse(
+        'REPOSITORY_ROOT = Path(__file__).resolve().parents[1]'
+    ).body[0]
     expected_authority_assignment = ast.parse(
         'AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"'
     ).body[0]
+    protected_roots={"AUTHORITY_LIB","REPOSITORY_ROOT"}
+
+    def exact_process_module(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Name)
+            and node.id in PROCESS_ATTRS
+            and resolve_binding(node) == ("module", node.id)
+        )
+
+    for required_module in ("os", "subprocess"):
+        if (scope_bindings.get(tree, {}).get(required_module, set())
+                != {("module", required_module)}):
+            violations.append(("<module>", 0,
+                               f"exact-{required_module}-import-binding"))
+    for bindings in scope_bindings.values():
+        for module in PROCESS_ATTRS:
+            records = bindings.get(module, set())
+            if len(records) > 1 and ("module", module) in records:
+                violations.append(("<module>", 0,
+                                   f"ambiguous-{module}-binding"))
+    for line, module, binding_kind in class_process_ambiguities:
+        violations.append(("<class-body>", line,
+                           f"class-body-{module}-ambiguous:{binding_kind}"))
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
         if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                and node.name in {"str", "Path", "AUTHORITY_LIB", "__file__"}):
+                and node.name in ({"str", "Path", "__file__"}|protected_roots)):
             violations.append((owner, node.lineno, f"protected-binding:{node.name}"))
-        if isinstance(node, ast.arg) and node.arg in {"str", "Path", "AUTHORITY_LIB", "__file__"}:
+        if isinstance(node, ast.arg) and node.arg in ({"str", "Path", "__file__"}|protected_roots):
             violations.append((owner, node.lineno, f"protected-argument:{node.arg}"))
         if (isinstance(node, ast.ExceptHandler)
-                and node.name in {"str", "Path", "AUTHORITY_LIB", "__file__"}):
+                and node.name in ({"str", "Path", "__file__"}|protected_roots)):
             violations.append((owner, node.lineno, f"protected-except-binding:{node.name}"))
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             protected_declarations = sorted(
-                set(node.names) & {"str", "Path", "AUTHORITY_LIB", "__file__"})
+                set(node.names) & ({"str", "Path", "__file__"}|protected_roots))
             if protected_declarations:
                 violations.append((owner, node.lineno,
                                    f"protected-declaration:{protected_declarations}"))
         if isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id == "AUTHORITY_LIB"
+                isinstance(target, ast.Name) and target.id in protected_roots
                 for target in node.targets):
-            if ast.dump(node, include_attributes=False) == ast.dump(
-                    expected_authority_assignment, include_attributes=False):
+            if ast.dump(node, include_attributes=False) in {
+                    ast.dump(expected_authority_assignment, include_attributes=False),
+                    ast.dump(expected_repository_root_assignment, include_attributes=False)}:
                 authority_assignments += 1
             else:
-                violations.append((owner, node.lineno, "authority-lib-assignment"))
+                violations.append((owner, node.lineno, "repository-root-assignment"))
         if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
                 and node.id in {"str", "Path", "__file__"}):
             violations.append((owner, node.lineno, f"protected-binding:{node.id}"))
         if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
-                and node.id == "AUTHORITY_LIB"
+                and node.id in protected_roots
                 and not isinstance(parents.get(node), ast.Assign)):
-            violations.append((owner, node.lineno, "authority-lib-rebinding"))
+            violations.append((owner, node.lineno, "repository-root-rebinding"))
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "Path":
             parent = parents.get(node)
             grandparent = parents.get(parent) if parent is not None else None
@@ -410,9 +728,10 @@ def process_shape(text: str) -> dict[str, object]:
             if node.module == "builtins" or (node.module or "").startswith("builtins."):
                 violations.append((owner, node.lineno, f"dynamic-builtins-from-import:{node.module}"))
         elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-            if isinstance(node.value, ast.Name) and node.value.id in PROCESS_ATTRS:
+            if exact_process_module(node.value):
                 violations.append((owner, node.lineno, f"module-assignment:{node.value.id}"))
-        if isinstance(node, ast.Name) and node.id in PROCESS_ATTRS and isinstance(node.ctx, ast.Load):
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                and exact_process_module(node)):
             parent = parents.get(node)
             safe_getattr = (
                 isinstance(parent, ast.Call)
@@ -475,7 +794,7 @@ def process_shape(text: str) -> dict[str, object]:
                     and isinstance(state_args[1].func, ast.Name) and state_args[1].func.id == "str"
                     and len(state_args[1].args) == 1 and not state_args[1].keywords
                     and isinstance(state_args[1].args[0], ast.Name)
-                    and state_args[1].args[0].id == "AUTHORITY_LIB"
+                    and state_args[1].args[0].id in protected_roots
                 )
                 if safe_path_insert:
                     key = f"{owner}:path.insert"
@@ -528,6 +847,12 @@ def process_shape(text: str) -> dict[str, object]:
                     key = f"{owner}:flock"
                     fcntl_effect_counts[key] = fcntl_effect_counts.get(key, 0) + 1
         if isinstance(node, ast.Name) and node.id == "os" and isinstance(node.ctx, ast.Load):
+            binding_kind, binding_value = resolve_binding(node)
+            if binding_kind == "ambiguous":
+                violations.append((owner, node.lineno, "ambiguous-os-binding"))
+                continue
+            if (binding_kind, binding_value) != ("module", "os"):
+                continue
             parent = parents.get(node)
             safe_getattr = (
                 isinstance(parent, ast.Call)
@@ -542,6 +867,12 @@ def process_shape(text: str) -> dict[str, object]:
                 if parent.attr not in ALLOWED_OS_ATTRS and parent.attr not in PROCESS_ATTRS["os"]:
                     violations.append((owner, node.lineno,
                                        f"unapproved-os-attribute:os.{parent.attr}"))
+                if parent.attr == "fstat":
+                    effect_parent = parents.get(parent)
+                    if not (isinstance(effect_parent, ast.Call)
+                            and effect_parent.func is parent):
+                        violations.append((owner, node.lineno,
+                                           "protected-fstat-not-direct-call"))
                 if parent.attr == "environ":
                     environ_parent = parents.get(parent)
                     environ_grandparent = parents.get(environ_parent)
@@ -566,9 +897,10 @@ def process_shape(text: str) -> dict[str, object]:
                 violations.append((owner, node.lineno, "bare-os-module"))
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             module, attr = node.value.id, node.attr
-            if module in PROCESS_ATTRS and attr == "__dict__":
+            module_is_exact = exact_process_module(node.value)
+            if module_is_exact and attr == "__dict__":
                 violations.append((owner, node.lineno, f"process-dictionary:{module}"))
-            if module in PROCESS_ATTRS and attr in PROCESS_ATTRS[module]:
+            if module_is_exact and attr in PROCESS_ATTRS[module]:
                 parent = parents.get(node)
                 if not (isinstance(parent, ast.Call) and parent.func is node):
                     violations.append((owner, node.lineno, f"process-reference:{module}.{attr}"))
@@ -633,7 +965,7 @@ def process_shape(text: str) -> dict[str, object]:
             calls[owner].add(node.func.id)
         if isinstance(node.func, ast.Name) and node.func.id in {"getattr", "vars"} and node.args:
             target = node.args[0]
-            if isinstance(target, ast.Name) and target.id in PROCESS_ATTRS:
+            if exact_process_module(target):
                 attr = node.args[1] if len(node.args) > 1 else None
                 if (not isinstance(attr, ast.Constant) or not isinstance(attr.value, str)
                         or attr.value in PROCESS_ATTRS[target.id]):
@@ -641,7 +973,8 @@ def process_shape(text: str) -> dict[str, object]:
         if not (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)):
             continue
         module, attr = node.func.value.id, node.func.attr
-        if module not in PROCESS_ATTRS or attr not in PROCESS_ATTRS[module]:
+        if (not exact_process_module(node.func.value)
+                or attr not in PROCESS_ATTRS[module]):
             continue
         unsafe_keywords = sorted(
             "**" if keyword.arg is None else keyword.arg
@@ -683,10 +1016,14 @@ def process_shape(text: str) -> dict[str, object]:
     observer_hits = {name: sorted(reachable(name) & {"run_codex"})
                      for name in ("status", "watch", "roadmap_status")}
     observer_hits = {name: hit for name, hit in observer_hits.items() if hit}
-    inventory_ok = sorted(import_inventory) == EXPECTED_IMPORT_INVENTORY
+    inventory_ok = tuple(sorted(import_inventory)) in {
+        tuple(LEGACY_EXPECTED_IMPORT_INVENTORY),
+        tuple(RESULT_KERNEL_EXPECTED_IMPORT_INVENTORY),
+    }
     if not inventory_ok:
         violations.append(("<module>", 0, f"import-inventory:{sorted(import_inventory)}"))
-    if os_effect_counts != EXPECTED_OS_EFFECT_COUNTS:
+    if os_effect_counts not in (LEGACY_EXPECTED_OS_EFFECT_COUNTS,
+                                RESULT_KERNEL_EXPECTED_OS_EFFECT_COUNTS):
         violations.append(("<module>", 0, f"os-effect-inventory:{os_effect_counts}"))
     if fcntl_effect_counts != EXPECTED_FCNTL_EFFECT_COUNTS:
         violations.append(("<module>", 0, f"fcntl-effect-inventory:{fcntl_effect_counts}"))
@@ -695,7 +1032,7 @@ def process_shape(text: str) -> dict[str, object]:
     if sys_state_counts != EXPECTED_SYS_STATE_COUNTS:
         violations.append(("<module>", 0, f"sys-state-inventory:{sys_state_counts}"))
     if authority_assignments != 1:
-        violations.append(("<module>", 0, f"authority-lib-count:{authority_assignments}"))
+        violations.append(("<module>", 0, f"repository-root-count:{authority_assignments}"))
     exact = counts == {"run": 1, "run_codex": 1, "clear": 1}
     return {
         "boundary_ok": exact and not violations,
@@ -704,6 +1041,19 @@ def process_shape(text: str) -> dict[str, object]:
         "detail": f"counts={counts} imports_exact={inventory_ok} sites={sites} violations={violations}",
         "observer_hits": observer_hits,
     }
+
+
+def inject_run_codex_prefix(text: str, statements: str) -> str:
+    tree = ast.parse(text)
+    functions = [node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name == "run_codex"]
+    if len(functions) != 1 or not functions[0].body:
+        raise ValueError("exact run_codex body unavailable")
+    first_line = functions[0].body[0].lineno - 1
+    lines = text.splitlines(keepends=True)
+    insertion = "".join("    " + line + "\n" for line in statements.splitlines())
+    lines.insert(first_line, insertion)
+    return "".join(lines)
 
 
 def route_observation(argv: list[str]) -> dict[str, object]:
@@ -793,7 +1143,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "0de65300c4f31b8663322f5e04313f82c4b8ab12960ae275a816e65dcc155b66")
+                       == "a767e95990f145acad2cf807b17820dec91199660497fdf915765099f15e0f0a")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
@@ -806,13 +1156,558 @@ try:
         print("H031_GATE_RESULT=FAIL")
         raise SystemExit(1)
     shape = process_shape(source_text)
+    direct_fstat_positives = [
+        inject_run_codex_prefix(source_text, "os.fstat(0)"),
+        inject_run_codex_prefix(source_text, """
+def _fstat(fd):
+    return os.fstat(fd)
+_fstat(0)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_aliased_python_helper(fd):
+    return os.fstat(fd)
+h031_helper_alias = h031_aliased_python_helper
+h031_helper_alias(0)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_helper_factory():
+    def h031_nested_helper(fd):
+        return os.fstat(fd)
+    return h031_nested_helper
+h031_helper_factory()(0)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_global_direct_helper(fd):
+    global os
+    return os.fstat(fd)
+h031_global_direct_helper(0)
+""".strip()),
+        inject_run_codex_prefix(
+            source_text,
+            "h031_unrelated = next(map(lambda value: value + 1, (1,)))"),
+    ]
+    shadowed_os_positives = [
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_parameter_shadow(os):
+    return os.fstat(1)
+h031_parameter_shadow(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_local_shadow():
+    os = H031LocalOS()
+    return os.fstat(1)
+h031_local_shadow()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+h031_shadowed_values = [os.fstat for os in (H031LocalOS(),)]
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031ShadowError(Exception):
+    def fstat(self, value):
+        return value
+def h031_exception_shadow_control():
+    try:
+        raise H031ShadowError()
+    except H031ShadowError as os:
+        return os.fstat(1)
+h031_exception_shadow_control()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_local_sort_shadow(os):
+    values = [1]
+    values.sort(key=os.fstat)
+    return values
+h031_local_sort_shadow(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_nonlocal_shadow_control():
+    os = H031LocalOS()
+    def h031_nested_nonlocal():
+        nonlocal os
+        return os.fstat(1)
+    return h031_nested_nonlocal()
+h031_nonlocal_shadow_control()
+""".strip()),
+    ]
+    class_scope_positives = [
+        inject_run_codex_prefix(source_text, """
+class H031OrdinaryClass:
+    value = 1
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031MethodParameter:
+    def probe(self, os):
+        return os.fstat(1)
+H031MethodParameter().probe(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031MethodLocal:
+    def probe(self):
+        os = H031LocalOS()
+        return os.fstat(1)
+H031MethodLocal().probe()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031MethodComprehension:
+    def probe(self):
+        return [os.fstat for os in (H031LocalOS(),)]
+H031MethodComprehension().probe()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalAsyncio:
+    def create_subprocess_exec(self, value):
+        return value
+class H031ClassLocalAsyncio:
+    asyncio = H031LocalAsyncio()
+    captured = asyncio.create_subprocess_exec
+H031ClassLocalAsyncio.captured("ordinary")
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalPty:
+    def spawn(self, value):
+        return value
+class H031ClassLocalPty:
+    pty = H031LocalPty()
+    captured = pty.spawn
+H031ClassLocalPty.captured(["ordinary"])
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+def h031_enclosing_local_class():
+    subprocess = H031LocalSubprocess()
+    class H031ClosureClass:
+        captured = subprocess.Popen
+    return H031ClosureClass.captured(["ordinary"])
+h031_enclosing_local_class()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+def h031_enclosing_nonlocal_class():
+    subprocess = H031LocalSubprocess()
+    class H031NonlocalClass:
+        nonlocal subprocess
+        captured = subprocess.Popen
+    return H031NonlocalClass.captured(["ordinary"])
+h031_enclosing_nonlocal_class()
+""".strip()),
+    ]
+    ordinary_process_shadow_positives = [
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031GuardedMethodParameter:
+    def probe(self, os):
+        if os is None:
+            return 0
+        return os.fstat(1)
+H031GuardedMethodParameter().probe(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031GuardedMethodLocal:
+    def probe(self):
+        os = H031LocalOS()
+        if not os:
+            return 0
+        return os.fstat(1)
+H031GuardedMethodLocal().probe()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+h031_lambda_shadow = (lambda os: os and os.fstat(1))(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+h031_comprehension_values = [os for os in (H031LocalOS(),)]
+h031_comprehension_values[0].fstat(1)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_identity(value):
+    return value
+def h031_identity_relay(os):
+    return h031_identity(os).fstat(1)
+h031_identity_relay(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_alias_container(os):
+    alias = os
+    values = [os]
+    return alias.fstat(1) + values[0].fstat(1)
+h031_alias_container(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_local_callback_controls(os):
+    values = [1]
+    values.sort(key=os.fstat)
+    return next(map(os.fstat, values))
+h031_local_callback_controls(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, argv):
+        return argv
+def h031_local_subprocess(subprocess):
+    if not subprocess:
+        return []
+    alias = subprocess
+    return alias.Popen(["ordinary"])
+h031_local_subprocess(H031LocalSubprocess())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def system(self, command):
+        return command
+def h031_local_os_process_shape(os):
+    if not os:
+        return ""
+    return os.system("ordinary")
+h031_local_os_process_shape(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalAsyncio:
+    def create_subprocess_exec(self, argv):
+        return argv
+def h031_local_asyncio(asyncio):
+    if not asyncio:
+        return None
+    return asyncio.create_subprocess_exec("ordinary")
+h031_local_asyncio(H031LocalAsyncio())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalPty:
+    def spawn(self, argv):
+        return argv
+def h031_local_pty(pty):
+    if not pty:
+        return None
+    return pty.spawn(["ordinary"])
+h031_local_pty(H031LocalPty())
+""".strip()),
+    ]
+    class_body_ambiguity_mutants = [
+        inject_run_codex_prefix(source_text, """
+class H031BadClassOrder:
+    captured = os.fstat
+    os = object()
+H031BadClassOrder.captured(0)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassDelete:
+    os = object()
+    del os
+    captured = os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassConditional:
+    if False:
+        os = object()
+    captured = os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassDeclaration:
+    global os
+    captured = os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessOrder:
+    captured = subprocess.Popen
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessDelete:
+    subprocess = object()
+    del subprocess
+    captured = subprocess.Popen
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessConditional:
+    if False:
+        subprocess = object()
+    captured = subprocess.Popen
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessStart:
+    started = subprocess.Popen(["/bin/true"])
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessDefault:
+    def probe(self, spawn=subprocess.Popen):
+        return spawn
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessDecorator:
+    @subprocess.Popen
+    class Nested:
+        pass
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessComprehension:
+    captured = [value for value in (subprocess.Popen,)]
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessGlobal:
+    global subprocess
+    captured = subprocess.Popen
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+def h031_nested_function_fallback():
+    subprocess = H031LocalSubprocess()
+    class H031BadNestedFunctionClass:
+        captured = subprocess.Popen
+        subprocess = object()
+    return H031BadNestedFunctionClass
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+class H031OuterClass:
+    subprocess = H031LocalSubprocess()
+    class H031BadNestedClass:
+        captured = subprocess.Popen
+""".strip()),
+    ]
+    protected_fstat_transfer_mutants = [
+        inject_run_codex_prefix(source_text, """
+def h031_bad_default(fd, probe=os.fstat):
+    return probe(fd)
+h031_bad_default(0)
+""".strip()),
+        inject_run_codex_prefix(source_text,
+                                "next(map(os.fstat, (0,)))"),
+        inject_run_codex_prefix(source_text, """
+h031_items = [0]
+h031_items.sort(key=os.fstat)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+h031_args = (os.fstat, (0,))
+next(map(*h031_args))
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_bad_kwargs(*, function, iterable):
+    return next(map(function, iterable))
+h031_bad_kwargs(**{"function": os.fstat, "iterable": (0,)})
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+h031_bad_lambda = lambda fd, probe=os.fstat: probe(fd)
+h031_bad_lambda(0)
+""".strip()),
+        inject_run_codex_prefix(source_text,
+                                "h031_callbacks = {\"probe\": os.fstat}"),
+        inject_run_codex_prefix(source_text, """
+def h031_bad_return():
+    return os.fstat
+h031_bad_return()(0)
+""".strip()),
+        inject_run_codex_prefix(source_text,
+                                "h031_callbacks = [os.fstat for _ in (0,)]"),
+        inject_run_codex_prefix(source_text, """
+class H031Box:
+    pass
+h031_box = H031Box()
+h031_box.probe = os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassShadow:
+    os = object()
+    def h031_bad_method(self):
+        return os.fstat
+""".strip()),
+    ]
+    os_binding_mutants = [
+        source_text + "\n\nos = object()\n",
+        inject_run_codex_prefix(source_text, """
+def h031_bad_global_rebind():
+    global os
+    os = object()
+h031_bad_global_rebind()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_bad_ambiguous_local():
+    import os
+    os = object()
+    return os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_bad_global_walrus():
+    global os
+    [(os := object()) for _ in (0,)]
+h031_bad_global_walrus()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031GlobalShadowError(Exception):
+    pass
+global os
+try:
+    raise H031GlobalShadowError()
+except H031GlobalShadowError as os:
+    os.fstat(1)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+global os
+def os():
+    return None
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+global os
+class os:
+    pass
+""".strip()),
+    ]
+    process_module_identity_mutants = [
+        inject_run_codex_prefix(source_text, "h031_bad_os_alias = os"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_subprocess_alias = subprocess"),
+        inject_run_codex_prefix(source_text, "h031_bad_os_box = [os]"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_subprocess_box = [subprocess]"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_process_reference = subprocess.Popen"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_os_process_reference = os.system"),
+        inject_run_codex_prefix(source_text, """
+global subprocess
+subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, "import subprocess as h031_subprocess"),
+        inject_run_codex_prefix(source_text, "import os as h031_os"),
+    ]
+    profile_visibility_mutants = [
+        source_text + "\n\nh031_profile_visible = sys.getprofile()\n",
+        source_text + "\n\ndef h031_profile_default(probe=sys.getprofile):\n    return probe\n",
+    ]
+    direct_fstat_source_ok = all(
+        process_shape(candidate).get("boundary_ok") is True
+        for candidate in direct_fstat_positives)
+    shadowed_os_shapes = [process_shape(candidate) for candidate in shadowed_os_positives]
+    shadowed_os_source_ok = all(
+        item.get("boundary_ok") is True for item in shadowed_os_shapes)
+    class_scope_shapes = [process_shape(candidate) for candidate in class_scope_positives]
+    class_scope_source_ok = all(
+        item.get("boundary_ok") is True for item in class_scope_shapes)
+    ordinary_process_shadow_shapes = [
+        process_shape(candidate) for candidate in ordinary_process_shadow_positives]
+    ordinary_process_shadow_source_ok = all(
+        item.get("boundary_ok") is True
+        for item in ordinary_process_shadow_shapes)
+    class_body_ambiguity_shapes = [
+        process_shape(candidate) for candidate in class_body_ambiguity_mutants]
+    class_body_ambiguity_rejected = all(
+        item.get("boundary_ok") is False
+        and "class-body-" in str(item.get("detail"))
+        and "-ambiguous" in str(item.get("detail"))
+        for item in class_body_ambiguity_shapes)
+    protected_fstat_transfers_rejected = all(
+        process_shape(candidate).get("boundary_ok") is False
+        and "protected-fstat-not-direct-call"
+            in str(process_shape(candidate).get("detail"))
+        for candidate in protected_fstat_transfer_mutants)
+    imported_os_rebinding_rejected = all(
+        process_shape(candidate).get("boundary_ok") is False
+        and any(reason in str(process_shape(candidate).get("detail"))
+                for reason in ("exact-os-import-binding", "ambiguous-os-binding"))
+        for candidate in os_binding_mutants)
+    process_module_identity_rejected = all(
+        process_shape(candidate).get("boundary_ok") is False
+        and any(reason in str(process_shape(candidate).get("detail"))
+                for reason in (
+                    "module-assignment", "bare-process-module",
+                    "process-reference", "exact-subprocess-import-binding",
+                    "ambiguous-subprocess-binding", "import-alias",
+                    "import-inventory",
+                ))
+        for candidate in process_module_identity_mutants)
+    profile_invisible_to_admitted_source = all(
+        process_shape(candidate).get("boundary_ok") is False
+        for candidate in profile_visibility_mutants)
     required_api = {"run", "run_codex", "status", "watch", "roadmap_status", "journal_root"}
     required_api_ok = required_api <= shape["funcs"]
     check("K_REQUIRED_API", required_api_ok,
           f"present={sorted(required_api & shape['funcs'])}")
-    check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"]), str(shape["detail"]))
+    check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"])
+          and direct_fstat_source_ok and shadowed_os_source_ok
+          and class_scope_source_ok and class_body_ambiguity_rejected
+          and ordinary_process_shadow_source_ok
+          and protected_fstat_transfers_rejected
+          and imported_os_rebinding_rejected
+          and process_module_identity_rejected
+          and profile_invisible_to_admitted_source,
+          f"{shape['detail']} direct_fstat_source={direct_fstat_source_ok} "
+          f"shadowed_os_source={shadowed_os_source_ok} "
+          f"shadowed_os_shapes={[item.get('detail') for item in shadowed_os_shapes]} "
+          f"class_scope_source={class_scope_source_ok} "
+          f"class_scope_shapes={[item.get('detail') for item in class_scope_shapes]} "
+          f"ordinary_process_shadow_source={ordinary_process_shadow_source_ok} "
+          f"ordinary_process_shadow_shapes="
+          f"{[item.get('detail') for item in ordinary_process_shadow_shapes]} "
+          f"class_body_ambiguity_rejected={class_body_ambiguity_rejected} "
+          f"class_body_ambiguity_shapes="
+          f"{[item.get('detail') for item in class_body_ambiguity_shapes]} "
+          f"protected_fstat_transfers_rejected={protected_fstat_transfers_rejected} "
+          f"imported_os_rebinding_rejected={imported_os_rebinding_rejected} "
+          f"process_module_identity_rejected={process_module_identity_rejected} "
+          f"profile_visibility_rejected={profile_invisible_to_admitted_source}")
     check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
-    if not h031_static or not h032_static or not required_api_ok or not shape["boundary_ok"] or not shape["observer_ok"]:
+    if (not h031_static or not h032_static or not required_api_ok
+            or not shape["boundary_ok"] or not direct_fstat_source_ok
+            or not shadowed_os_source_ok
+            or not class_scope_source_ok or not class_body_ambiguity_rejected
+            or not ordinary_process_shadow_source_ok
+            or not protected_fstat_transfers_rejected
+            or not imported_os_rebinding_rejected
+            or not process_module_identity_rejected
+            or not profile_invisible_to_admitted_source or not shape["observer_ok"]):
         raise ProductFailure("static contract rejected before upstream or subject import")
 
     shape_mutants = {
@@ -899,14 +1794,14 @@ try:
             "h031_import_path.write_text('effect', encoding='utf-8')\n"
             "h031_import_path.unlink()\n"
         ),
-        "AUTHORITY_LIB_SHADOW": "\nAUTHORITY_LIB = Path('/private/tmp/h031-shadow')\n",
+        "REPOSITORY_ROOT_SHADOW": "\nREPOSITORY_ROOT = Path('/private/tmp/h031-shadow')\n",
         "STR_SHADOW": (
             "\ndef str(value):\n"
-            "    return '/private/tmp/h031-shadow' if value is AUTHORITY_LIB else value\n"
+            "    return '/private/tmp/h031-shadow' if value is REPOSITORY_ROOT else value\n"
         ),
-        "AUTHORITY_EXCEPT_BINDING": (
+        "REPOSITORY_ROOT_EXCEPT_BINDING": (
             "\ntry:\n    raise Exception('/private/tmp/h031-shadow')\n"
-            "except Exception as AUTHORITY_LIB:\n    pass\n"
+            "except Exception as REPOSITORY_ROOT:\n    pass\n"
         ),
         "PATH_PUBLIC_MONKEYPATCH": (
             "\nh031_resolve = Path.resolve\n"
