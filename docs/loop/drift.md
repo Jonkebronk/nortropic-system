@@ -1591,3 +1591,22 @@ class fallback. Positives retain every R62-R65 case and add direct class-local
 `asyncio`/`pty`, an enclosing-function ordinary `subprocess` closure and an explicit
 class `nonlocal`. H032, production, provider authority, G20, H017 and live execution
 remain untouched.
+
+### 2026-08-20 — H032/H031 R67 exact-owner live HEAD correction
+
+The first legitimate result-kernel builder made the complete deterministic H032
+matrix green and thereby reached the guarded exact-provider phase. The owner gate then
+raised `NameError` because three late-only identity sites called a nonexistent
+`sha()` helper. Prebuilder RED had kept that branch unexecuted, so earlier owner runs
+could not expose the gate defect.
+
+R67 uses the gate's existing closed system-Git helper to resolve exact candidate
+`rev-parse HEAD` once before deterministic gating. That early value is exercised on
+every run and is reused for the isolated clone checkout, post-provider clone equality,
+detail and bound evidence. The already-frozen `HEAD^{tree}` equality remains a second,
+independent identity condition and cannot substitute for commit equality. There is no
+new authority helper, no path claim and no production change.
+
+H031 is rebound to the finalized H032 gate bytes. Result schema, same-opened kernel,
+publication/cleanup, process containment, provider/host authority, G20 and the rule
+that the real provider phase runs only after deterministic green remain unchanged.

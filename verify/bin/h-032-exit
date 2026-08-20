@@ -228,6 +228,8 @@ def sh(*argv: str, cwd: Path | None = None) -> str:
         raise RuntimeError(f"rc={p.returncode}: {' '.join(argv)}\n{p.stdout}")
     return p.stdout
 
+repo_head = sh(GIT, "rev-parse", "HEAD", cwd=repo).strip()
+
 try:
     # Current-authority lifecycle. Historical h-032 candidates are design
     # evidence only; this exact row must follow the published h-033 chain.
@@ -4582,7 +4584,7 @@ class CraftedConcretePath(type(Path())):
     if deterministic_result_ok:
         live_repo = work / "r14-exact-owner-live-clone"
         sh(GIT,"clone","-q","--no-hardlinks",str(repo),str(live_repo))
-        sh(GIT,"checkout","-q",sha(repo),cwd=live_repo)
+        sh(GIT,"checkout","-q",repo_head,cwd=live_repo)
         live_wt=work/"r14-exact-owner-live-worker"
         sh(GIT,"worktree","add","-q","--detach",str(live_wt),"HEAD",cwd=live_repo)
         live_source=live_repo/"scripts/nortropic-codex-autopilot.py"
@@ -4628,7 +4630,7 @@ class CraftedConcretePath(type(Path())):
             and live_transitions[0].get("ino")==before.st_ino
             and not live_sink.exists() and not live_sink.parent.exists()
             and sha256(apath)==digest and sha256(host_path)==host_digest
-            and sha(live_repo)==sha(repo)
+            and sh(GIT,"rev-parse","HEAD",cwd=live_repo).strip()==repo_head
             and sh(GIT,"rev-parse","HEAD^{tree}",cwd=live_repo).strip()
                 == sh(GIT,"rev-parse","HEAD^{tree}",cwd=repo).strip()
             and sha256(live_source)==sha256(source)
@@ -4637,7 +4639,7 @@ class CraftedConcretePath(type(Path())):
             and sha256(live_repo/"specs/tasks.spec.json")==sha256(task_spec)
             and sha256(live_repo/"verify/bin/h-032-exit")==sha256(h032_gate)
             and h032_gate.is_file())
-        exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
+        exact_owner_live_detail=(repo_head,hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     print("R60_BOUND_EVIDENCE=" + json.dumps({
