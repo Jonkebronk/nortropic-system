@@ -580,11 +580,25 @@ def process_shape(text: str) -> dict[str, object]:
         'AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"'
     ).body[0]
     protected_roots={"AUTHORITY_LIB","REPOSITORY_ROOT"}
-    if scope_bindings.get(tree, {}).get("os", set()) != {("module", "os")}:
-        violations.append(("<module>", 0, "exact-os-import-binding"))
-    if any(len(bindings.get("os", set())) > 1
-           for bindings in scope_bindings.values()):
-        violations.append(("<module>", 0, "ambiguous-os-binding"))
+
+    def exact_process_module(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Name)
+            and node.id in PROCESS_ATTRS
+            and resolve_binding(node) == ("module", node.id)
+        )
+
+    for required_module in ("os", "subprocess"):
+        if (scope_bindings.get(tree, {}).get(required_module, set())
+                != {("module", required_module)}):
+            violations.append(("<module>", 0,
+                               f"exact-{required_module}-import-binding"))
+    for bindings in scope_bindings.values():
+        for module in PROCESS_ATTRS:
+            records = bindings.get(module, set())
+            if len(records) > 1 and ("module", module) in records:
+                violations.append(("<module>", 0,
+                                   f"ambiguous-{module}-binding"))
     for line, binding_kind in class_os_ambiguities:
         violations.append(("<class-body>", line,
                            f"class-body-os-ambiguous:{binding_kind}"))
@@ -670,9 +684,10 @@ def process_shape(text: str) -> dict[str, object]:
             if node.module == "builtins" or (node.module or "").startswith("builtins."):
                 violations.append((owner, node.lineno, f"dynamic-builtins-from-import:{node.module}"))
         elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-            if isinstance(node.value, ast.Name) and node.value.id in PROCESS_ATTRS:
+            if exact_process_module(node.value):
                 violations.append((owner, node.lineno, f"module-assignment:{node.value.id}"))
-        if isinstance(node, ast.Name) and node.id in PROCESS_ATTRS and isinstance(node.ctx, ast.Load):
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                and exact_process_module(node)):
             parent = parents.get(node)
             safe_getattr = (
                 isinstance(parent, ast.Call)
@@ -838,9 +853,10 @@ def process_shape(text: str) -> dict[str, object]:
                 violations.append((owner, node.lineno, "bare-os-module"))
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             module, attr = node.value.id, node.attr
-            if module in PROCESS_ATTRS and attr == "__dict__":
+            module_is_exact = exact_process_module(node.value)
+            if module_is_exact and attr == "__dict__":
                 violations.append((owner, node.lineno, f"process-dictionary:{module}"))
-            if module in PROCESS_ATTRS and attr in PROCESS_ATTRS[module]:
+            if module_is_exact and attr in PROCESS_ATTRS[module]:
                 parent = parents.get(node)
                 if not (isinstance(parent, ast.Call) and parent.func is node):
                     violations.append((owner, node.lineno, f"process-reference:{module}.{attr}"))
@@ -905,7 +921,7 @@ def process_shape(text: str) -> dict[str, object]:
             calls[owner].add(node.func.id)
         if isinstance(node.func, ast.Name) and node.func.id in {"getattr", "vars"} and node.args:
             target = node.args[0]
-            if isinstance(target, ast.Name) and target.id in PROCESS_ATTRS:
+            if exact_process_module(target):
                 attr = node.args[1] if len(node.args) > 1 else None
                 if (not isinstance(attr, ast.Constant) or not isinstance(attr.value, str)
                         or attr.value in PROCESS_ATTRS[target.id]):
@@ -913,7 +929,8 @@ def process_shape(text: str) -> dict[str, object]:
         if not (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)):
             continue
         module, attr = node.func.value.id, node.func.attr
-        if module not in PROCESS_ATTRS or attr not in PROCESS_ATTRS[module]:
+        if (not exact_process_module(node.func.value)
+                or attr not in PROCESS_ATTRS[module]):
             continue
         unsafe_keywords = sorted(
             "**" if keyword.arg is None else keyword.arg
@@ -1217,6 +1234,115 @@ class H031MethodComprehension:
 H031MethodComprehension().probe()
 """.strip()),
     ]
+    ordinary_process_shadow_positives = [
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031GuardedMethodParameter:
+    def probe(self, os):
+        if os is None:
+            return 0
+        return os.fstat(1)
+H031GuardedMethodParameter().probe(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031GuardedMethodLocal:
+    def probe(self):
+        os = H031LocalOS()
+        if not os:
+            return 0
+        return os.fstat(1)
+H031GuardedMethodLocal().probe()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+h031_lambda_shadow = (lambda os: os and os.fstat(1))(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+h031_comprehension_values = [os for os in (H031LocalOS(),)]
+h031_comprehension_values[0].fstat(1)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_identity(value):
+    return value
+def h031_identity_relay(os):
+    return h031_identity(os).fstat(1)
+h031_identity_relay(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_alias_container(os):
+    alias = os
+    values = [os]
+    return alias.fstat(1) + values[0].fstat(1)
+h031_alias_container(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_local_callback_controls(os):
+    values = [1]
+    values.sort(key=os.fstat)
+    return next(map(os.fstat, values))
+h031_local_callback_controls(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, argv):
+        return argv
+def h031_local_subprocess(subprocess):
+    if not subprocess:
+        return []
+    alias = subprocess
+    return alias.Popen(["ordinary"])
+h031_local_subprocess(H031LocalSubprocess())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def system(self, command):
+        return command
+def h031_local_os_process_shape(os):
+    if not os:
+        return ""
+    return os.system("ordinary")
+h031_local_os_process_shape(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalAsyncio:
+    def create_subprocess_exec(self, argv):
+        return argv
+def h031_local_asyncio(asyncio):
+    if not asyncio:
+        return None
+    return asyncio.create_subprocess_exec("ordinary")
+h031_local_asyncio(H031LocalAsyncio())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalPty:
+    def spawn(self, argv):
+        return argv
+def h031_local_pty(pty):
+    if not pty:
+        return None
+    return pty.spawn(["ordinary"])
+h031_local_pty(H031LocalPty())
+""".strip()),
+    ]
     class_body_ambiguity_mutants = [
         inject_run_codex_prefix(source_text, """
 class H031BadClassOrder:
@@ -1329,6 +1455,24 @@ class os:
     pass
 """.strip()),
     ]
+    process_module_identity_mutants = [
+        inject_run_codex_prefix(source_text, "h031_bad_os_alias = os"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_subprocess_alias = subprocess"),
+        inject_run_codex_prefix(source_text, "h031_bad_os_box = [os]"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_subprocess_box = [subprocess]"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_process_reference = subprocess.Popen"),
+        inject_run_codex_prefix(source_text,
+                                "h031_bad_os_process_reference = os.system"),
+        inject_run_codex_prefix(source_text, """
+global subprocess
+subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, "import subprocess as h031_subprocess"),
+        inject_run_codex_prefix(source_text, "import os as h031_os"),
+    ]
     profile_visibility_mutants = [
         source_text + "\n\nh031_profile_visible = sys.getprofile()\n",
         source_text + "\n\ndef h031_profile_default(probe=sys.getprofile):\n    return probe\n",
@@ -1342,6 +1486,11 @@ class os:
     class_scope_shapes = [process_shape(candidate) for candidate in class_scope_positives]
     class_scope_source_ok = all(
         item.get("boundary_ok") is True for item in class_scope_shapes)
+    ordinary_process_shadow_shapes = [
+        process_shape(candidate) for candidate in ordinary_process_shadow_positives]
+    ordinary_process_shadow_source_ok = all(
+        item.get("boundary_ok") is True
+        for item in ordinary_process_shadow_shapes)
     class_body_ambiguity_rejected = all(
         process_shape(candidate).get("boundary_ok") is False
         and "class-body-os-ambiguous"
@@ -1357,6 +1506,16 @@ class os:
         and any(reason in str(process_shape(candidate).get("detail"))
                 for reason in ("exact-os-import-binding", "ambiguous-os-binding"))
         for candidate in os_binding_mutants)
+    process_module_identity_rejected = all(
+        process_shape(candidate).get("boundary_ok") is False
+        and any(reason in str(process_shape(candidate).get("detail"))
+                for reason in (
+                    "module-assignment", "bare-process-module",
+                    "process-reference", "exact-subprocess-import-binding",
+                    "ambiguous-subprocess-binding", "import-alias",
+                    "import-inventory",
+                ))
+        for candidate in process_module_identity_mutants)
     profile_invisible_to_admitted_source = all(
         process_shape(candidate).get("boundary_ok") is False
         for candidate in profile_visibility_mutants)
@@ -1367,25 +1526,33 @@ class os:
     check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"])
           and direct_fstat_source_ok and shadowed_os_source_ok
           and class_scope_source_ok and class_body_ambiguity_rejected
+          and ordinary_process_shadow_source_ok
           and protected_fstat_transfers_rejected
           and imported_os_rebinding_rejected
+          and process_module_identity_rejected
           and profile_invisible_to_admitted_source,
           f"{shape['detail']} direct_fstat_source={direct_fstat_source_ok} "
           f"shadowed_os_source={shadowed_os_source_ok} "
           f"shadowed_os_shapes={[item.get('detail') for item in shadowed_os_shapes]} "
           f"class_scope_source={class_scope_source_ok} "
           f"class_scope_shapes={[item.get('detail') for item in class_scope_shapes]} "
+          f"ordinary_process_shadow_source={ordinary_process_shadow_source_ok} "
+          f"ordinary_process_shadow_shapes="
+          f"{[item.get('detail') for item in ordinary_process_shadow_shapes]} "
           f"class_body_ambiguity_rejected={class_body_ambiguity_rejected} "
           f"protected_fstat_transfers_rejected={protected_fstat_transfers_rejected} "
           f"imported_os_rebinding_rejected={imported_os_rebinding_rejected} "
+          f"process_module_identity_rejected={process_module_identity_rejected} "
           f"profile_visibility_rejected={profile_invisible_to_admitted_source}")
     check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
     if (not h031_static or not h032_static or not required_api_ok
             or not shape["boundary_ok"] or not direct_fstat_source_ok
             or not shadowed_os_source_ok
             or not class_scope_source_ok or not class_body_ambiguity_rejected
+            or not ordinary_process_shadow_source_ok
             or not protected_fstat_transfers_rejected
             or not imported_os_rebinding_rejected
+            or not process_module_identity_rejected
             or not profile_invisible_to_admitted_source or not shape["observer_ok"]):
         raise ProductFailure("static contract rejected before upstream or subject import")
 

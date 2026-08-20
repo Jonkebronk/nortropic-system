@@ -1541,3 +1541,28 @@ local and comprehension shadows pass alongside all six R63 shadow positives; eve
 R62 protected-callable transfer negative remains rejected. H032 stays byte-identical,
 no R61 graph or generic dataflow/control-flow interpreter returns, and production,
 provider authority, G20, H017 and live execution remain untouched.
+
+### 2026-08-20 — H032/H031 R65 lexical process-module identity
+
+R64 fixed lexical authority for the protected `os.fstat` rule, but several older
+process guards still granted authority by spelling. A local `os` used in a truth
+guard or passed through a helper/container was therefore reported as a bare process
+module; assigning that ordinary object to a local alias was reported as module
+capture. Equivalent false positives existed for the other PROCESS_ATTRS spellings.
+
+R65 reuses one existing resolver predicate throughout those legacy checks. A Name is
+a process module only when it resolves exactly to its unaliased imported module
+binding. Module assignment, bare-module, process dictionary/reference, dynamic
+access, call keyword/arity, process-site enumeration and resulting effect counts all
+share that decision. Exact module-level `os` and `subprocess` singleton imports remain
+mandatory; aliases, rebindings and imported-module ambiguity reject fail closed.
+R64's direct class-body `os` ambiguity is unchanged and runs before this distinction.
+
+Connected full-`run_codex` positives cover guarded method parameter/local values,
+lambda and comprehension use, an identity relay, alias/container use, local
+`list.sort`/`map`, and module-shaped ordinary `os`, `subprocess`, `asyncio` and `pty`
+objects. Separate connected negatives retain imported module assignment/containers,
+bare modules, aliases, rebinding and process references, alongside every prior
+protected-fstat transfer and process-site mutant. This is local resolver reuse—not a
+provenance graph or control-flow interpreter. H032, production, provider authority,
+G20, H017 and live execution remain untouched.
