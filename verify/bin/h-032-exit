@@ -1171,56 +1171,199 @@ if mode == 'output_then_fail': sys.exit(17)
                 "invalid_uses":tuple(types_invalid),"verified":types_ok}
             r44d_components["types"]=types_ok
 
-            # Allocation tokens are per syntactic dynamic call context.  A call
-            # beneath repetition/recursion is widened to MAY_ALIAS instead of
-            # being treated as one definitely shared object.
+            # Semantic allocation graph: constructor helpers are discovered from
+            # their returned effect, never from fixture/helper/local spelling.
             r44d_trace["allocation"]+=1
-            probe_nodes=[node for node in candidate_tree.body if isinstance(node,ast.FunctionDef)
-                         and node.name=="_r45_allocation_probe"]
-            make_nodes=[node for node in candidate_tree.body if isinstance(node,ast.FunctionDef)
-                        and node.name=="_r45_make"]
-            allocation_tokens=[];summaries=[];alias_pair=False;distinct_pair=False
-            if len(probe_nodes)==len(make_nodes)==1:
-                probe=probe_nodes[0];assignments={}
-                for node in runtime_walk_function(probe):
-                    if isinstance(node,ast.Assign) and len(node.targets)==1 \
-                            and isinstance(node.targets[0],ast.Name):
-                        name=node.targets[0].id
-                        if isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Name) \
-                                and node.value.func.id=="_r45_make":
-                            ancestor=parent_map.get(node);repeated=False
-                            while ancestor is not None and ancestor is not probe:
-                                if isinstance(ancestor,(ast.For,ast.AsyncFor,ast.While,ast.comprehension)):
-                                    repeated=True;break
-                                ancestor=parent_map.get(ancestor)
-                            token=("MAY_ALIAS" if repeated else
-                                f"ALLOC:{getattr(node.value,'lineno',-1)}:{getattr(node.value,'col_offset',-1)}")
-                            assignments[name]=token;allocation_tokens.append(token)
-                            if repeated: summaries.append((name,"MAY_PRESENT","MAY_ABSENT"))
-                        elif isinstance(node.value,ast.Name):
-                            assignments[name]=assignments.get(node.value.id,"UNKNOWN")
-                alias_pair=(assignments.get("shared","UNKNOWN")!="UNKNOWN"
-                            and assignments.get("shared")==assignments.get("alias"))
-                distinct_pair=(assignments.get("first","UNKNOWN")!="UNKNOWN"
-                    and assignments.get("second","UNKNOWN")!="UNKNOWN"
-                    and assignments.get("first")!=assignments.get("second"))
-            recursive_nodes=[node for node in candidate_tree.body
-                if isinstance(node,ast.FunctionDef) and node.name=="_r45_recursive"]
-            recursion_widened=(len(recursive_nodes)==1
-                and any(isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
-                        and call.func.id=="_r45_recursive"
-                        for call in ast.walk(recursive_nodes[0]))
-                and any(isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
-                        and call.func.id=="_r45_make"
-                        for call in ast.walk(recursive_nodes[0])))
-            if recursion_widened:
-                summaries.append(("recursive","MAY_PRESENT","MAY_ABSENT"))
-            allocation_ok=(alias_pair and distinct_pair and bool(summaries)
-                           and any(token=="MAY_ALIAS" for token in allocation_tokens)
-                           and recursion_widened)
-            r45_facts["allocation"]={"tokens":tuple(allocation_tokens),
-                "stable_alias":alias_pair,"distinct_sequential":distinct_pair,
-                "repetition_summaries":tuple(summaries),
+            functions={node.name:node for node in candidate_tree.body
+                       if isinstance(node,ast.FunctionDef)}
+            def direct_namespace(call):
+                return (isinstance(call,ast.Call) and isinstance(call.func,ast.Attribute)
+                    and isinstance(call.func.value,ast.Name) and call.func.value.id=="types"
+                    and call.func.attr=="SimpleNamespace")
+            constructors={name for name,fn in functions.items()
+                if any(isinstance(node,ast.Return) and direct_namespace(node.value)
+                       for node in ast.walk(fn))}
+            def allocation_call(node):
+                return (direct_namespace(node) or (isinstance(node,ast.Call)
+                    and isinstance(node.func,ast.Name) and node.func.id in constructors))
+            def under_repetition(node,root):
+                ancestor=parent_map.get(node)
+                while ancestor is not None and ancestor is not root:
+                    if isinstance(ancestor,(ast.For,ast.AsyncFor,ast.While,
+                                            ast.ListComp,ast.SetComp,ast.DictComp,
+                                            ast.GeneratorExp,ast.comprehension)):
+                        return True
+                    ancestor=parent_map.get(ancestor)
+                return False
+            def statically_unreachable(node,root):
+                ancestor=parent_map.get(node)
+                while ancestor is not None and ancestor is not root:
+                    if isinstance(ancestor,(ast.ListComp,ast.SetComp,ast.DictComp,
+                                            ast.GeneratorExp)) and any(
+                            isinstance(condition,ast.Constant) and condition.value is False
+                            for generator in ancestor.generators for condition in generator.ifs):
+                        return True
+                    if isinstance(ancestor,(ast.ListComp,ast.SetComp,ast.DictComp,
+                                            ast.GeneratorExp)) and any(
+                            isinstance(generator.iter,(ast.Tuple,ast.List,ast.Set))
+                            and not generator.iter.elts for generator in ancestor.generators):
+                        return True
+                    if isinstance(ancestor,ast.comprehension) and any(
+                            isinstance(condition,ast.Constant) and condition.value is False
+                            for condition in ancestor.ifs): return True
+                    if isinstance(ancestor,ast.If) and isinstance(ancestor.test,ast.Constant) \
+                            and ancestor.test.value is False and node in set(ast.walk(ancestor)):
+                        return True
+                    ancestor=parent_map.get(ancestor)
+                return False
+            semantic_candidates=[]
+            for fn in functions.values():
+                calls=[node for node in ast.walk(fn) if allocation_call(node)
+                       and not statically_unreachable(node,fn)]
+                comprehensions=[node for node in ast.walk(fn)
+                    if isinstance(node,(ast.ListComp,ast.SetComp,ast.DictComp,ast.GeneratorExp))
+                    and any(allocation_call(part) for part in ast.walk(node))]
+                if len(calls)>=3 and comprehensions:
+                    semantic_candidates.append(fn)
+            allocation_tokens=[];summary_states=[];alias_relations=[];distinct_relations=[]
+            comprehension_steps=[];may_handler_routes=[];recursion_widened=False
+            allocation_ordinal=0
+            def is_object(value): return isinstance(value,tuple) and value[:1]==("OBJECT",)
+            def is_summary(value): return isinstance(value,tuple) and value[:1]==("SUMMARY",)
+            def is_collection(value): return isinstance(value,tuple) and value[:1]==("COLLECTION",)
+            unknown_value=("UNKNOWN",)
+            def make_allocation(call,repeated):
+                nonlocal allocation_ordinal
+                allocation_ordinal+=1
+                token=(("SUMMARY","MAY_ALIAS",getattr(call,"lineno",-1),
+                        getattr(call,"col_offset",-1)) if repeated else
+                       ("OBJECT",getattr(call,"lineno",-1),
+                        getattr(call,"col_offset",-1),allocation_ordinal))
+                allocation_tokens.append(token)
+                if repeated: summary_states.append(("MAY_PRESENT","MAY_ABSENT"))
+                return frozenset({token})
+            def bind_allocation_target(target,values,env):
+                if isinstance(target,ast.Name): env[target.id]=values;return True
+                if isinstance(target,(ast.Tuple,ast.List)):
+                    parts=next((value[1] for value in values if is_collection(value)),())
+                    if len(parts)!=len(target.elts): return False
+                    return all(bind_allocation_target(item,frozenset({parts[index]}),env)
+                               for index,item in enumerate(target.elts))
+                return False
+            def allocation_expr(node,env,repeated=False):
+                if allocation_call(node): return make_allocation(node,repeated)
+                if isinstance(node,ast.Name): return env.get(node.id,frozenset({unknown_value}))
+                if isinstance(node,ast.Constant): return frozenset({("CONST",node.value)})
+                if isinstance(node,(ast.Tuple,ast.List,ast.Set)):
+                    parts=[]
+                    for item in node.elts: parts.extend(allocation_expr(item,env,repeated))
+                    return frozenset({("COLLECTION",tuple(parts))})
+                if isinstance(node,(ast.ListComp,ast.SetComp,ast.GeneratorExp,ast.DictComp)):
+                    local=dict(env);possible=True;steps=[]
+                    for generator in node.generators:
+                        iter_values=allocation_expr(generator.iter,local,repeated)
+                        literal_empty=(isinstance(generator.iter,(ast.Tuple,ast.List,ast.Set))
+                                       and not generator.iter.elts)
+                        target_bound=bind_allocation_target(
+                            generator.target,frozenset({unknown_value}),local)
+                        filter_values=[]
+                        for condition in generator.ifs:
+                            allocation_expr(condition,local,repeated)
+                            truth=(condition.value if isinstance(condition,ast.Constant)
+                                   and isinstance(condition.value,bool) else None)
+                            filter_values.append(truth)
+                            if truth is False: possible=False
+                        if literal_empty: possible=False
+                        steps.append((type(generator.target).__name__,
+                            tuple(sorted(map(repr,iter_values))),tuple(filter_values),target_bound))
+                    produced=frozenset()
+                    if possible:
+                        if isinstance(node,ast.DictComp):
+                            produced=allocation_expr(node.key,local,True) \
+                                | allocation_expr(node.value,local,True)
+                        else: produced=allocation_expr(node.elt,local,True)
+                    comprehension_steps.append((tuple(steps),possible,
+                        tuple(sorted(map(repr,produced)))))
+                    return frozenset({("COLLECTION",tuple(produced))})
+                if isinstance(node,ast.Subscript):
+                    base=allocation_expr(node.value,env,repeated);items=[]
+                    for value in base:
+                        if is_collection(value): items.extend(value[1])
+                    return frozenset(items or {unknown_value})
+                if isinstance(node,ast.Attribute):
+                    base=allocation_expr(node.value,env,repeated)
+                    return (frozenset({("MAY_ATTRIBUTE",node.attr)})
+                            if any(is_summary(value) for value in base)
+                            else frozenset({unknown_value}))
+                return frozenset({unknown_value})
+            def allocation_statements(statements,env):
+                for statement in statements:
+                    if isinstance(statement,ast.Assign):
+                        values=allocation_expr(statement.value,env)
+                        for target in statement.targets:
+                            before=set().union(*(set(value) for value in env.values())) if env else set()
+                            if isinstance(target,ast.Name) and isinstance(statement.value,ast.Name) \
+                                    and any(is_object(value) for value in values & before):
+                                alias_relations.extend(value for value in values if is_object(value))
+                            bind_allocation_target(target,values,env)
+                    elif isinstance(statement,ast.Try):
+                        possible_missing=False
+                        for body_statement in statement.body:
+                            if isinstance(body_statement,ast.Expr) \
+                                    and isinstance(body_statement.value,ast.Attribute):
+                                values=allocation_expr(body_statement.value.value,env)
+                                possible_missing=any(is_summary(value) for value in values)
+                            else: allocation_statements([body_statement],env)
+                        if possible_missing:
+                            for handler in statement.handlers:
+                                handles_attribute=(isinstance(handler.type,ast.Name)
+                                                   and handler.type.id=="AttributeError")
+                                effect=any(isinstance(call,ast.Call)
+                                    and isinstance(call.func,ast.Attribute)
+                                    and isinstance(call.func.value,ast.Name)
+                                    and (call.func.value.id,call.func.attr)==("subprocess","Popen")
+                                    for call in ast.walk(handler))
+                                if handles_attribute: may_handler_routes.append((True,effect))
+                    elif isinstance(statement,ast.Expr): allocation_expr(statement.value,env)
+            for fn in semantic_candidates:
+                env={arg.arg:frozenset({unknown_value}) for arg in fn.args.args}
+                allocation_statements(fn.body,env)
+                concrete=sorted({value for values in env.values() for value in values
+                                 if is_object(value)},key=repr)
+                distinct_relations.extend((left,right) for index,left in enumerate(concrete)
+                                          for right in concrete[index+1:])
+            for name,fn in functions.items():
+                self_calls=[node for node in ast.walk(fn) if isinstance(node,ast.Call)
+                            and isinstance(node.func,ast.Name) and node.func.id==name
+                            and not statically_unreachable(node,fn)]
+                alloc_statements=[statement for statement in fn.body
+                    if any(allocation_call(node) for node in ast.walk(statement))]
+                recursive_statements=[statement for statement in fn.body
+                    if any(node in self_calls for node in ast.walk(statement))]
+                if self_calls and alloc_statements and recursive_statements:
+                    alloc_index=min(fn.body.index(statement) for statement in alloc_statements)
+                    recurse_index=min(fn.body.index(statement) for statement in recursive_statements)
+                    if alloc_index<=recurse_index:
+                        # Two bounded frames prove allocation is per invocation;
+                        # deeper executions widen to a summary object.
+                        frame_refs=(('FRAME',getattr(fn,'lineno',-1),0),
+                                    ('FRAME',getattr(fn,'lineno',-1),1),
+                                    ('SUMMARY','RECURSIVE',getattr(fn,'lineno',-1),2))
+                        allocation_tokens.extend(frame_refs);recursion_widened=True
+                        summary_states.append(("MAY_PRESENT","MAY_ABSENT"))
+            alias_pair=bool(alias_relations)
+            distinct_pair=bool(distinct_relations)
+            may_propagated=bool(may_handler_routes) and all(route[0] for route in may_handler_routes)
+            unsafe_effect=any(effect for _reachable,effect in may_handler_routes)
+            allocation_ok=(bool(semantic_candidates) and alias_pair and distinct_pair
+                and bool(summary_states) and recursion_widened and may_propagated
+                and bool(comprehension_steps) and not unsafe_effect)
+            r45_facts["allocation"]={"object_ids":tuple(sorted(set(allocation_tokens))),
+                "alias_relations":len(alias_relations),
+                "distinct_relations":len(distinct_relations),
+                "summary_states":tuple(summary_states),
+                "comprehension_steps":tuple(comprehension_steps),
+                "handler_routes":tuple(may_handler_routes),
                 "recursion_widened":recursion_widened,"verified":allocation_ok}
             r44d_components["allocation"]=allocation_ok
             helper_direct=all(isinstance(parent_map.get(item),ast.Call)
@@ -1948,17 +2091,22 @@ def _r44e_identity(value):
 def _r45_make():
     return types.SimpleNamespace()
 def _r45_recursive(n):
+    frame_object = _r45_make()
     if n:
-        return _r45_recursive(n - 1)
-    return _r45_make()
+        return frame_object, _r45_recursive(n - 1)
+    return frame_object
 def _r45_allocation_probe(repo):
     shared = _r45_make()
     alias = shared
     alias.value = 1
     first = _r45_make()
     second = _r45_make()
-    for item in repo:
-        repeated = _r45_make()
+    repeated = [_r45_make() for item in repo]
+    candidate = repeated[0]
+    try:
+        candidate.value
+    except AttributeError:
+        pass
     return shared, alias, first, second, repeated
 def _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
     raw = os.read(sink_fd, 1)
@@ -2037,8 +2185,7 @@ def run_codex(repo, role):
         assignment=next(node for node in probe.body if isinstance(node,ast.Assign)
                         and isinstance(node.targets[0],ast.Name)
                         and node.targets[0].id=="alias")
-        assignment.value=ast.Call(func=ast.Name(id="_r45_make",ctx=ast.Load()),
-                                  args=[],keywords=[])
+        assignment.value=ast.Constant(value=None)
     def r45_other_types_api(tree):
         consumer=r44e_consumer(tree)
         consumer.body.insert(0,ast.Expr(value=ast.Call(func=ast.Attribute(
@@ -2051,13 +2198,42 @@ def run_codex(repo, role):
     def r45_remove_repetition(tree):
         probe=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
                    and node.name=="_r45_allocation_probe")
-        loop=next(node for node in probe.body if isinstance(node,ast.For))
-        loop.body=[ast.Pass()]
+        comprehension=next(node for node in ast.walk(probe) if isinstance(node,ast.ListComp))
+        comprehension.generators[0].iter=ast.Tuple(elts=[],ctx=ast.Load())
     def r45_remove_recursion(tree):
         recursive=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
                        and node.name=="_r45_recursive")
-        recursive.body=[ast.Return(value=ast.Call(func=ast.Name(id="_r45_make",ctx=ast.Load()),
-                                                  args=[],keywords=[]))]
+        recursive_if=next(node for node in recursive.body if isinstance(node,ast.If))
+        recursive_if.test=ast.Constant(value=False)
+    class r46_alpha_rename(ast.NodeTransformer):
+        mapping={"_r45_make":"factory_q","_r45_recursive":"recur_q",
+                 "_r45_allocation_probe":"probe_q","shared":"object_q",
+                 "alias":"reference_q","first":"left_q","second":"right_q",
+                 "repeated":"collection_q","candidate":"member_q",
+                 "frame_object":"frame_q","item":"element_q"}
+        active=False
+        def visit_Name(self,node):
+            if self.active and node.id in self.mapping: node.id=self.mapping[node.id]
+            return node
+        def visit_arg(self,node):
+            if self.active and node.arg in self.mapping: node.arg=self.mapping[node.arg]
+            return node
+        def visit_FunctionDef(self,node):
+            was=self.active
+            if node.name in self.mapping:
+                self.active=True;node.name=self.mapping[node.name]
+            result=self.generic_visit(node);self.active=was
+            return result
+    def r46_alpha_tree(tree):
+        return r46_alpha_rename().visit(tree)
+    def r46_causal_effect(tree):
+        probe=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                   and node.name=="_r45_allocation_probe")
+        handler=next(node for node in ast.walk(probe) if isinstance(node,ast.ExceptHandler))
+        handler.body=[ast.Expr(value=ast.Call(func=ast.Attribute(
+            value=ast.Name(id="subprocess",ctx=ast.Load()),attr="Popen",ctx=ast.Load()),
+            args=[ast.List(elts=[ast.Constant(value="/usr/bin/true")],ctx=ast.Load())],
+            keywords=[]))]
     heap_result=r44e_mutate(r44e_remove_checked_store)
     try_result=r44e_mutate(r44e_bypass_raise)
     helper_result=r44e_mutate(r44e_break_helper_return)
@@ -2079,14 +2255,25 @@ def run_codex(repo, role):
     r45_extra_ok=all(result["components"][target] is False
         and all(result["components"][key]==r44c_base["components"][key]
                 for key in required_r44c_markers-{target})
-        and result["trace"]==r44c_base["trace"]
+        and (result["trace"]==r44c_base["trace"] if target=="types"
+             else result["trace"]["allocation"]==r44c_base["trace"]["allocation"])
         for target,result in r45_extra_mutants)
+    alpha_result=r44e_mutate(r46_alpha_tree)
+    alpha_ok=(alpha_result["components"]==r44c_base["components"]
+        and alpha_result["facts"]["allocation"]==r44c_base["facts"]["allocation"]
+        and alpha_result["trace"]==r44c_base["trace"])
+    causal_result=r44e_mutate(r46_causal_effect)
+    causal_ok=(causal_result["components"]["allocation"] is False
+        and any(effect for _reachable,effect
+                in causal_result["facts"]["allocation"]["handler_routes"])
+        and causal_result["verdict"] is False)
     r44c_trystar_ok=True
     if isinstance(AST_TRY_STAR,type):
         r44c_star=analyze_candidate_tree(ast.parse("try:\n    pass\nexcept* Exception:\n    pass\n"))
         r44c_trystar_ok=(r44c_star["verdict"] is False and r44c_star["unsupported"]==("TryStar",))
     r44b_totality_ok=(r44c_deep_ok and r44c_mutants_ok and r44c_trystar_ok
-                      and r44e_postconditions_ok and r45_extra_ok)
+                      and r44e_postconditions_ok and r45_extra_ok
+                      and alpha_ok and causal_ok)
     candidate_analysis = analyze_candidate_tree(candidate_tree)
     consumer_architecture_ok = candidate_analysis["verdict"]
     exact_consumer_args = candidate_analysis["exact_consumer_args"]
@@ -3606,7 +3793,12 @@ def run_codex(repo, role):
           f"base_facts={r44c_base['facts']} mutant_components="
           f"{ {key:value['components'] for key,value in r44e_results.items()} } "
           f"deep={r44c_deep_ok} basic_mutants={r44c_mutants_ok} "
-          f"postconditions={r44e_postconditions_ok} trystar={r44c_trystar_ok}")
+          f"postconditions={r44e_postconditions_ok} extra={r45_extra_ok} "
+          f"post_detail={[(target,result['components'][target],result['trace']==r44c_base['trace']) for target,result in r44e_results.items()]} "
+          f"extra_detail={[(target,result['components'][target],result['trace']==r44c_base['trace']) for target,result in r45_extra_mutants]} "
+          f"alpha={alpha_ok,alpha_result['components'],alpha_result['facts']['allocation']} "
+          f"causal={causal_ok,causal_result['components'],causal_result['facts']['allocation']} "
+          f"trystar={r44c_trystar_ok}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
