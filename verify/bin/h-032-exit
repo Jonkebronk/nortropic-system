@@ -507,22 +507,47 @@ if mode == 'output_then_fail': sys.exit(17)
         export_ok=(len(exports)==1 and isinstance(exports[0].value,(ast.List,ast.Tuple))
                    and [item.value for item in exports[0].value.elts
                         if isinstance(item,ast.Constant)]==["consume_private_result"])
-        allowed_modules={"hashlib","json","os","stat","tempfile","pathlib","typing"}
-        imports=[];imports_ok=True
-        for node in tree.body:
+        allowed_modules={"hashlib","json","os","stat","tempfile","pathlib","typing","fcntl"}
+        allowed_from={
+            "pathlib":{"Path"},
+            "typing":{"Any"},
+            "fcntl":{"F_GETFD","F_GETFL","F_SETFD","FD_CLOEXEC"},
+        }
+        forbidden_module_roots={"subprocess","socket","urllib","http","importlib","requests",
+                                "git","ctypes","multiprocessing","asyncio"}
+        imports=[];imports_ok=True;module_aliases={};capability_aliases={}
+        for node in ast.walk(tree):
             if isinstance(node,ast.Import):
-                imports.extend(alias.name for alias in node.names)
-                imports_ok &= all(alias.name in allowed_modules and alias.asname is None
-                                  for alias in node.names)
+                for alias in node.names:
+                    imports.append((alias.name,alias.asname))
+                    root=alias.name.split(".",1)[0]
+                    bound=alias.asname or root
+                    module_aliases[bound]=alias.name
+                    imports_ok &= (alias.name in allowed_modules
+                                   and root not in forbidden_module_roots)
             elif isinstance(node,ast.ImportFrom):
-                imports.append(node.module or "")
-                imports_ok &= (node.level==0 and node.module in {"pathlib","typing"}
-                               and all(alias.asname is None for alias in node.names))
+                imports.append((node.module or "",tuple((a.name,a.asname) for a in node.names)))
+                imports_ok &= (node.level==0 and node.module in allowed_from
+                               and all(alias.name in allowed_from.get(node.module,set())
+                                       and alias.name!="*" for alias in node.names))
+                for alias in node.names:
+                    capability_aliases[alias.asname or alias.name]=f"{node.module}.{alias.name}"
         forbidden_names={"eval","exec","compile","__import__","globals","locals","vars",
                          "getattr","setattr","delattr","subprocess","socket","urllib","http",
-                         "importlib","requests","git"}
+                         "importlib","requests","git","__builtins__"}
         forbidden_attrs={"environ","getenv","system","popen","fork","forkpty","posix_spawn",
-                         "execv","execve","spawnv","spawnve","__dict__","__globals__"}
+                         "execv","execve","spawnv","spawnve","__dict__","__globals__",
+                         "__getattribute__","__subclasses__","__mro__","listdir","scandir"}
+        forbidden_alias_use=any(isinstance(node,ast.Name)
+            and isinstance(node.ctx,ast.Load)
+            and (module_aliases.get(node.id,"").split(".",1)[0] in forbidden_module_roots
+                 or capability_aliases.get(node.id,"").split(".",1)[0] in forbidden_module_roots)
+            for node in ast.walk(tree))
+        forbidden_literals=any(isinstance(node,ast.Constant) and isinstance(node.value,str)
+            and any(token in node.value.casefold() for token in (
+                "codex-provider-identity","/config/","\\config\\","provider-identity",
+                "executable_sha256","code_mode_host_path"))
+            for node in ast.walk(tree))
         forbidden_use=any(
             (isinstance(node,ast.Name) and node.id in forbidden_names)
             or (isinstance(node,ast.Attribute) and node.attr in forbidden_attrs)
@@ -561,11 +586,61 @@ if mode == 'output_then_fail': sys.exit(17)
         attribute_write=any(isinstance(node,ast.Attribute)
             and isinstance(node.ctx,(ast.Store,ast.Del)) for node in ast.walk(tree))
         return (consumer_ok and export_ok and imports_ok and module_shape and max_ok
-                and not forbidden_use and not hidden_identity and not attribute_write), {
+                and not forbidden_use and not forbidden_alias_use and not forbidden_literals
+                and not hidden_identity and not attribute_write), {
             "consumer":consumer_ok,"export":export_ok,"imports":tuple(imports),
             "imports_ok":imports_ok,"module_shape":module_shape,"max":max_ok,
-            "forbidden":forbidden_use,"hidden_identity":hidden_identity,
+            "forbidden":forbidden_use,"forbidden_alias":forbidden_alias_use,
+            "forbidden_literal":forbidden_literals,"hidden_identity":hidden_identity,
             "attribute_write":attribute_write}
+
+    def integration_structure_inventory(tree):
+        parents={child:parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        definitions={node.name:node for node in tree.body if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))}
+        run=definitions.get("run_codex")
+        imports=[node for node in ast.walk(tree) if isinstance(node,ast.ImportFrom)
+            and node.level==0 and node.module=="controller.result.consumer"
+            and len(node.names)==1 and node.names[0].name=="consume_private_result"
+            and node.names[0].asname is None]
+        reachable=set();pending=["run_codex"] if run is not None else []
+        while pending:
+            name=pending.pop()
+            if name in reachable or name not in definitions: continue
+            reachable.add(name)
+            for call in (n for n in ast.walk(definitions[name]) if isinstance(n,ast.Call)):
+                if isinstance(call.func,ast.Name) and call.func.id in definitions:
+                    pending.append(call.func.id)
+        calls=[]
+        for owner in reachable:
+            for call in ast.walk(definitions[owner]):
+                if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) \
+                        and call.func.id=="consume_private_result":
+                    calls.append((owner,call))
+        args_ok=(len(calls)==1 and len(calls[0][1].args)==5
+            and not calls[0][1].keywords
+            and all(isinstance(arg,ast.Name) for arg in calls[0][1].args)
+            and len({arg.id for arg in calls[0][1].args})==5)
+        result_connected=False
+        if len(calls)==1:
+            call=calls[0][1];parent=parents.get(call)
+            if isinstance(parent,ast.Return): result_connected=True
+            elif isinstance(parent,(ast.Assign,ast.AnnAssign)):
+                targets=(parent.targets if isinstance(parent,ast.Assign) else [parent.target])
+                names={target.id for target in targets if isinstance(target,ast.Name)}
+                owner_tree=definitions[calls[0][0]]
+                result_connected=bool(names and any(isinstance(node,ast.Name)
+                    and isinstance(node.ctx,ast.Load) and node.id in names
+                    for node in ast.walk(owner_tree)))
+        all_consumer_calls=[node for node in ast.walk(tree) if isinstance(node,ast.Call)
+            and isinstance(node.func,ast.Name) and node.func.id=="consume_private_result"]
+        local_shadow=any(isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))
+            and node.name=="consume_private_result" for node in tree.body)
+        ok=(len(imports)==1 and len(all_consumer_calls)==1 and len(calls)==1
+            and args_ok and result_connected and not local_shadow)
+        return ok,{"imports":len(imports),"reachable":tuple(sorted(reachable)),
+                   "call_owners":tuple(owner for owner,_ in calls),"args":args_ok,
+                   "result_connected":result_connected,"all_calls":len(all_consumer_calls),
+                   "local_shadow":local_shadow}
 
     # Unconditional rig-only structural sensitivity.  It proves only that the
     # narrow inventory itself rejects one-defect source shapes; it grants no
@@ -593,7 +668,24 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         ('return _bounded(sink_fd)','return os.getenv("H032_MODE")')):
         mutant=kernel_inventory_fixture.replace(needle,replacement,1)
         rig_inventory_mutants.append(kernel_structure_inventory(ast.parse(mutant),mutant)[0])
-    kernel_inventory_rig_ok=(rig_inventory_base[0] and not any(rig_inventory_mutants))
+    inventory_adversaries=(
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "import subprocess as sp\n    return sp.Popen(['/bin/true'])"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "import importlib as loader\n    return loader.import_module('subprocess').Popen(['/bin/true'])"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return os.__getattribute__('environ').get('X')"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return open('/tmp/config/codex-provider-identity.json').read()"),
+    )
+    inventory_adversary_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                                 for text in inventory_adversaries]
+    fcntl_positive=kernel_inventory_fixture.replace("import stat","import stat\nimport fcntl").replace(
+        "return _bounded(sink_fd)",
+        "flags=fcntl.fcntl(sink_fd,fcntl.F_GETFL)\n    fdflags=fcntl.fcntl(sink_fd,fcntl.F_GETFD)\n    return (_bounded(sink_fd),flags,fdflags)")
+    fcntl_inventory_ok=kernel_structure_inventory(ast.parse(fcntl_positive),fcntl_positive)[0]
+    kernel_inventory_rig_ok=(rig_inventory_base[0] and not any(rig_inventory_mutants)
+        and not any(inventory_adversary_results) and fcntl_inventory_ok)
 
     kernel_structure_ok=False;kernel_structure_detail={"absent":True}
     kernel_module=None
@@ -614,16 +706,23 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
             except Exception as exc:
                 kernel_structure_detail={"error":f"{type(exc).__name__}:{exc}"}
     source_tree=ast.parse(source.read_text(encoding="utf-8"))
-    kernel_imports=[node for node in ast.walk(source_tree) if isinstance(node,ast.ImportFrom)
-        and node.module in {"consumer","controller.result.consumer"}
-        and len(node.names)==1 and node.names[0].name=="consume_private_result"
-        and node.names[0].asname is None]
-    kernel_calls=[node for node in ast.walk(source_tree) if isinstance(node,ast.Call)
-        and isinstance(node.func,ast.Name) and node.func.id=="consume_private_result"]
-    kernel_integration_structure_ok=(len(kernel_imports)==1 and len(kernel_calls)==1
-        and len(kernel_calls[0].args)==5 and not kernel_calls[0].keywords
-        and not any(isinstance(node,ast.FunctionDef)
-                    and node.name=="consume_private_result" for node in source_tree.body))
+    kernel_integration_structure_ok,kernel_integration_structure_detail=(
+        integration_structure_inventory(source_tree))
+    integration_fixture='''from controller.result.consumer import consume_private_result
+def finish(sink, canonical, invocation, run, role):
+    accepted=consume_private_result(sink, canonical, invocation, run, role)
+    return accepted
+def run_codex(repo, role):
+    return finish(repo.sink, repo.canonical, repo.invocation, repo.run, role)
+'''
+    integration_positive=integration_structure_inventory(ast.parse(integration_fixture))[0]
+    integration_dead=integration_structure_inventory(ast.parse(integration_fixture.replace(
+        "return finish(repo.sink, repo.canonical, repo.invocation, repo.run, role)",
+        "return {'outcome':'READY'}")))[0]
+    integration_constants=integration_structure_inventory(ast.parse(integration_fixture.replace(
+        "consume_private_result(sink, canonical, invocation, run, role)",
+        "consume_private_result(1, 2, 3, 4, 5)")))[0]
+    integration_rig_ok=integration_positive and not integration_dead and not integration_constants
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -740,11 +839,12 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         subprocess.run([GIT, "--version"], env=dict(os.environ),
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         arena_before = {str(path.absolute()) for path in arena.rglob("*")}
-        observed: dict[str, object] = {"created": set(), "opened": [], "provider_outputs": []}
+        observed: dict[str, object] = {"created": set(), "opened": [], "provider_outputs": [],
+                                      "run_return": None}
         audit_active[0] = observed
         try:
             try:
-                module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
+                observed["run_return"] = module.run_codex(repo, repo, "TEST_AUTHOR", "H032")
                 outcome = (True, "ADMITTED")
             except Exception as exc:
                 outcome = (False, f"{type(exc).__name__}:{exc}")
@@ -773,12 +873,47 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
                          and not expected_journal_path(path))
         return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before), residue
 
+    integration_calls=[]
+    if kernel_structure_ok and kernel_integration_structure_ok \
+            and hasattr(module,"consume_private_result"):
+        actual_consumer=module.consume_private_result
+        def observed_consumer(sink_fd,canonical_destination,invocation_id,run_id,role):
+            opened=os.fstat(sink_fd);flags=fcntl.fcntl(sink_fd,fcntl.F_GETFL)
+            fdflags=fcntl.fcntl(sink_fd,fcntl.F_GETFD);capture_now=safe_capture()
+            record={"dev":opened.st_dev,"ino":opened.st_ino,"mode":opened.st_mode,
+                "access":flags&os.O_ACCMODE,"cloexec":bool(fdflags&fcntl.FD_CLOEXEC),
+                "canonical":str(canonical_destination),"invocation":invocation_id,
+                "run":run_id,"role":role,"capture":capture_now}
+            returned=actual_consumer(sink_fd,canonical_destination,invocation_id,run_id,role)
+            record["returned"]=returned;integration_calls.append(record);return returned
+        module.consume_private_result=observed_consumer
+
     valid_repo = make_repo(str(provider))
     valid = attempt(valid_repo)
     valid_observed = last_attempt_observed[0] or {"opened": []}
     family_absent = (not valid[0]
                      and "provider identity authority has unexpected keys" in valid[1])
     cap = safe_capture()
+    run_return=valid_observed.get("run_return")
+    integration_dynamic_ok=False
+    if len(integration_calls)==1:
+        call=integration_calls[0];call_cap=call.get("capture") or {};returned=call.get("returned")
+        output_path=Path(call_cap.get("output_path","/private/tmp/h032-missing-connected-output"))
+        canonical_path=Path(call_cap.get("canonical_result","/private/tmp/h032-missing-connected-canonical"))
+        integration_dynamic_ok=(valid[0] and call.get("access")==os.O_RDONLY
+            and call.get("cloexec") is True and stat.S_ISREG(call.get("mode",0))
+            and call.get("role")=="TEST_AUTHOR"
+            and isinstance(call.get("invocation"),str) and len(call["invocation"])==32
+            and isinstance(call.get("run"),str) and len(call["run"])==32
+            and all(char in "0123456789abcdef" for char in call["invocation"])
+            and all(char in "0123456789abcdef" for char in call["run"])
+            and call.get("invocation")!=call.get("run")
+            and call.get("canonical")==str(canonical_path)
+            and isinstance(returned,dict) and returned.get("role")=="TEST_AUTHOR"
+            and isinstance(returned.get("report"),dict)
+            and returned["report"].get("outcome")==getattr(run_return,"outcome",None)
+            and returned["report"].get("role")==getattr(run_return,"role",None)
+            and not output_path.exists() and canonical_path.is_file())
     argv0 = Path(cap.get("argv0", ""))
     host_snapshot = Path(cap.get("host_path", "/private/tmp/h032-missing-host-snapshot"))
     family_effect_ok = (
@@ -1617,6 +1752,404 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         and len(exact_sized_report(MAX_RESULT_BYTES))==MAX_RESULT_BYTES
         and len(exact_sized_report(MAX_RESULT_BYTES+1))==MAX_RESULT_BYTES+1)
 
+    # R48 connected effect harness.  Both the unconditional owner reference
+    # lane and the separate actual-product lane execute in a fresh interpreter.
+    # The subject sees no mode/environment fixture input: the runner owns the
+    # disposable filesystem and observes only capabilities, audit effects and
+    # postconditions around the public entrypoint.
+    schema_text=json.dumps(schema_document,ensure_ascii=False,separators=(",",":"),sort_keys=True)
+    reference_kernel_source='''import fcntl
+import hashlib
+import json
+import os
+import stat
+import tempfile
+MAX_RESULT_BYTES = 4194304
+SCHEMA_TEXT = %r
+__all__ = ["consume_private_result"]
+def _pairs(items):
+    out={}
+    for key,value in items:
+        if key in out: raise ValueError("duplicate JSON key")
+        out[key]=value
+    return out
+def _valid(value,schema):
+    if not isinstance(schema,dict): return False
+    if not set(schema)<=set(("$schema","type","properties","required","additionalProperties","items","enum")): return False
+    kinds=schema.get("type")
+    if kinds is not None:
+        kinds=[kinds] if isinstance(kinds,str) else kinds
+        match={"object":isinstance(value,dict),"array":isinstance(value,list),"string":isinstance(value,str),"integer":type(value) is int,"boolean":type(value) is bool,"null":value is None}
+        if not isinstance(kinds,list) or not kinds or any(kind not in match for kind in kinds) or not any(match[kind] for kind in kinds): return False
+    if "enum" in schema and value not in schema["enum"]: return False
+    if isinstance(value,dict):
+        props=schema.get("properties",{});required=schema.get("required",[])
+        if not isinstance(props,dict) or not isinstance(required,list) or not set(required)<=set(value): return False
+        if schema.get("additionalProperties") is False and not set(value)<=set(props): return False
+        if any(key in props and not _valid(child,props[key]) for key,child in value.items()): return False
+    if isinstance(value,list) and "items" in schema and any(not _valid(item,schema["items"]) for item in value): return False
+    return True
+def _write_all(fd,data):
+    view=memoryview(data)
+    while view:
+        count=os.write(fd,view)
+        if count<=0: raise OSError("short publication write")
+        view=view[count:]
+def _unlink_retry(path):
+    last=None
+    for unused in range(2):
+        try: os.unlink(path); return
+        except FileNotFoundError: return
+        except OSError as exc: last=exc
+    if last is not None: raise last
+def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
+    temp_name=None
+    try:
+        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE
+        fdflags=fcntl.fcntl(sink_fd,fcntl.F_GETFD)
+        before=os.fstat(sink_fd)
+        if access!=os.O_RDONLY or not (fdflags&fcntl.FD_CLOEXEC): raise ValueError("unsafe sink fd")
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1: raise ValueError("unsafe sink object")
+        if os.path.lexists(canonical_destination): raise FileExistsError("canonical preseed")
+        chunks=[];total=0;offset=0
+        while total<=MAX_RESULT_BYTES:
+            chunk=os.pread(sink_fd,min(65536,MAX_RESULT_BYTES+1-total),offset)
+            if not chunk: break
+            chunks.append(chunk);total+=len(chunk);offset+=len(chunk)
+        after=os.fstat(sink_fd)
+        fields=("st_dev","st_ino","st_mode","st_nlink","st_size","st_mtime_ns","st_ctime_ns")
+        if total>MAX_RESULT_BYTES or total!=before.st_size: raise ValueError("result bound/short read")
+        if any(getattr(before,key)!=getattr(after,key) for key in fields): raise ValueError("result changed")
+        raw=b"".join(chunks)
+        report=json.loads(raw.decode("utf-8","strict"),object_pairs_hook=_pairs)
+        schema=json.loads(SCHEMA_TEXT,object_pairs_hook=_pairs)
+        if not _valid(report,schema) or report.get("role")!=role: raise ValueError("schema/role")
+        lower=set("0123456789abcdef")
+        if not (isinstance(invocation_id,str) and len(invocation_id)==32 and set(invocation_id)<=lower): raise ValueError("invocation")
+        if not (isinstance(run_id,str) and len(run_id)==32 and set(run_id)<=lower and run_id!=invocation_id): raise ValueError("run")
+        envelope={"schema_version":1,"invocation_id":invocation_id,"run_id":run_id,"role":role,"result_sha256":hashlib.sha256(raw).hexdigest(),"report":report}
+        encoded=json.dumps(envelope,ensure_ascii=False,separators=(",",":"),sort_keys=True).encode("utf-8")
+        parent=os.fspath(os.path.dirname(os.fspath(canonical_destination)))
+        temp_fd,temp_name=tempfile.mkstemp(prefix=".result-",dir=parent)
+        try:
+            _write_all(temp_fd,encoded);os.fsync(temp_fd)
+        finally:
+            os.close(temp_fd);temp_fd=-1
+        os.replace(temp_name,canonical_destination);temp_name=None
+        return envelope
+    finally:
+        try: os.close(sink_fd)
+        finally:
+            if temp_name is not None: _unlink_retry(temp_name)
+''' % schema_text
+    reference_kernel=work/"r48-owner-reference-kernel.py"
+    reference_kernel.write_text(reference_kernel_source,encoding="utf-8")
+
+    effect_runner=work/"r48-kernel-effect-runner.py"
+    effect_runner.write_text(r'''import fcntl,hashlib,importlib.util,json,os,pathlib,socket,stat,sys,threading,time
+module_path,arena,raw_path,mode=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),sys.argv[4]
+staging=arena/"staging";canonical_parent=arena/"canonical";sink=staging/"sink";canonical=canonical_parent/"result.json"
+staging.mkdir(mode=0o700);canonical_parent.mkdir(mode=0o700)
+raw=raw_path.read_bytes();preseed_identity=None;socket_owner=None
+random_trap=arena/"random-authority-trap";random_trap.write_bytes(b"TRAP");trap_before=random_trap.read_bytes()
+if mode=="directory": sink.mkdir();sink_fd=os.open(sink,os.O_RDONLY|getattr(os,"O_CLOEXEC",0))
+elif mode=="fifo": os.mkfifo(sink,0o600);sink_fd=os.open(sink,os.O_RDWR|os.O_NONBLOCK|getattr(os,"O_CLOEXEC",0))
+elif mode=="socket":
+ socket_owner,peer=socket.socketpair();peer.close();sink_fd=socket_owner.detach()
+elif mode=="symlink":
+ target=staging/"target";target.write_bytes(raw);sink.symlink_to(target)
+ try: sink_fd=os.open(sink,os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0))
+ except OSError: sink_fd=-1
+else:
+ sink.write_bytes(raw)
+ if mode=="hardlink": os.link(sink,staging/"alias")
+ flags=(os.O_RDWR if mode=="writable" else os.O_RDONLY)|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)
+ sink_fd=os.open(sink,flags)
+if sink_fd>=0 and mode=="no_cloexec": fcntl.fcntl(sink_fd,fcntl.F_SETFD,fcntl.fcntl(sink_fd,fcntl.F_GETFD)&~fcntl.FD_CLOEXEC)
+if mode=="preseed":
+ canonical.write_bytes(b"preseed");st=canonical.stat();preseed_identity=(st.st_dev,st.st_ino,canonical.read_bytes().hex())
+spec=importlib.util.spec_from_file_location("r48_subject_kernel",module_path);mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+sink_identity=None
+if sink_fd>=0:
+ st=os.fstat(sink_fd);sink_identity=(st.st_dev,st.st_ino)
+accepted_digest=hashlib.sha256(raw).hexdigest()
+events=[];transitions=[];held=[];fsynced=set();call_active=[False];transition_done=[False]
+allowed_roots=(staging.resolve(),canonical_parent.resolve())
+def inside_allowed(value):
+ try:
+  if isinstance(value,int): return True
+  path=pathlib.Path(os.path.abspath(os.fspath(value)))
+  if not path.is_absolute(): return True
+  return any(path==root or root in path.parents for root in allowed_roots) or str(path).startswith("/dev/fd/")
+ except Exception: return False
+def fd_inventory(identity,writable=None):
+ found=[]
+ try: numbers=sorted(int(name) for name in os.listdir("/dev/fd") if name.isdigit())
+ except OSError: numbers=list(range(0,512))
+ for number in numbers:
+  try:
+   current=os.fstat(number)
+   if (current.st_dev,current.st_ino)!=identity: continue
+   access=fcntl.fcntl(number,fcntl.F_GETFL)&os.O_ACCMODE
+   if writable is None or ((access!=os.O_RDONLY)==writable): found.append((number,access))
+  except OSError: pass
+ return found
+original_fsync=os.fsync
+def observed_fsync(fd):
+ st=os.fstat(fd);fsynced.add((st.st_dev,st.st_ino));return original_fsync(fd)
+os.fsync=observed_fsync
+original_path_ops={name:getattr(os,name) for name in ("stat","lstat","access","readlink")}
+def observed_path_op(name):
+ def invoke(path,*args,**kwargs):
+  if call_active[0]: events.append((name,str(path),0,inside_allowed(path)))
+  return original_path_ops[name](path,*args,**kwargs)
+ return invoke
+for path_op in original_path_ops: setattr(os,path_op,observed_path_op(path_op))
+def audit(event,args):
+ if not call_active[0]: return
+ if event=="open" and args:
+  path=args[0];flags=args[2] if len(args)>2 and isinstance(args[2],int) else 0
+  events.append(("open",str(path),flags,inside_allowed(path)))
+  if transition_done[0] and pathlib.Path(str(path))==canonical and flags&(os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC): events.append(("post_write",str(path),flags,False))
+ elif event in {"os.remove","os.unlink"} and args:
+  events.append((event,str(args[0]),0,inside_allowed(args[0])))
+  if transition_done[0] and pathlib.Path(str(args[0]))==canonical: events.append(("post_remove",str(args[0]),0,False))
+ elif event=="os.rename" and len(args)>=2:
+  src,dst=pathlib.Path(str(args[0])),pathlib.Path(str(args[1]));events.append((event,str(src),str(dst),inside_allowed(src) and inside_allowed(dst)))
+  if dst==canonical:
+   absent=not canonical.exists();fd=os.open(src,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0));before=os.fstat(fd);data=b""
+   while len(data)<=5*1024*1024:
+    chunk=os.read(fd,min(65536,5*1024*1024+1-len(data)))
+    if not chunk: break
+    data+=chunk
+   after=os.fstat(fd);identity=(before.st_dev,before.st_ino);writers=fd_inventory(identity,True)
+   transitions.append({"absent":absent,"dev":before.st_dev,"ino":before.st_ino,"size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),"stable":(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns),"writers":writers,"fsynced":identity in fsynced})
+   held.append(fd);transition_done[0]=True
+  elif transition_done[0] and (src==canonical or dst==canonical): events.append(("post_rename",str(src),str(dst),False))
+sys.addaudithook(audit)
+visible=[];stop=threading.Event()
+def observe():
+ while not stop.is_set():
+  if canonical.exists():
+   try: visible.append(hashlib.sha256(canonical.read_bytes()).hexdigest())
+   except OSError: pass
+  time.sleep(.0005)
+observer=threading.Thread(target=observe,daemon=True);observer.start()
+mutator=None
+if mode=="mutation" and sink_fd>=0:
+ stop_mutation=threading.Event()
+ def mutate():
+  fd=os.open(sink,os.O_WRONLY|getattr(os,"O_NOFOLLOW",0));flip=False
+  try:
+   while not stop_mutation.is_set(): os.pwrite(fd,b"x" if flip else b"y",max(1,len(raw)//2));flip=not flip
+  finally: os.close(fd)
+ mutator=threading.Thread(target=mutate,daemon=True);mutator.start();time.sleep(.003)
+else: stop_mutation=None
+original_replace=mod.os.replace;original_unlink=mod.os.unlink;cleanup_failures=[0]
+if mode in {"cleanup_transient","cleanup_persistent"}:
+ def fail_replace(src,dst): raise OSError("injected publication failure")
+ def fail_unlink(path,*args,**kwargs):
+  if mode=="cleanup_persistent" or cleanup_failures[0]==0:
+   cleanup_failures[0]+=1;raise OSError("injected cleanup failure")
+  return original_unlink(path,*args,**kwargs)
+ mod.os.replace=fail_replace;mod.os.unlink=fail_unlink
+accepted=False;returned=None;error="NONE";call_active[0]=True
+second_rejected=None
+try:
+ if sink_fd<0: raise ValueError("nofollow sink open rejected")
+ invocation=("3"*32 if mode=="equal_binding" else "z"*32 if mode=="bad_invocation" else "1"*32)
+ run=("3"*32 if mode=="equal_binding" else "2"*32)
+ role=("BUILDER" if mode=="wrong_role" else "TEST_AUTHOR")
+ returned=mod.consume_private_result(sink_fd,canonical,invocation,run,role);accepted=True
+ if mode=="second":
+  try: mod.consume_private_result(sink_fd,canonical,invocation,run,role);second_rejected=False
+  except Exception: second_rejected=True
+except Exception as exc: error=type(exc).__name__+":"+str(exc)
+finally:
+ call_active[0]=False;mod.os.replace=original_replace;mod.os.unlink=original_unlink
+ for path_op,original_path_op in original_path_ops.items(): setattr(os,path_op,original_path_op)
+ if stop_mutation is not None: stop_mutation.set();mutator.join(timeout=1)
+ stop.set();observer.join(timeout=1)
+fd_aliases=fd_inventory(sink_identity) if sink_identity else []
+for number,unused in fd_aliases:
+ try: os.close(number)
+ except OSError: pass
+canonical_info=None
+if canonical.is_file() and not canonical.is_symlink():
+ fd=os.open(canonical,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0));before=os.fstat(fd);data=b""
+ while True:
+  chunk=os.read(fd,65536)
+  if not chunk: break
+  data+=chunk
+ after=os.fstat(fd);os.close(fd)
+ try:
+  doc=json.loads(data.decode("utf-8"),object_pairs_hook=lambda pairs: dict(pairs))
+  canonical_info={"dev":before.st_dev,"ino":before.st_ino,"size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),"stable":(before.st_dev,before.st_ino,before.st_size)==(after.st_dev,after.st_ino,after.st_size),"keys":sorted(doc),"schema_version_type":type(doc.get("schema_version")).__name__,"schema_version":doc.get("schema_version"),"invocation":doc.get("invocation_id"),"run":doc.get("run_id"),"role":doc.get("role"),"result_sha256":doc.get("result_sha256"),"report_role":doc.get("report",{}).get("role") if isinstance(doc.get("report"),dict) else None}
+ except Exception: canonical_info={"invalid":True,"digest":hashlib.sha256(data).hexdigest(),"dev":before.st_dev,"ino":before.st_ino}
+temps=[str(path) for path in canonical_parent.iterdir() if path.name!="result.json"]
+outside=[event for event in events if event[-1] is False and event[0] not in {"post_write","post_remove","post_rename"}]
+post_events=[event for event in events if event[0] in {"post_write","post_remove","post_rename"}]
+transition_ok=(len(transitions)==1 and canonical_info is not None and transitions[0]["absent"] and transitions[0]["stable"] and transitions[0]["fsynced"] and not transitions[0]["writers"] and (transitions[0]["dev"],transitions[0]["ino"],transitions[0]["digest"])==(canonical_info.get("dev"),canonical_info.get("ino"),canonical_info.get("digest")))
+visibility_ok=(not visible or (canonical_info is not None and all(item==canonical_info.get("digest") for item in visible)))
+print(json.dumps({"accepted":accepted,"error":error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected},separators=(",",":"),sort_keys=True))
+for fd in held:
+ try: os.close(fd)
+ except OSError: pass
+''',encoding="utf-8")
+
+    fresh_effect_counter=[0]
+    def fresh_kernel_effect(module_path,raw,mode="valid"):
+        fresh_effect_counter[0]+=1
+        arena=work/f"r48-effect-{fresh_effect_counter[0]}";arena.mkdir(mode=0o700)
+        raw_path=arena/"input.bin";raw_path.write_bytes(raw)
+        proc=system_popen(["/usr/bin/python3","-I","-S",str(effect_runner),
+            str(module_path),str(arena),str(raw_path),mode],stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,text=True)
+        stdout,stderr=proc.communicate(timeout=20)
+        try: result=strict_json(stdout.strip().splitlines()[-1])
+        except Exception: result={"parse_error":stdout,"stderr":stderr,"rc":proc.returncode}
+        result["rc"]=proc.returncode;result["stderr"]=stderr
+        # Judge cleanup happens only after the complete residue observation.
+        shutil.rmtree(arena,ignore_errors=True)
+        return result
+
+    expected_binding_keys=["invocation_id","report","result_sha256","role","run_id","schema_version"]
+    def fresh_success(case,raw):
+        canonical=case.get("canonical") or {}
+        return (case.get("rc")==0 and case.get("accepted") is True
+            and case.get("fd_aliases")==[] and case.get("transition_ok") is True
+            and case.get("visibility_ok") is True and not case.get("temps")
+            and not case.get("outside") and not case.get("post_events")
+            and case.get("trap_unchanged") is True
+            and canonical.get("keys")==expected_binding_keys
+            and canonical.get("schema_version_type")=="int"
+            and canonical.get("schema_version")==1
+            and canonical.get("invocation")=="1"*32 and canonical.get("run")=="2"*32
+            and canonical.get("role")==canonical.get("report_role")=="TEST_AUTHOR"
+            and canonical.get("result_sha256")==hashlib.sha256(raw).hexdigest())
+    def fresh_reject(case,preseed=False):
+        canonical=case.get("canonical")
+        preseed_ok=(preseed and case.get("preseed") is not None and canonical is not None
+            and canonical.get("dev")==case["preseed"][0]
+            and canonical.get("ino")==case["preseed"][1]
+            and canonical.get("digest")==hashlib.sha256(bytes.fromhex(case["preseed"][2])).hexdigest())
+        return (case.get("rc")==0 and case.get("accepted") is False
+            and case.get("fd_aliases")==[] and not case.get("temps")
+            and not case.get("outside") and case.get("trap_unchanged") is True
+            and (canonical is None or preseed_ok))
+
+    reference_cases={
+        "valid":fresh_kernel_effect(reference_kernel,rig_valid_raw),
+        "max":fresh_kernel_effect(reference_kernel,exact_sized_report(MAX_RESULT_BYTES)),
+        "over":fresh_kernel_effect(reference_kernel,exact_sized_report(MAX_RESULT_BYTES+1)),
+        "duplicate":fresh_kernel_effect(reference_kernel,rig_duplicate_raw),
+        "partial":fresh_kernel_effect(reference_kernel,rig_valid_raw[:len(rig_valid_raw)//2]),
+        "nested":fresh_kernel_effect(reference_kernel,encoded_report(rig_bad_nested)),
+        "preseed":fresh_kernel_effect(reference_kernel,rig_valid_raw,"preseed"),
+        "hardlink":fresh_kernel_effect(reference_kernel,rig_valid_raw,"hardlink"),
+        "writable":fresh_kernel_effect(reference_kernel,rig_valid_raw,"writable"),
+        "no_cloexec":fresh_kernel_effect(reference_kernel,rig_valid_raw,"no_cloexec"),
+        "directory":fresh_kernel_effect(reference_kernel,rig_valid_raw,"directory"),
+        "fifo":fresh_kernel_effect(reference_kernel,rig_valid_raw,"fifo"),
+        "socket":fresh_kernel_effect(reference_kernel,rig_valid_raw,"socket"),
+        "symlink":fresh_kernel_effect(reference_kernel,rig_valid_raw,"symlink"),
+        "mutation":fresh_kernel_effect(reference_kernel,exact_sized_report(MAX_RESULT_BYTES),"mutation"),
+        "wrong_role":fresh_kernel_effect(reference_kernel,rig_valid_raw,"wrong_role"),
+        "equal_binding":fresh_kernel_effect(reference_kernel,rig_valid_raw,"equal_binding"),
+        "bad_invocation":fresh_kernel_effect(reference_kernel,rig_valid_raw,"bad_invocation"),
+        "second":fresh_kernel_effect(reference_kernel,rig_valid_raw,"second"),
+        "cleanup_transient":fresh_kernel_effect(reference_kernel,rig_valid_raw,"cleanup_transient"),
+        "cleanup_persistent":fresh_kernel_effect(reference_kernel,rig_valid_raw,"cleanup_persistent"),
+    }
+    reference_basic_ok=(fresh_success(reference_cases["valid"],rig_valid_raw)
+        and fresh_success(reference_cases["max"],exact_sized_report(MAX_RESULT_BYTES))
+        and all(fresh_reject(reference_cases[name],name=="preseed") for name in (
+            "over","duplicate","partial","nested","preseed","hardlink","writable","no_cloexec",
+            "directory","fifo","socket","symlink","mutation","wrong_role",
+            "equal_binding","bad_invocation","cleanup_transient",
+            ))
+        and fresh_success(reference_cases["second"],rig_valid_raw)
+        and reference_cases["second"].get("second_rejected") is True
+        and reference_cases["cleanup_persistent"].get("accepted") is False
+        and reference_cases["cleanup_persistent"].get("cleanup_failures",0)>=2
+        and bool(reference_cases["cleanup_persistent"].get("temps")))
+
+    leak_mutants={}
+    original_def="def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):"
+    safe_def="def _safe_consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):"
+    wrappers={
+        "dup":"leak=os.dup(sink_fd)",
+        "dup2":"leak=os.dup(sink_fd); os.dup2(sink_fd,leak)",
+        "fcntl_dup":"leak=fcntl.fcntl(sink_fd,fcntl.F_DUPFD,100)",
+        "fdopen_detach":"stream=os.fdopen(os.dup(sink_fd),'rb'); leak=stream.detach(); _R48_LEAKS.append(leak)",
+    }
+    for name,line in wrappers.items():
+        mutant=reference_kernel_source.replace(original_def,safe_def,1)
+        if name=="fdopen_detach": mutant+="\n_R48_LEAKS=[]\n"
+        mutant+=f'''\ndef consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):\n    {line}\n    return _safe_consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role)\n'''
+        path=work/f"r48-{name}-mutant.py";path.write_text(mutant,encoding="utf-8")
+        leak_mutants[name]=fresh_kernel_effect(path,rig_valid_raw)
+    leak_mutants_ok=all(case.get("accepted") is True and case.get("fd_aliases")
+                        and not fresh_success(case,rig_valid_raw) for case in leak_mutants.values())
+
+    # The reference closes temp_fd before this source point, so construct a
+    # connected mutant that duplicates it immediately before that close.
+    atomic_mutant_source=reference_kernel_source.replace(
+        "            _write_all(temp_fd,encoded);os.fsync(temp_fd)",
+        "            _write_all(temp_fd,encoded);os.fsync(temp_fd);retained_writer=os.dup(temp_fd)",1).replace(
+        "        os.replace(temp_name,canonical_destination);temp_name=None",
+        "        os.replace(temp_name,canonical_destination);temp_name=None\n        first=os.pread(retained_writer,1,0);os.pwrite(retained_writer,b'x' if first!=b'x' else b'y',0);os.pwrite(retained_writer,first,0);os.close(retained_writer)",1)
+    atomic_mutant=work/"r48-retained-publication-writer-mutant.py"
+    atomic_mutant.write_text(atomic_mutant_source,encoding="utf-8")
+    atomic_mutant_case=fresh_kernel_effect(atomic_mutant,rig_valid_raw)
+    atomic_mutant_caught=(atomic_mutant_case.get("accepted") is True
+        and atomic_mutant_case.get("transitions")
+        and atomic_mutant_case["transitions"][0].get("writers")
+        and not fresh_success(atomic_mutant_case,rig_valid_raw))
+    bool_version_source=reference_kernel_source.replace(
+        'envelope={"schema_version":1,',
+        'envelope={"schema_version":True,',1)
+    bool_version_mutant=work/"r48-bool-schema-version-mutant.py"
+    bool_version_mutant.write_text(bool_version_source,encoding="utf-8")
+    bool_version_case=fresh_kernel_effect(bool_version_mutant,rig_valid_raw)
+    bool_version_caught=(bool_version_case.get("accepted") is True
+        and not fresh_success(bool_version_case,rig_valid_raw))
+    reference_effect_rig_ok=(reference_basic_ok and leak_mutants_ok
+                             and atomic_mutant_caught and bool_version_caught)
+
+    product_fresh_cases={};product_fresh_ok=False
+    if kernel_structure_ok and kernel_module is not None:
+        product_fresh_cases={
+            "valid":fresh_kernel_effect(result_kernel,rig_valid_raw),
+            "max":fresh_kernel_effect(result_kernel,exact_sized_report(MAX_RESULT_BYTES)),
+            "over":fresh_kernel_effect(result_kernel,exact_sized_report(MAX_RESULT_BYTES+1)),
+            "duplicate":fresh_kernel_effect(result_kernel,rig_duplicate_raw),
+            "partial":fresh_kernel_effect(result_kernel,rig_valid_raw[:len(rig_valid_raw)//2]),
+            "nested":fresh_kernel_effect(result_kernel,encoded_report(rig_bad_nested)),
+            "preseed":fresh_kernel_effect(result_kernel,rig_valid_raw,"preseed"),
+            "hardlink":fresh_kernel_effect(result_kernel,rig_valid_raw,"hardlink"),
+            "writable":fresh_kernel_effect(result_kernel,rig_valid_raw,"writable"),
+            "no_cloexec":fresh_kernel_effect(result_kernel,rig_valid_raw,"no_cloexec"),
+            "directory":fresh_kernel_effect(result_kernel,rig_valid_raw,"directory"),
+            "fifo":fresh_kernel_effect(result_kernel,rig_valid_raw,"fifo"),
+            "socket":fresh_kernel_effect(result_kernel,rig_valid_raw,"socket"),
+            "symlink":fresh_kernel_effect(result_kernel,rig_valid_raw,"symlink"),
+            "mutation":fresh_kernel_effect(result_kernel,exact_sized_report(MAX_RESULT_BYTES),"mutation"),
+            "wrong_role":fresh_kernel_effect(result_kernel,rig_valid_raw,"wrong_role"),
+            "equal_binding":fresh_kernel_effect(result_kernel,rig_valid_raw,"equal_binding"),
+            "bad_invocation":fresh_kernel_effect(result_kernel,rig_valid_raw,"bad_invocation"),
+            "second":fresh_kernel_effect(result_kernel,rig_valid_raw,"second"),
+            "cleanup_transient":fresh_kernel_effect(result_kernel,rig_valid_raw,"cleanup_transient"),
+        }
+        product_fresh_ok=(fresh_success(product_fresh_cases["valid"],rig_valid_raw)
+            and fresh_success(product_fresh_cases["max"],exact_sized_report(MAX_RESULT_BYTES))
+            and fresh_success(product_fresh_cases["second"],rig_valid_raw)
+            and product_fresh_cases["second"].get("second_rejected") is True
+            and all(fresh_reject(product_fresh_cases[name],name=="preseed") for name in (
+                "over","duplicate","partial","nested","preseed","hardlink","writable","no_cloexec",
+                "directory","fifo","socket","symlink","mutation","wrong_role",
+                "equal_binding","bad_invocation","cleanup_transient")))
+
     kernel_direct_detail={};kernel_direct_ok=False
     kernel_case_counter=[0]
     def direct_kernel_case(raw, *, invocation_id="1"*32, run_id="2"*32,
@@ -1795,7 +2328,8 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         and r12_escape[0] and r12_escape[1].startswith("REJECTED:")
         and r12_escape[2] and r12_escape[3])
     deterministic_result_ok = (
-        kernel_structure_ok and kernel_integration_structure_ok and kernel_direct_ok
+        kernel_structure_ok and kernel_integration_structure_ok and integration_dynamic_ok
+        and kernel_direct_ok and product_fresh_ok
         and valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
@@ -1876,10 +2410,11 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
-    check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and kernel_oracle_rig_ok,
-          f"inventory={rig_inventory_base,rig_inventory_mutants} oracle={kernel_oracle_rig_ok}")
+    check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
+          and kernel_oracle_rig_ok and reference_effect_rig_ok,
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok} integration={integration_positive,integration_dead,integration_constants} oracle={kernel_oracle_rig_ok} reference_basic={reference_basic_ok} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok} direct={kernel_direct_ok,kernel_direct_detail} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
