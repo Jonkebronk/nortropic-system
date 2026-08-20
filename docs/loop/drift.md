@@ -1260,3 +1260,7 @@ The owner-frozen unconditional SELFTEST no longer treats heap allocation, ordina
 ### 2026-08-15 — H032 R45 types and allocation measurability
 
 The unconditional same-analyzer lane now has an explicit rig-only vocabulary for one unaliased `import types` and direct `types.SimpleNamespace` construction. Structured allocation facts preserve same-path aliases, distinguish sequential call contexts, and widen loop/recursive repetition to MAY_ALIAS with may-present/may-absent attributes. One-defect import/API/escape, alias, repetition and recursion mutants independently lose their target component with unrelated components and traces stable. The exact product lane remains the sole source of product verdict.
+
+### 2026-08-20 — H032 R46 semantic allocation closure
+
+R46 removes every R45 fixture/helper/local spelling from allocation verdict logic. Constructor helpers are found from their returned namespace effect; aliases and distinct objects are relations over object IDs, while real comprehension and per-frame recursive execution produce summary states. The summary's possible missing attribute reaches an AttributeError handler, and a causal handler `subprocess.Popen` mutant is discovered and rejected. A mechanically alpha-renamed fixture preserves exact allocation facts/components/traces. This unconditional lane remains rig-only.

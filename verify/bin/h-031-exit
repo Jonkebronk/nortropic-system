@@ -793,7 +793,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "d00e7abb8d1d745d459b7e4ded91f297493e18d9336119747330ff006ebf3afe")
+                       == "f05cc28247244a23b70eef58c0b3102b1781d9f1ee2f3bba016d11d56fabd6d0")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
