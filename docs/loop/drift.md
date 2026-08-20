@@ -1438,3 +1438,30 @@ updates that binding only after the final H032 gate hash is fixed; the required 
 baseline is the complete 94-control execution with only `K_H032_FRESH_UPSTREAM` and
 `K_PRODUCT_EXECUTION` failing for the unchanged structured-result product gap. No
 production, provider authority, G20, H017 or live-model behavior changes.
+
+### 2026-08-20 — H032/H031 R61 protected C-callback transfer boundary
+
+R60's identity profiler closes captured callables only at events CPython actually
+reports. A captured `os.fstat` called directly from Python emits `c_call`, and a Python
+helper or closure emits a Python `call` before its internal filesystem effect. In
+contrast, `next(map(captured_fstat, (sink_fd,)))` lets the C implementation of `map`
+invoke the C implementation of `fstat` without a nested profile event. The result is
+real but there is no ordinal for R60 to replay.
+
+R61 resolves that one observability boundary in H031 rather than claiming a stronger
+profiler. Its source-form control has two narrow provenances: the actual unaliased
+`os.fstat` result-setup capability and the exact unshadowed built-in C executors
+`map`, `filter`, `sorted`, `min` and `max`. Assignments, defaults, helper
+arguments/returns, aliases and explicit containers preserve those provenances. The
+gate rejects only when the protected capability is stored in a literal container or
+when both provenances meet at a call. It does not interpret Python control flow.
+
+Connected full-source controls place each route inside the real `run_codex` body.
+Direct captured invocation, a Python helper, an aliased Python relay, a closure and
+unrelated `next(map(lambda ...))` remain source-admissible. Protected map/filter/key
+callbacks, aliases and executor containers, capability containers and helper-return
+laundering reject with the exact protected-callback finding. Thus H032's existing
+27-ordinal direct matrix and captured-helper cases cover every newly admissible route;
+no H032 instrumentation, production, provider authority, G20, H017 or live-model
+behavior changes. H031 remains bound to the final unchanged H032 gate bytes and its
+prebuilder result remains 94 PASS / 2 FAIL solely for the structured-result product gap.
