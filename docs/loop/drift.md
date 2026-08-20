@@ -1716,3 +1716,25 @@ causally rejected. The exact unfiltered current attempt is the legitimate positi
 mutant is rig evidence only and grants no product credit. Complete-decoy comparison and
 the read-only authoritative 179-record observation remain intact; H031 adds no route and
 only binds the final R71 H032 digest.
+
+### 2026-08-21 — H032/H031 R72 complete provider environment relation
+
+R71 still gave finite key-shape authority: a defective controller could retain all names
+of the two published lengths and discard unrelated caller state. R72 supersedes sentinel,
+name, length and prefix predicates with equality over the complete current-attempt mapping.
+The expected provider mapping starts from the exact incoming environment, removes every
+`GIT_*`, `DYLD_*`, exact loader redirect and the already-frozen launcher-sensitive GitHub/
+Slack prefixes, then accounts for exact controller trust-root/envelope and judge-private
+capture additions. Every other key and value must remain byte-for-byte equal.
+
+Only count, keyset SHA-256 and mapping SHA-256 enter diagnostics; raw values never do.
+Three varied unrelated entries chosen after source lock are causal strengthening only.
+Complete connected candidates prove exact preservation and reject drop-one, length-only,
+prefix-only, fixed-key and unexpected-extra filters after exactly one current provider
+start with zero Git controls and the R70 sink binding. Apple's system Python prepends a
+developer MANPATH before fixture code runs; the judge-private launch boundary preserves
+the exact pre-interpreter value, and the synthetic provider restores it and deletes the
+two fixture fields before capture. Imported product cannot observe that normalization.
+The exact product attempt remains the sole structured-result RED; complete decoy/current
+capture and the authoritative 179-entry read-only observation are unchanged. H031 gains
+no process or route and binds only the final R72 H032 digest.

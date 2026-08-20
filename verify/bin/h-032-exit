@@ -504,44 +504,59 @@ try:
     (base / "anchor").write_text("h032\n", encoding="utf-8")
     sh(GIT, "add", ".", cwd=base); sh(GIT, "commit", "-qm", "fixture", cwd=base)
 
-    # The product bytes are fixed before the judge chooses unrelated runtime
-    # environment names.  The names are embedded only in the disposable
-    # provider fixture, so a candidate cannot pass by retaining one public
-    # fixture key while discarding arbitrary caller runtime state.
-    r71_candidate_source_digest = sha256(source)
-    r71_gate_source = (repo / "verify/bin/h-032-exit").read_text(encoding="utf-8")
-    r71_env_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
-    def fresh_r71_env_key(length: int) -> str:
+    # The complete environment relation is primary.  These varied disposable
+    # entries are chosen only after candidate bytes are fixed and strengthen
+    # the causal filter mutants; no name, length or prefix grants credit.
+    r72_candidate_source_digest = sha256(source)
+    r72_candidate_source_text = source.read_text(encoding="utf-8")
+    r72_gate_source = (repo / "verify/bin/h-032-exit").read_text(encoding="utf-8")
+    r72_env_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    def fresh_r72_env_key(length: int) -> str:
         while True:
             random_bytes = os.urandom(length)
             candidate = chr(ord("A") + random_bytes[0] % 26) + "".join(
-                r71_env_alphabet[value % len(r71_env_alphabet)]
+                r72_env_alphabet[value % len(r72_env_alphabet)]
                 for value in random_bytes[1:])
-            if (candidate not in os.environ and candidate not in r71_gate_source
-                    and candidate not in source.read_text(encoding="utf-8")):
+            if (candidate not in os.environ and candidate not in r72_gate_source
+                    and candidate not in r72_candidate_source_text
+                    and not candidate.startswith(("GIT_","DYLD_","GH_",
+                                                  "GITHUB_","SLACK_","H032_",
+                                                  "NORTROPIC_"))
+                    and candidate not in {"LD_PRELOAD","LD_LIBRARY_PATH",
+                                          "__PYVENV_LAUNCHER__"}):
                 return candidate
-    def fresh_r71_env_value(length: int) -> str:
+    def fresh_r72_env_value(length: int) -> str:
         while True:
             candidate=os.urandom(length).hex()
-            if (candidate not in r71_gate_source
-                    and candidate not in source.read_text(encoding="utf-8")):
+            if (candidate not in r72_gate_source
+                    and candidate not in r72_candidate_source_text):
                 return candidate
-    r71_env_keys=[]
-    for r71_key_length in (23,37):
-        r71_key=fresh_r71_env_key(r71_key_length)
-        while r71_key in r71_env_keys:
-            r71_key=fresh_r71_env_key(r71_key_length)
-        r71_env_keys.append(r71_key)
-    r71_unrelated_environment = {
-        r71_env_keys[0]: fresh_r71_env_value(24),
-        r71_env_keys[1]: fresh_r71_env_value(31),
+    r72_env_lengths=[]
+    while len(r72_env_lengths)<3:
+        candidate_length=11+(os.urandom(1)[0] % 37)
+        if candidate_length not in r72_env_lengths:
+            r72_env_lengths.append(candidate_length)
+    r72_env_keys=[fresh_r72_env_key(length) for length in r72_env_lengths]
+    r72_unrelated_environment={
+        key:fresh_r72_env_value(19+index*7)
+        for index,key in enumerate(r72_env_keys)
     }
 
     provider_dir = work / "providers"; provider_dir.mkdir()
     provider = provider_dir / "totally-renamed-agent"
     capture = work / "capture.json"
-    provider.write_text("""#!/usr/bin/env python3
+    # The synthetic provider uses the host's fixed system Python in isolated,
+    # no-site mode.  Apple's Python prepends developer manpaths before script
+    # execution, so the judge-private launcher fixture also carries the exact
+    # pre-interpreter MANPATH value; the provider restores it and removes both
+    # fixture-only fields before observing the complete environment.
+    provider.write_text("""#!/usr/bin/python3 -IS
 import hashlib,json,os,pathlib,signal,subprocess,sys,time
+_manpath_present=os.environ.pop('H032_FIXTURE_MANPATH_PRESENT')
+_manpath_value=os.environ.pop('H032_FIXTURE_MANPATH_VALUE')
+if _manpath_present == '1': os.environ['MANPATH']=_manpath_value
+elif _manpath_present == '0': os.environ.pop('MANPATH',None)
+else: raise RuntimeError('invalid fixture MANPATH presence')
 self_path=pathlib.Path(sys.argv[0]); root=self_path.parent
 host_path=root/'codex-code-mode-host'
 before=hashlib.sha256(self_path.read_bytes()).hexdigest()
@@ -677,10 +692,8 @@ pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({
                     'digest':output_digest} if output_stat else None,
  'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,
  'git_control_env':sorted(key for key in os.environ if key.startswith('GIT_')),
- 'unrelated_runtime_observation':{
-     '__R71_UNPREDICTABLE_ENV_KEY_A__':os.environ.get('__R71_UNPREDICTABLE_ENV_KEY_A__'),
-     '__R71_UNPREDICTABLE_ENV_KEY_B__':os.environ.get('__R71_UNPREDICTABLE_ENV_KEY_B__'),
- },
+ 'complete_environment':dict(os.environ)
+     if os.environ.get('H032_CAPTURE_COMPLETE_ENV') == '1' else None,
  'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,
                   'is_symlink':out.parent.is_symlink(),
                   'entries':sorted(p.name for p in out.parent.iterdir())}
@@ -690,9 +703,7 @@ if mode == 'wrong_thread': thread='foreign-thread'
 if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
 if mode == 'multiple_thread': print(json.dumps({'type':'thread.started','thread_id':'second-thread'}))
 if mode == 'output_then_fail': sys.exit(17)
-""".replace('__R71_UNPREDICTABLE_ENV_KEY_A__',tuple(r71_unrelated_environment)[0])
-   .replace('__R71_UNPREDICTABLE_ENV_KEY_B__',tuple(r71_unrelated_environment)[1]),
-        encoding="utf-8")
+""", encoding="utf-8")
     provider.chmod(0o700)
     good_bytes = provider.read_bytes(); good_hash = hashlib.sha256(good_bytes).hexdigest()
     code_mode_host = provider_dir / "arbitrary-sidecar-source"
@@ -1317,12 +1328,16 @@ def run_codex(sink, canonical, invocation, run, role):
                 except (OSError, ValueError):
                     pass
             kwargs = dict(kwargs); child_env = dict(kwargs.get("env") or {})
+            fixture_manpath_present="1" if "MANPATH" in child_env else "0"
+            fixture_manpath_value=child_env.get("MANPATH","")
             child_env.update({
                 "H032_RESULT_MODE": launch_mode[0],
                 "H032_CAPTURE": str(capture),
                 "H032_LOCKED_SOURCE": str(provider),
                 "H032_SAFE_ATTACK_ROOT": str(work),
                 "H032_HOST_DIRECT_MARKER": str(work / "HOST_DIRECT_EXECUTED"),
+                "H032_FIXTURE_MANPATH_PRESENT":fixture_manpath_present,
+                "H032_FIXTURE_MANPATH_VALUE":fixture_manpath_value,
                 **launch_extra,
             })
             kwargs["env"] = child_env
@@ -3393,7 +3408,7 @@ def run_codex(sink, canonical, invocation, run, role):
         product_git_changes={
             "GIT_DIR":str(product_git_decoy_common),
             "GIT_WORK_TREE":str(product_git_decoy),
-            **r71_unrelated_environment,
+            **r72_unrelated_environment,
         }
         product_git_prior={key:os.environ.get(key) for key in product_git_changes}
         # A stale capture from the preceding physical attempt is deliberately
@@ -3405,8 +3420,10 @@ def run_codex(sink, canonical, invocation, run, role):
         capture_absent_before=not capture.exists()
         physical_git_starts_before=provider_process_starts[0]
         launch_mode[0]="valid"
+        launch_extra["H032_CAPTURE_COMPLETE_ENV"]="1"
         try:
             os.environ.update(product_git_changes)
+            physical_git_incoming_environment=dict(os.environ)
             try:
                 physical_git_run=physical_module.run_codex(
                     physical_repo,physical_wt,"TEST_AUTHOR","H032-GIT-ENVIRONMENT")
@@ -3418,6 +3435,7 @@ def run_codex(sink, canonical, invocation, run, role):
             for key,value in product_git_prior.items():
                 if value is None: os.environ.pop(key,None)
                 else: os.environ[key]=value
+            launch_extra.pop("H032_CAPTURE_COMPLETE_ENV",None)
         physical_git_start_delta=provider_process_starts[0]-physical_git_starts_before
         product_git_decoy_after=exact_tree_snapshot(product_git_decoy)
         physical_git_runs_after=(set(physical_runs_root.iterdir())
@@ -3442,71 +3460,97 @@ def run_codex(sink, canonical, invocation, run, role):
         if prior_trust_root is None: os.environ.pop("NORTROPIC_TRUST_ROOT",None)
         else: os.environ["NORTROPIC_TRUST_ROOT"]=prior_trust_root
 
-    # Connected defective candidate: it preserves only the former fixed
-    # sentinel plus fixture mechanics and drops the unpredictable unrelated
-    # names.  The real provider must start, capture the filtered environment
-    # and make the current-attempt oracle reject it.
-    fixed_whitelist_repo=work/"r71-fixed-key-whitelist-repo"
-    shutil.copytree(physical_repo,fixed_whitelist_repo,
-                    ignore=shutil.ignore_patterns(".git","__pycache__"))
-    fixed_whitelist_source=fixed_whitelist_repo/"scripts/nortropic-codex-autopilot.py"
-    fixed_whitelist_text=fixed_whitelist_source.read_text(encoding="utf-8")
+    # Connected environment-family controls use complete disposable candidate
+    # modules and the same provider boundary.  Their only production delta is
+    # the provider environment construction; no fixture claim can grant PASS.
     original_provider_environment='''        env = {key: value for key, value in os.environ.items()
                if not key.startswith("DYLD_")
                and key not in {"LD_PRELOAD", "LD_LIBRARY_PATH", "__PYVENV_LAUNCHER__"}}'''
-    selective_provider_environment='''        env = {key: value for key, value in os.environ.items()
-               if (key.startswith("H032_")
-                   or key in {"PATH", "HOME", "TMPDIR", "NORTROPIC_TRUST_ROOT",
-                              "NORTROPIC_OPAQUE_RUNTIME_SENTINEL"})
+    conforming_provider_environment='''        env = {key: value for key, value in os.environ.items()
+               if not key.startswith("GIT_")
                and not key.startswith("DYLD_")
                and key not in {"LD_PRELOAD", "LD_LIBRARY_PATH", "__PYVENV_LAUNCHER__"}}'''
-    if fixed_whitelist_text.count(original_provider_environment)!=1:
-        raise RuntimeError("R71 fixed-key whitelist mutant source anchor missing")
-    fixed_whitelist_source.write_text(
-        fixed_whitelist_text.replace(original_provider_environment,
-                                     selective_provider_environment,1),
-        encoding="utf-8")
-    sh(GIT,"init","-q",cwd=fixed_whitelist_repo)
-    sh(GIT,"config","user.name","h032-r71-mutant",cwd=fixed_whitelist_repo)
-    sh(GIT,"config","user.email","h032-r71@nortropic.invalid",cwd=fixed_whitelist_repo)
-    sh(GIT,"add",".",cwd=fixed_whitelist_repo)
-    sh(GIT,"commit","-qm","R71 fixed-key whitelist mutant",cwd=fixed_whitelist_repo)
-    fixed_whitelist_wt=work/"r71-fixed-key-whitelist-worker"
-    sh(GIT,"worktree","add","-q","--detach",str(fixed_whitelist_wt),"HEAD",
-       cwd=fixed_whitelist_repo)
-    fixed_whitelist_spec=importlib.util.spec_from_file_location(
-        "h032_r71_fixed_whitelist_subject",fixed_whitelist_source)
-    if fixed_whitelist_spec is None or fixed_whitelist_spec.loader is None:
-        raise RuntimeError("cannot import R71 fixed-key whitelist mutant")
-    fixed_whitelist_module=importlib.util.module_from_spec(fixed_whitelist_spec)
-    sys.modules[fixed_whitelist_spec.name]=fixed_whitelist_module
-    fixed_whitelist_spec.loader.exec_module(fixed_whitelist_module)
-    fixed_whitelist_prior={key:os.environ.get(key) for key in product_git_changes}
-    fixed_whitelist_prior_trust=os.environ.get("NORTROPIC_TRUST_ROOT")
-    if capture.exists(): capture.unlink()
-    fixed_whitelist_starts_before=provider_process_starts[0]
-    launch_mode[0]="valid"
-    try:
-        os.environ.update(product_git_changes)
-        os.environ["NORTROPIC_TRUST_ROOT"]=str(fixed_whitelist_repo)
-        try:
-            fixed_whitelist_module.run_codex(
-                fixed_whitelist_repo,fixed_whitelist_wt,"TEST_AUTHOR","H032-R71-WHITELIST")
-            fixed_whitelist_case=(True,"ADMITTED")
-        except Exception as exc:
-            fixed_whitelist_case=(False,f"{type(exc).__name__}:{exc}")
-        fixed_whitelist_capture=safe_capture()
-    finally:
+    if r72_candidate_source_text.count(original_provider_environment)!=1:
+        raise RuntimeError("R72 provider environment source anchor missing")
+    r72_extra_key=fresh_r72_env_key(17)
+    while r72_extra_key in r72_unrelated_environment:
+        r72_extra_key=fresh_r72_env_key(17)
+    r72_extra_value=fresh_r72_env_value(29)
+    r72_fixed_names=repr(tuple(sorted(set(r72_unrelated_environment)|{
+        "PATH","HOME","TMPDIR","NORTROPIC_TRUST_ROOT",
+        "NORTROPIC_OPAQUE_RUNTIME_SENTINEL"})))
+    r72_lengths=repr(tuple(sorted(set(map(len,r72_unrelated_environment)))))
+    r72_prefixes=repr(tuple(key[:4] for key in r72_unrelated_environment))
+    r72_variant_suffixes={
+        "exact":"",
+        "drop_one":f'''\n        env.pop({r72_env_keys[0]!r},None)''',
+        "length":f'''\n        env={{key:value for key,value in env.items()
+             if key.startswith(("H032_","NORTROPIC_"))
+             or key in {{"PATH","HOME","TMPDIR"}} or len(key) in {r72_lengths}}}''',
+        "prefix":f'''\n        env={{key:value for key,value in env.items()
+             if key.startswith(("H032_","NORTROPIC_",*{r72_prefixes}))
+             or key in {{"PATH","HOME","TMPDIR"}}}}''',
+        "fixed":f'''\n        env={{key:value for key,value in env.items()
+             if key.startswith("H032_") or key in {r72_fixed_names}}}''',
+        "extra":f'''\n        env[{r72_extra_key!r}]={r72_extra_value!r}''',
+    }
+    def run_r72_environment_variant(name: str, suffix: str) -> dict[str, object]:
+        variant_repo=work/f"r72-environment-{name}-repo"
+        shutil.copytree(physical_repo,variant_repo,
+                        ignore=shutil.ignore_patterns(".git","__pycache__"))
+        variant_source=variant_repo/"scripts/nortropic-codex-autopilot.py"
+        variant_text=variant_source.read_text(encoding="utf-8")
+        if variant_text.count(original_provider_environment)!=1:
+            raise RuntimeError(f"R72 {name} source anchor missing")
+        variant_source.write_text(
+            variant_text.replace(original_provider_environment,
+                                 conforming_provider_environment+suffix,1),
+            encoding="utf-8")
+        sh(GIT,"init","-q",cwd=variant_repo)
+        sh(GIT,"config","user.name","h032-r72-mutant",cwd=variant_repo)
+        sh(GIT,"config","user.email","h032-r72@nortropic.invalid",cwd=variant_repo)
+        sh(GIT,"add",".",cwd=variant_repo)
+        sh(GIT,"commit","-qm",f"R72 environment {name}",cwd=variant_repo)
+        variant_wt=work/f"r72-environment-{name}-worker"
+        sh(GIT,"worktree","add","-q","--detach",str(variant_wt),"HEAD",cwd=variant_repo)
+        variant_spec=importlib.util.spec_from_file_location(
+            f"h032_r72_environment_{name}_subject",variant_source)
+        if variant_spec is None or variant_spec.loader is None:
+            raise RuntimeError(f"cannot import R72 {name} environment variant")
+        variant_module=importlib.util.module_from_spec(variant_spec)
+        sys.modules[variant_spec.name]=variant_module
+        variant_spec.loader.exec_module(variant_module)
+        prior={key:os.environ.get(key) for key in product_git_changes}
+        prior_trust=os.environ.get("NORTROPIC_TRUST_ROOT")
+        if capture.exists(): capture.unlink()
+        starts_before=provider_process_starts[0]
         launch_mode[0]="valid"
-        for key,value in fixed_whitelist_prior.items():
-            if value is None: os.environ.pop(key,None)
-            else: os.environ[key]=value
-        if fixed_whitelist_prior_trust is None:
-            os.environ.pop("NORTROPIC_TRUST_ROOT",None)
-        else:
-            os.environ["NORTROPIC_TRUST_ROOT"]=fixed_whitelist_prior_trust
-    fixed_whitelist_start_delta=(
-        provider_process_starts[0]-fixed_whitelist_starts_before)
+        launch_extra["H032_CAPTURE_COMPLETE_ENV"]="1"
+        try:
+            os.environ.update(product_git_changes)
+            incoming=dict(os.environ)
+            os.environ["NORTROPIC_TRUST_ROOT"]=str(variant_repo)
+            try:
+                variant_module.run_codex(
+                    variant_repo,variant_wt,"TEST_AUTHOR",f"H032-R72-{name.upper()}")
+                case=(True,"ADMITTED")
+            except Exception as exc:
+                case=(False,f"{type(exc).__name__}:{exc}")
+            observed=safe_capture()
+        finally:
+            launch_mode[0]="valid"
+            launch_extra.pop("H032_CAPTURE_COMPLETE_ENV",None)
+            for key,value in prior.items():
+                if value is None: os.environ.pop(key,None)
+                else: os.environ[key]=value
+            if prior_trust is None: os.environ.pop("NORTROPIC_TRUST_ROOT",None)
+            else: os.environ["NORTROPIC_TRUST_ROOT"]=prior_trust
+        return {"case":case,"capture":observed,"incoming":incoming,
+                "starts":provider_process_starts[0]-starts_before}
+    r72_environment_variants={
+        name:run_r72_environment_variant(name,suffix)
+        for name,suffix in r72_variant_suffixes.items()
+    }
 
     physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
     physical_canonical = (physical_new_runs[0]/"result.json" if len(physical_new_runs)==1
@@ -3528,12 +3572,11 @@ def run_codex(sink, canonical, invocation, run, role):
         and all(value!=0 for value in physical_hostile_capture.get("live_attacks",{}).values()))
     physical_git_output=Path(physical_git_capture.get(
         "output_path","/private/tmp/h032-missing-git-output"))
-    def current_provider_capture_admits(observed, expected_environment, start_delta,
-                                        prior_output) -> bool:
+    def current_provider_capture_binding_admits(observed, start_delta,
+                                                prior_output) -> bool:
         identity=observed.get("output_identity") if isinstance(observed,dict) else None
         output=observed.get("output_path") if isinstance(observed,dict) else None
         return (start_delta==1 and observed.get("mode")=="valid"
-            and observed.get("unrelated_runtime_observation")==expected_environment
             and isinstance(output,str) and bool(output) and Path(output).is_absolute()
             and output!=prior_output and isinstance(identity,dict)
             and set(identity)=={"dev","ino","size","mode","digest"}
@@ -3543,64 +3586,82 @@ def run_codex(sink, canonical, invocation, run, role):
             and isinstance(identity.get("digest"),str)
             and len(identity.get("digest"))==64
             and set(identity.get("digest"))<=set("0123456789abcdef"))
-    physical_git_capture_bound=current_provider_capture_admits(
-        physical_git_capture,r71_unrelated_environment,
-        physical_git_start_delta,stale_capture_output)
+    def expected_provider_environment(incoming, observed) -> dict[str,str]:
+        expected={key:value for key,value in incoming.items()
+                  if not key.startswith("GIT_")
+                  and not key.startswith("DYLD_")
+                  and key not in {"LD_PRELOAD","LD_LIBRARY_PATH",
+                                  "__PYVENV_LAUNCHER__"}
+                  and not key.startswith(("GH_","GITHUB_","SLACK_"))}
+        output=Path(observed.get("output_path","/private/tmp/h032-missing-output"))
+        expected.update({
+            "NORTROPIC_TRUST_ROOT":str(Path(observed.get(
+                "argv0","/private/tmp/h032-missing-provider")).parent),
+            "NORTROPIC_KUVERT":str(output.with_name("provider-envelope.json")),
+            "H032_RESULT_MODE":"valid",
+            "H032_CAPTURE":str(capture),
+            "H032_LOCKED_SOURCE":str(provider),
+            "H032_SAFE_ATTACK_ROOT":str(work),
+            "H032_HOST_DIRECT_MARKER":str(work/"HOST_DIRECT_EXECUTED"),
+            "H032_CAPTURE_COMPLETE_ENV":"1",
+        })
+        return expected
+    def environment_fingerprint(mapping) -> dict[str,object]:
+        valid=(isinstance(mapping,dict)
+               and all(isinstance(key,str) and isinstance(value,str)
+                       for key,value in mapping.items()))
+        if not valid:
+            return {"valid":False,"count":-1,"keyset_sha256":None,
+                    "mapping_sha256":None}
+        keys=json.dumps(sorted(mapping),ensure_ascii=True,
+                        separators=(",",":")).encode("utf-8")
+        encoded=json.dumps(mapping,sort_keys=True,ensure_ascii=True,
+                           separators=(",",":")).encode("utf-8")
+        return {"valid":True,"count":len(mapping),
+                "keyset_sha256":hashlib.sha256(keys).hexdigest(),
+                "mapping_sha256":hashlib.sha256(encoded).hexdigest()}
+    physical_git_capture_bound=current_provider_capture_binding_admits(
+        physical_git_capture,physical_git_start_delta,stale_capture_output)
+    physical_git_expected_environment=expected_provider_environment(
+        physical_git_incoming_environment,physical_git_capture)
+    physical_git_environment_relation=(
+        physical_git_capture.get("complete_environment")
+        ==physical_git_expected_environment)
     stale_capture_mutant=dict(physical_git_capture)
-    wrong_environment_mutant=dict(physical_git_capture)
-    wrong_environment_mutant["unrelated_runtime_observation"]={
-        **r71_unrelated_environment,
-        tuple(r71_unrelated_environment)[0]:"wrong",
-    }
-    missing_environment_mutant=dict(physical_git_capture)
-    missing_environment_mutant["unrelated_runtime_observation"]={
-        tuple(r71_unrelated_environment)[0]:
-            r71_unrelated_environment[tuple(r71_unrelated_environment)[0]],
-    }
-    fixed_key_whitelist_mutant=dict(physical_git_capture)
-    fixed_key_whitelist_mutant["unrelated_runtime_observation"]={
-        "NORTROPIC_OPAQUE_RUNTIME_SENTINEL":next(iter(r71_unrelated_environment.values())),
-    }
     wrong_mode_mutant=dict(physical_git_capture);wrong_mode_mutant["mode"]="missing"
     repeated_output_mutant=dict(physical_git_capture)
     repeated_output_mutant["output_path"]=stale_capture_output
     capture_binding_mutants_reject=(
-        not current_provider_capture_admits(
-            stale_capture_mutant,r71_unrelated_environment,
-            0,stale_capture_output)
-        and not current_provider_capture_admits(
-            wrong_environment_mutant,r71_unrelated_environment,
-            1,stale_capture_output)
-        and not current_provider_capture_admits(
-            missing_environment_mutant,r71_unrelated_environment,
-            1,stale_capture_output)
-        and not current_provider_capture_admits(
-            fixed_key_whitelist_mutant,r71_unrelated_environment,
-            1,stale_capture_output)
-        and not current_provider_capture_admits(
-            wrong_mode_mutant,r71_unrelated_environment,
-            1,stale_capture_output)
-        and not current_provider_capture_admits(
-            repeated_output_mutant,r71_unrelated_environment,
-            1,stale_capture_output))
-    r71_dynamic_literals_absent=(
-        sha256(source)==r71_candidate_source_digest
-        and all(key not in r71_gate_source and value not in r71_gate_source
-                and key not in source.read_text(encoding="utf-8")
-                and value not in source.read_text(encoding="utf-8")
+        not current_provider_capture_binding_admits(
+            stale_capture_mutant,0,stale_capture_output)
+        and not current_provider_capture_binding_admits(
+            wrong_mode_mutant,1,stale_capture_output)
+        and not current_provider_capture_binding_admits(
+            repeated_output_mutant,1,stale_capture_output))
+    r72_dynamic_literals_absent=(
+        sha256(source)==r72_candidate_source_digest
+        and all(key not in r72_gate_source and value not in r72_gate_source
+                and key not in r72_candidate_source_text
+                and value not in r72_candidate_source_text
+                and key not in provider.read_text(encoding="utf-8")
                 and value not in provider.read_text(encoding="utf-8")
-                for key,value in r71_unrelated_environment.items()))
-    fixed_whitelist_connected_reject=(
-        fixed_whitelist_start_delta==1
-        and fixed_whitelist_capture.get("mode")=="valid"
-        and fixed_whitelist_capture.get("git_control_env")==[]
-        and set(fixed_whitelist_capture.get("unrelated_runtime_observation",{}))
-            ==set(r71_unrelated_environment)
-        and all(value is None for value in fixed_whitelist_capture.get(
-            "unrelated_runtime_observation",{}).values())
-        and not current_provider_capture_admits(
-            fixed_whitelist_capture,r71_unrelated_environment,
-            fixed_whitelist_start_delta,stale_capture_output))
+                for key,value in r72_unrelated_environment.items())
+        and r72_extra_key not in r72_candidate_source_text
+        and r72_extra_value not in r72_candidate_source_text)
+    r72_variant_observations={}
+    for variant_name,variant in r72_environment_variants.items():
+        observed=variant["capture"]
+        expected=expected_provider_environment(variant["incoming"],observed)
+        r72_variant_observations[variant_name]={
+            "starts":variant["starts"],
+            "binding":current_provider_capture_binding_admits(
+                observed,variant["starts"],None),
+            "git_empty":observed.get("git_control_env")==[],
+            "relation":observed.get("complete_environment")==expected,
+            "observed_fingerprint":environment_fingerprint(
+                observed.get("complete_environment")),
+            "expected_fingerprint":environment_fingerprint(expected),
+        }
     physical_git_canonical_valid=False
     if len(physical_git_new_runs)==1:
         physical_git_canonical=physical_git_new_runs[0]/"result.json"
@@ -3625,17 +3686,20 @@ def run_codex(sink, canonical, invocation, run, role):
           f"stale={capture_was_stale} cleared={capture_absent_before} "
           f"starts={physical_git_start_delta} capture_bound={physical_git_capture_bound} "
           f"mutants_reject={capture_binding_mutants_reject}")
-    check("J_R71_UNPREDICTABLE_UNRELATED_ENVIRONMENT_ORACLE",
-          r71_dynamic_literals_absent and physical_git_capture_bound
-          and capture_binding_mutants_reject and fixed_whitelist_connected_reject
-          and set(physical_git_capture.get("unrelated_runtime_observation",{}))
-              ==set(r71_unrelated_environment),
-          f"key_lengths={tuple(map(len,r71_unrelated_environment))} "
-          f"source_absent={r71_dynamic_literals_absent} "
-          f"current_exact={physical_git_capture_bound} "
-          f"fixed_whitelist_predicate_reject={not current_provider_capture_admits(fixed_key_whitelist_mutant,r71_unrelated_environment,1,stale_capture_output)} "
-          f"fixed_whitelist_connected={fixed_whitelist_connected_reject} "
-          f"mutant_starts={fixed_whitelist_start_delta}")
+    check("J_R72_COMPLETE_PROVIDER_ENVIRONMENT_RELATION",
+          r72_dynamic_literals_absent and physical_git_capture_bound
+          and capture_binding_mutants_reject
+          and r72_variant_observations.get("exact",{}).get("relation") is True
+          and all(item.get("starts")==1 and item.get("binding") is True
+                  and item.get("git_empty") is True
+                  for item in r72_variant_observations.values())
+          and all(r72_variant_observations.get(name,{}).get("relation") is False
+                  for name in {"drop_one","length","prefix","fixed","extra"}),
+          f"source_absent={r72_dynamic_literals_absent} "
+          f"binding_mutants={capture_binding_mutants_reject} "
+          f"actual_observed={environment_fingerprint(physical_git_capture.get('complete_environment'))} "
+          f"actual_expected={environment_fingerprint(physical_git_expected_environment)} "
+          f"variants={r72_variant_observations}")
     physical_git_environment_ok=(
         physical_git_case[0]
         and product_git_decoy_after==product_git_decoy_before
@@ -3646,7 +3710,8 @@ def run_codex(sink, canonical, invocation, run, role):
         and physical_git_records[0].get("head")==git_repository_head(physical_wt)
         and physical_git_records[0].get("worktree")==str(physical_wt)
         and physical_git_capture.get("git_control_env")==[]
-        and physical_git_capture_bound and physical_git_canonical_valid
+        and physical_git_capture_bound and physical_git_environment_relation
+        and physical_git_canonical_valid
         and physical_git_common/"nortropic-codex-autopilot"/"runs" \
             in (physical_git_new_runs[0]/"result.json").parents
         and physical_git_common not in physical_git_output.parents
@@ -5192,7 +5257,7 @@ class CraftedConcretePath(type(Path())):
           and r55_complete_residue_oracle_ok and r56_setup_oracle_ok,
           f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r59_post_retained_dynamic_positive,r59_empty_interval_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary,r59_post_retained_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_start_delta,physical_git_capture.get('mode'),physical_git_capture.get('git_control_env'),physical_git_capture.get('unrelated_runtime_observation'),r71_dynamic_literals_absent,fixed_whitelist_connected_reject,physical_git_capture_bound,physical_git_canonical_valid,physical_git_records,physical_git_new_runs,product_git_snapshot_mutants,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_start_delta,physical_git_capture.get('mode'),physical_git_capture.get('git_control_env'),environment_fingerprint(physical_git_capture.get('complete_environment')),environment_fingerprint(physical_git_expected_environment),physical_git_environment_relation,r72_dynamic_literals_absent,r72_variant_observations,physical_git_capture_bound,physical_git_canonical_valid,physical_git_records,physical_git_new_runs,product_git_snapshot_mutants,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
