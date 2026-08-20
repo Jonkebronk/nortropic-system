@@ -27,6 +27,7 @@ if [[ ! "$SOURCE_PATH" -ef "$ROOT/verify/bin/h-032-exit" ]]; then
   exit 2
 fi
 SOURCE="$ROOT/scripts/nortropic-codex-autopilot.py"
+RESULT_KERNEL="$ROOT/controller/result/consumer.py"
 AUTHORITY="$ROOT/config/codex-provider-identity.json"
 SCHEMA="$ROOT/docs/loop/codex-autopilot-report.schema.json"
 WORK="$(/usr/bin/mktemp -d /private/tmp/nortropic-h032.XXXXXX)" || exit 2
@@ -54,24 +55,12 @@ if [[ $# -gt 0 ]]; then
   G20_EMIT="$2"
 fi
 
-/usr/bin/python3 -I -S - "$SOURCE" "$AUTHORITY" "$SCHEMA" "$WORK" "$G20_EMIT" <<'PY'
+/usr/bin/python3 -I -S - "$SOURCE" "$RESULT_KERNEL" "$AUTHORITY" "$SCHEMA" "$WORK" "$G20_EMIT" <<'PY'
 from __future__ import annotations
 
 import hashlib
 import importlib.util
 import ast
-AST_MATCH=getattr(ast,"Match",())
-AST_MATCH_AS=getattr(ast,"MatchAs",())
-AST_MATCH_SINGLETON=getattr(ast,"MatchSingleton",())
-AST_MATCH_VALUE=getattr(ast,"MatchValue",())
-AST_MATCH_OR=getattr(ast,"MatchOr",())
-AST_MATCH_SEQUENCE=getattr(ast,"MatchSequence",())
-AST_MATCH_STAR=getattr(ast,"MatchStar",())
-AST_MATCH_CLASS=getattr(ast,"MatchClass",())
-AST_MATCH_MAPPING=getattr(ast,"MatchMapping",())
-AST_TRY_STAR=getattr(ast,"TryStar",())
-AST_TRY_TYPES=(ast.Try,)
-import copy
 import builtins
 import fcntl
 import io
@@ -89,8 +78,8 @@ import threading
 import time
 import selectors
 
-source, authority_source, schema_source, work = map(Path, sys.argv[1:5])
-g20_emit_path = Path(sys.argv[5]) if sys.argv[5] else None
+source, result_kernel, authority_source, schema_source, work = map(Path, sys.argv[1:6])
+g20_emit_path = Path(sys.argv[6]) if sys.argv[6] else None
 repo = source.parents[1]
 task_spec = repo / "specs/tasks.spec.json"
 h033_gate = repo / "verify/bin/h-033-exit"
@@ -123,6 +112,23 @@ def strict_json(raw: str):
             out[key] = value
         return out
     return json.loads(raw, object_pairs_hook=pairs)
+
+def canonical_result_valid(value, schema, accepted_digest=None, role="TEST_AUTHOR"):
+    if not isinstance(value, dict) or set(value) != {
+            "schema_version", "invocation_id", "run_id", "role",
+            "result_sha256", "report"}:
+        return False
+    invocation_id=value.get("invocation_id");run_id=value.get("run_id")
+    digest=value.get("result_sha256");report=value.get("report")
+    lower_hex=set("0123456789abcdef")
+    return (value.get("schema_version")==1 and value.get("role")==role
+        and isinstance(invocation_id,str) and len(invocation_id)==32
+        and set(invocation_id)<=lower_hex
+        and isinstance(run_id,str) and len(run_id)==32 and set(run_id)<=lower_hex
+        and invocation_id!=run_id and isinstance(digest,str) and len(digest)==64
+        and set(digest)<=lower_hex
+        and (accepted_digest is None or digest==accepted_digest)
+        and complete_schema_valid(report,schema) and report.get("role")==role)
 
 def complete_schema_valid(value, schema_node) -> bool:
     """Independent complete validator for every keyword used by the frozen report schema."""
@@ -166,19 +172,20 @@ def complete_schema_valid(value, schema_node) -> bool:
     return True
 
 MAX_RESULT_BYTES = 4 * 1024 * 1024
-def bounded_stable_result(path: Path) -> bytes:
+MAX_CANONICAL_BYTES = MAX_RESULT_BYTES + 1024 * 1024
+def bounded_stable_result(path: Path, limit: int = MAX_RESULT_BYTES) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     try:
         before = os.fstat(fd)
         if not stat.S_ISREG(before.st_mode): raise ValueError("result is nonregular")
         chunks: list[bytes] = []; total = 0
-        while total <= MAX_RESULT_BYTES:
-            chunk = os.read(fd, min(65536, MAX_RESULT_BYTES + 1 - total))
+        while total <= limit:
+            chunk = os.read(fd, min(65536, limit + 1 - total))
             if not chunk: break
             chunks.append(chunk); total += len(chunk)
         after = os.fstat(fd)
-        if total > MAX_RESULT_BYTES: raise ValueError("result exceeds exact bound")
+        if total > limit: raise ValueError("result exceeds exact bound")
         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
                 after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             raise ValueError("result changed during read")
@@ -238,6 +245,8 @@ try:
             and row.get("exit_test") == "verify/bin/h-032-exit"
             and row.get("allowed_write") == [
                 "scripts/nortropic-codex-autopilot.py",
+                "controller/result/**",
+                "tests/controller/result/**",
                 "docs/05-beslutslogg.md",
                 "docs/loop/drift.md",
             ]
@@ -488,2144 +497,133 @@ if mode == 'output_then_fail': sys.exit(17)
     spec = importlib.util.spec_from_file_location("h032_subject", source)
     if spec is None or spec.loader is None: raise RuntimeError("cannot import subject")
     module = importlib.util.module_from_spec(spec); sys.modules[spec.name] = module; spec.loader.exec_module(module)
-    candidate_tree = ast.parse(source.read_text(encoding="utf-8"))
-    def analyze_candidate_tree(candidate_tree):
-        r44d_trace={"timeout":0,"cfg":0,"helper_provenance":0,"heap":0,"try":0,
-                    "types":0,"allocation":0}
-        r44d_components={"timeout":False,"cfg":False,"helper_provenance":False,
-                         "heap":False,"try":False,"types":False,"allocation":False}
-        r44e_facts={"heap":{},"try":{},"helper_provenance":{}}
-        r45_facts={"types":{},"allocation":{}}
-        r44c_unsupported=("TryStar",) if isinstance(AST_TRY_STAR,type) and any(
-            isinstance(node,AST_TRY_STAR) for node in ast.walk(candidate_tree)) else ()
-        def r20_complete_tree_analysis(tree):
-            consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
-                       and node.name=="_consume_private_result"]
-            runs=[node for node in tree.body if isinstance(node,ast.FunctionDef)
-                  and node.name=="run_codex"]
-            if len(consumers)!=1 or len(runs)!=1: return False
-            if [arg.arg for arg in consumers[0].args.args] != [
-                    "sink_fd","canonical_destination","invocation_id","run_id","role"]:
-                return False
-            forbidden={"eval","exec","compile","__import__","globals","locals",
-                       "vars","getattr","setattr"}
-            if any(isinstance(call.func,ast.Name) and call.func.id in forbidden
-                   for call in ast.walk(consumers[0]) if isinstance(call,ast.Call)): return False
-            process_imports=[]
-            for item in ast.walk(tree):
-                if isinstance(item,ast.Import):
-                    process_imports.extend(alias for alias in item.names if alias.name=="subprocess")
-                elif isinstance(item,ast.ImportFrom) and item.module=="subprocess":
-                    process_imports.extend(alias for alias in item.names if alias.name=="Popen")
-            return len(process_imports)>=1
-        def r29_literal(node):
-            try: return True,ast.literal_eval(node)
-            except Exception: return False,None
-        def r29_pattern_match(pattern,known,value):
-            if isinstance(pattern,AST_MATCH_AS):
-                return r29_pattern_match(pattern.pattern,known,value) if pattern.pattern else True
-            if isinstance(pattern,AST_MATCH_SINGLETON): return known and value is pattern.value
-            if isinstance(pattern,AST_MATCH_VALUE):
-                pknown,pvalue=r29_literal(pattern.value)
-                return (value==pvalue) if known and pknown else None
-            if isinstance(pattern,AST_MATCH_OR):
-                outcomes=[r29_pattern_match(part,known,value) for part in pattern.patterns]
-                if True in outcomes: return True
-                return None if None in outcomes else False
-            if isinstance(pattern,AST_MATCH_SEQUENCE):
-                if not known or not isinstance(value,(list,tuple)): return None
-                stars=[index for index,part in enumerate(pattern.patterns)
-                       if isinstance(part,AST_MATCH_STAR)]
-                if len(stars)>1: return None
-                if not stars:
-                    if len(value)!=len(pattern.patterns): return False
-                    pairs=zip(pattern.patterns,value)
-                else:
-                    star=stars[0];nonstar=len(pattern.patterns)-1
-                    if len(value)<nonstar: return False
-                    prefix=list(zip(pattern.patterns[:star],value[:star]))
-                    suffix_count=len(pattern.patterns)-star-1
-                    suffix=list(zip(pattern.patterns[star+1:],
-                                    value[len(value)-suffix_count:] if suffix_count else []))
-                    pairs=prefix+suffix
-                outcomes=[r29_pattern_match(part,True,item) for part,item in pairs]
-                return False if False in outcomes else None if None in outcomes else True
-            if isinstance(pattern,AST_MATCH_CLASS): return None
-            if isinstance(pattern,AST_MATCH_MAPPING):
-                return None if not known or isinstance(value,dict) else False
-            if isinstance(pattern,AST_MATCH_STAR): return True
-            return None
-        def r29_cases(node):
-            known,value=r29_literal(node.subject);reachable=[]
-            for case in node.cases:
-                outcome=r29_pattern_match(case.pattern,known,value)
-                # Pattern expressions are evaluated when the case is reached even
-                # when the match ultimately fails; guards/bodies require a possible match.
-                reachable.append((case,outcome is not False))
-                if outcome is True and case.guard is None: break
-            return reachable
-        def r31_expr_flow(node):
-            if node is None: return True,frozenset()
-            if isinstance(node,ast.Lambda):
-                flows=[r31_expr_flow(value) for value in
-                    list(node.args.defaults)+[x for x in node.args.kw_defaults if x]]
-                return (all(flow[0] for flow in flows),frozenset().union(
-                    *(flow[1] for flow in flows)))
-            literal_nodes=(ast.Expression,ast.Constant,ast.List,ast.Tuple,ast.Set,ast.Dict,
-                           ast.UnaryOp,ast.BinOp,ast.BoolOp,ast.Compare,ast.Subscript,ast.Slice,
-                           ast.Load,ast.operator,ast.unaryop,ast.boolop,ast.cmpop)
-            if all(isinstance(part,literal_nodes) for part in ast.walk(node)):
-                try:
-                    eval(compile(ast.fix_missing_locations(ast.Expression(
-                        body=copy.deepcopy(node))),"<r31-constant>","eval"),{"__builtins__":{}},{})
-                    return True,frozenset()
-                except Exception as error: return False,frozenset({type(error).__name__})
-            # Unknown names/attributes/subscripts/operators and every dynamic call
-            # may either complete or raise; never use absence of Call as proof.
-            return True,frozenset({"UNKNOWN"})
-        builtin_exceptions={name:value for name,value in vars(builtins).items()
-            if isinstance(value,type) and issubclass(value,BaseException)}
-        exception_functions={fn.name:fn for fn in ast.walk(candidate_tree)
-                             if isinstance(fn,ast.FunctionDef)}
-        def r34_initial_env():
-            return {name:(frozenset({name}),) for name in builtin_exceptions}
-        def r34_value(node,env,active=frozenset()):
-            unknown=(frozenset({"UNKNOWN"}),)
-            if node is None: return unknown
-            if isinstance(node,ast.Name): return env.get(node.id,unknown)
-            if isinstance(node,(ast.Tuple,ast.List,ast.Set)):
-                alternatives=[r34_value(part,env,active) for part in node.elts]
-                products=[frozenset()]
-                for values in alternatives:
-                    products=[left|right for left in products for right in values]
-                return tuple(dict.fromkeys(products)) or unknown
-            if isinstance(node,ast.Dict):
-                mapping={}
-                for key,value in zip(node.keys,node.values):
-                    known,literal=r29_literal(key)
-                    if not known: return unknown
-                    mapping[literal]=r34_value(value,env,active)
-                return mapping
-            if isinstance(node,ast.Subscript):
-                base=r34_value(node.value,env,active);known,key=r29_literal(node.slice)
-                if isinstance(base,dict) and known: return base.get(key,unknown)
-                return base if isinstance(base,tuple) else unknown
-            if isinstance(node,ast.Attribute):
-                base=r34_value(node.value,env,active)
-                if isinstance(base,dict) and "__objref__" in base:
-                    return env.get("__heap__",{}).get(base["__objref__"],{}).get(
-                        node.attr,unknown)
-                return unknown
-            if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
-                    and isinstance(node.func.value,ast.Name)
-                    and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
-                r44d_trace["heap"]+=1
-                return {"__objref__":f"namespace:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}",
-                        "__initial_attrs__":{kw.arg:r34_value(kw.value,env,active)
-                                             for kw in node.keywords if kw.arg}}
-            if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
-                fn=exception_functions.get(node.func.id)
-                if fn is not None and fn.name not in active:
-                    returns=[ret.value for ret in runtime_walk_function(fn)
-                             if isinstance(ret,ast.Return) and ret.value]
-                    values=[r34_value(value,env,active|{fn.name}) for value in returns]
-                    if not values: return unknown
-                    if len(values)==1: return values[0]
-                    if all(isinstance(value,dict) for value in values):
-                        keys=set.intersection(*(set(value) for value in values))
-                        return {key:tuple(dict.fromkeys(item for value in values
-                            for item in value[key])) for key in keys}
-                    if all(isinstance(value,tuple) for value in values):
-                        return tuple(dict.fromkeys(item for value in values for item in value))
-                    return unknown
-                return env.get(node.func.id,unknown)
-            return unknown
-        def r32_raise_types(node,env=None):
-            env=env or r34_initial_env()
-            if node is None: return frozenset({"UNKNOWN"})
-            alternatives=r34_value(node,env)
-            if isinstance(alternatives,dict): return frozenset({"UNKNOWN"})
-            value=frozenset().union(*alternatives)
-            return value if value!=frozenset({"UNKNOWN"}) else (r31_expr_flow(node)[1] or value)
-        def r32_handler_types(node,env=None):
-            if node is None: return (frozenset({"BaseException"}),)
-            value=r34_value(node,env or r34_initial_env())
-            return value if isinstance(value,tuple) else (frozenset({"UNKNOWN"}),)
-        def r32_may_match(exc,types):
-            if "UNKNOWN" in types or exc=="UNKNOWN": return True
-            exc_type=builtin_exceptions.get(exc)
-            return any(exc_type is not None and handler in builtin_exceptions
-                       and issubclass(exc_type,builtin_exceptions[handler]) for handler in types)
-        def r32_definitely_caught(exc,alternatives):
-            return bool(alternatives) and all("UNKNOWN" not in types
-                and r32_may_match(exc,types) for types in alternatives)
-        def r30_stmt_flow(statement,env):
-            if isinstance(statement,ast.Raise): return False,r32_raise_types(statement.exc,env)
-            if isinstance(statement,(ast.Return,ast.Break,ast.Continue)):
-                return False,r31_expr_flow(getattr(statement,"value",None))[1]
-            if isinstance(statement,ast.Assert):
-                known,value=r29_literal(statement.test)
-                if known: return (True,frozenset()) if bool(value) else (False,frozenset({"AssertionError"}))
-                return True,frozenset({"AssertionError","UNKNOWN"})
-            if isinstance(statement,ast.If):
-                known,value=r29_literal(statement.test)
-                branches=[statement.body] if known and value else [statement.orelse] if known else [statement.body,statement.orelse]
-                branch_envs=[dict(env) for branch in branches]
-                flows=[r30_block_flow(branch,branch_env) for branch,branch_env in zip(branches,branch_envs)]
-                for name in set().union(*(set(value) for value in branch_envs)):
-                    choices=[]
-                    for branch_env in branch_envs:
-                        value=branch_env.get(name,(frozenset({"UNKNOWN"}),))
-                        if isinstance(value,tuple): choices.extend(value)
-                    if choices: env[name]=tuple(dict.fromkeys(choices))
-                test_normal,test_raise=r31_expr_flow(statement.test)
-                return (test_normal and any(x[0] for x in flows),
-                        test_raise|frozenset().union(*(x[1] for x in flows)))
-            if isinstance(statement,AST_TRY_TYPES):
-                body_env=dict(env);body_normal,body_raises=r30_block_flow(statement.body,body_env)
-                normal=False;raises=frozenset()
-                if body_normal:
-                    else_normal,else_raise=r30_block_flow(statement.orelse,body_env)
-                    normal|=else_normal;raises|=else_raise
-                remaining=set(body_raises)
-                for handler in statement.handlers:
-                    alternatives=r32_handler_types(handler.type,body_env)
-                    possible={exc for exc in remaining if any(
-                        r32_may_match(exc,types) for types in alternatives)}
-                    if possible:
-                        type_normal,type_raises=((True,frozenset())
-                            if all("UNKNOWN" not in types for types in alternatives)
-                            else r31_expr_flow(handler.type))
-                        raises|=type_raises
-                        handler_normal,handler_raise=r30_block_flow(handler.body,dict(body_env))
-                        normal|=type_normal and handler_normal;raises|=handler_raise
-                        remaining={exc for exc in remaining
-                                   if not r32_definitely_caught(exc,alternatives)}
-                raises|=frozenset(remaining)
-                if statement.finalbody:
-                    final_normal,final_raise=r30_block_flow(statement.finalbody,dict(env))
-                    raises=final_raise | (raises if final_normal else frozenset())
-                    normal=final_normal and normal
-                return normal,raises
-            if isinstance(statement,(ast.FunctionDef,ast.AsyncFunctionDef)):
-                values=list(statement.decorator_list)+list(statement.args.defaults)+[
-                    x for x in statement.args.kw_defaults if x]
-                flows=[r31_expr_flow(value) for value in values]
-                return all(flow[0] for flow in flows),frozenset().union(
-                    *(flow[1] for flow in flows))
-            if isinstance(statement,ast.ClassDef): return True,frozenset({"UNKNOWN"})
-            if isinstance(statement,(ast.For,ast.AsyncFor,ast.While,ast.With,ast.AsyncWith)+( (AST_MATCH,) if isinstance(AST_MATCH,type) else () )):
-                return True,frozenset({"UNKNOWN"})
-            if isinstance(statement,(ast.Pass,ast.Global,ast.Nonlocal,ast.Import,ast.ImportFrom)):
-                return True,frozenset()
-            expressions=[child for child in ast.iter_child_nodes(statement)
-                         if isinstance(child,ast.expr)]
-            flows=[r31_expr_flow(child) for child in expressions]
-            return (all(flow[0] for flow in flows),frozenset().union(
-                *(flow[1] for flow in flows)))
-        def r35_join_envs(envs):
-            joined={}
-            for name in set().union(*(set(env) for env in envs)) if envs else set():
-                choices=[]
-                for env in envs:
-                    value=env.get(name,(frozenset({"UNKNOWN"}),))
-                    if isinstance(value,tuple): choices.extend(value)
-                joined[name]=tuple(dict.fromkeys(choices)) or (frozenset({"UNKNOWN"}),)
-            return joined
-        def r38_expr_flow(node,env):
-            if isinstance(node,ast.Name):
-                return (True,frozenset()) if node.id in env else (False,frozenset({"NameError"}))
-            return r31_expr_flow(node)
-        def r38_assignment_value(node,env):
-            if isinstance(node,(ast.Tuple,ast.List)):
-                return {"__sequence__":[r38_assignment_value(item,env) for item in node.elts],
-                        "__kind__":"tuple" if isinstance(node,ast.Tuple) else "list"}
-            if isinstance(node,ast.Constant): return {"__literal__":node.value}
-            if (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
-                    and isinstance(node.func.value,ast.Name)
-                    and node.func.value.id=="types" and node.func.attr=="SimpleNamespace"):
-                return {"__objref__":f"namespace:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}",
-                        "__initial_attrs__":{kw.arg:r38_assignment_value(kw.value,env)
-                                             for kw in node.keywords if kw.arg}}
-            value=r34_value(node,env)
-            if (isinstance(node,ast.Call) and isinstance(node.func,ast.Name)
-                    and isinstance(value,dict) and "__objref__" in value):
-                value={**value,"__objref__":value["__objref__"]+
-                    f":caller:{getattr(node,'lineno',0)}:{getattr(node,'col_offset',0)}"}
-            return value
-        def r39_store_flow(target,env,delete=False):
-            if isinstance(target,ast.Name):
-                if delete and target.id not in env: return False,frozenset({"NameError"})
-                return True,frozenset()
-            if isinstance(target,ast.Attribute):
-                base=r34_value(target.value,env)
-                if isinstance(base,dict) and "__objref__" in base:
-                    attrs=env.get("__heap__",{}).get(base["__objref__"],{})
-                    if delete and target.attr not in attrs:
-                        return False,frozenset({"AttributeError"})
-                    return True,frozenset()
-                return True,frozenset({"UNKNOWN"})
-            if isinstance(target,ast.Subscript):
-                base=r34_value(target.value,env);known,key=r29_literal(target.slice)
-                if isinstance(base,dict) and base.get("__kind__")=="tuple":
-                    return False,frozenset({"TypeError"})
-                if isinstance(base,dict) and base.get("__kind__")=="list" and known:
-                    size=len(base["__sequence__"])
-                    if isinstance(key,int) and -size<=key<size: return True,frozenset()
-                    return False,frozenset({"IndexError"})
-                if isinstance(base,dict) and "__kind__" not in base and known:
-                    try: hash(key)
-                    except TypeError: return False,frozenset({"TypeError"})
-                    if delete and key not in base: return False,frozenset({"KeyError"})
-                    return True,frozenset()
-                return True,frozenset({"UNKNOWN"})
-            if isinstance(target,(ast.Tuple,ast.List,ast.Starred)): return True,frozenset()
-            return True,frozenset({"UNKNOWN"})
-        def r36_target_flow(target,env):
-            if isinstance(target,ast.Name): return True,frozenset()
-            if isinstance(target,ast.Starred): return r36_target_flow(target.value,env)
-            if isinstance(target,(ast.Tuple,ast.List)):
-                flows=[r36_target_flow(item,env) for item in target.elts]
-                return all(flow[0] for flow in flows),frozenset().union(
-                    *(flow[1] for flow in flows))
-            if isinstance(target,ast.Attribute): return r38_expr_flow(target.value,env)
-            if isinstance(target,ast.Subscript):
-                base=r38_expr_flow(target.value,env);index=r38_expr_flow(target.slice,env)
-                return base[0] and index[0],base[1]|index[1]
-            return False,frozenset({"UNKNOWN"})
-        def r37_store_target(target,value,env):
-            normal,raises=r36_target_flow(target,env)
-            updated=dict(env)
-            if normal:
-                if isinstance(target,ast.Name): updated[target.id]=value
-                elif isinstance(target,ast.Attribute):
-                    base=r34_value(target.value,updated)
-                    if isinstance(base,dict) and "__objref__" in base:
-                        heap=dict(updated.get("__heap__",{}));attrs=dict(heap.get(base["__objref__"],{}))
-                        attrs[target.attr]=value;heap[base["__objref__"]]=attrs;updated["__heap__"]=heap
-                elif isinstance(target,ast.Starred):
-                    return r37_store_target(target.value,value,updated)
-                elif isinstance(target,(ast.Tuple,ast.List)):
-                    sequence=value.get("__sequence__") if isinstance(value,dict) else None
-                    stars=[i for i,item in enumerate(target.elts) if isinstance(item,ast.Starred)]
-                    if sequence is not None:
-                        minimum=len(target.elts)-len(stars)
-                        if len(stars)>1 or len(sequence)<minimum or (not stars and len(sequence)!=minimum):
-                            return updated,False,raises|frozenset({"ValueError"})
-                    else:
-                        raises=raises|frozenset({"ValueError"})
-                    for index,item in enumerate(target.elts):
-                        item_value=(frozenset({"UNKNOWN"}),)
-                        if sequence is not None:
-                            if isinstance(item,ast.Starred):
-                                suffix=len(target.elts)-index-1
-                                item_value={"__sequence__":sequence[index:len(sequence)-suffix]}
-                            elif stars and index>stars[0]:
-                                item_value=sequence[len(sequence)-(len(target.elts)-index)]
-                            else: item_value=sequence[index]
-                        updated,item_normal,item_raises=r37_store_target(item,item_value,updated)
-                        raises=raises|item_raises
-                        if not item_normal: return updated,False,raises
-            if normal:
-                store_normal,store_raises=r39_store_flow(target,updated)
-                normal=normal and store_normal;raises=raises|store_raises
-            return updated,normal,raises
-        def r35_block_states(statements,normal_envs):
-            normals=[dict(env) for env in normal_envs];exceptions=[]
-            for statement in statements:
-                next_normals=[]
-                for env in normals:
-                    if isinstance(statement,(ast.Assign,ast.AnnAssign)):
-                        value=r38_assignment_value(statement.value,env)
-                        if isinstance(value,dict) and "__objref__" in value:
-                            heap=dict(env.get("__heap__",{}));heap[value["__objref__"]]=dict(value.pop("__initial_attrs__",{}))
-                            env={**env,"__heap__":heap}
-                        targets=statement.targets if isinstance(statement,ast.Assign) else [statement.target]
-                        expr_normal,expr_raises=r31_expr_flow(statement.value)
-                        exceptions.extend((exc,dict(env)) for exc in expr_raises)
-                        target_normal=expr_normal;updated=dict(env)
-                        if expr_normal:
-                            for target in targets:
-                                next_env,one_normal,one_raises=r37_store_target(target,value,updated)
-                                exceptions.extend((exc,dict(updated)) for exc in one_raises)
-                                target_normal=target_normal and one_normal
-                                if not one_normal: break
-                                updated=next_env
-                        if target_normal: next_normals.append(updated)
-                    elif isinstance(statement,ast.AugAssign):
-                        # Python resolves and loads the target before evaluating RHS.
-                        target_normal,target_raises=r36_target_flow(statement.target,env)
-                        exceptions.extend((exc,dict(env)) for exc in target_raises)
-                        value_normal,value_raises=r31_expr_flow(statement.value)
-                        if target_normal:
-                            exceptions.extend((exc,dict(env)) for exc in value_raises)
-                        if target_normal and value_normal:
-                            op_normal=True;op_raises=frozenset({"UNKNOWN"})
-                            old=r34_value(statement.target,env)
-                            rhs=r38_assignment_value(statement.value,env)
-                            if isinstance(old,dict) and "__literal__" in old and isinstance(rhs,dict) and "__literal__" in rhs:
-                                try:
-                                    expression=ast.Expression(ast.BinOp(ast.Constant(old["__literal__"]),statement.op,ast.Constant(rhs["__literal__"])))
-                                    eval(compile(ast.fix_missing_locations(expression),"<r39-op>","eval"),{"__builtins__":{}},{})
-                                    op_raises=frozenset()
-                                except Exception as error:
-                                    op_normal=False;op_raises=frozenset({type(error).__name__})
-                            exceptions.extend((exc,dict(env)) for exc in op_raises)
-                            if not op_normal: continue
-                            updated,store_normal,store_raises=r37_store_target(
-                                statement.target,(frozenset({"UNKNOWN"}),),dict(env))
-                            exceptions.extend((exc,dict(env)) for exc in store_raises)
-                            if store_normal: next_normals.append(updated)
-                    elif isinstance(statement,ast.Delete):
-                        target_normal=True
-                        for target in statement.targets:
-                            one_normal,one_raises=r36_target_flow(target,env)
-                            if one_normal:
-                                store_normal,store_raises=r39_store_flow(target,env,delete=True)
-                                one_normal=one_normal and store_normal;one_raises=one_raises|store_raises
-                            exceptions.extend((exc,dict(env)) for exc in one_raises)
-                            target_normal=target_normal and one_normal
-                            if one_normal and isinstance(target,ast.Name): env.pop(target.id,None)
-                            if one_normal and isinstance(target,ast.Attribute):
-                                base=r34_value(target.value,env)
-                                if isinstance(base,dict) and "__objref__" in base:
-                                    heap=dict(env.get("__heap__",{}));attrs=dict(heap.get(base["__objref__"],{}))
-                                    attrs.pop(target.attr,None);heap[base["__objref__"]]=attrs;env["__heap__"]=heap
-                        if target_normal: next_normals.append(dict(env))
-                    elif isinstance(statement,ast.Expr):
-                        expr_normal,expr_raises=r38_expr_flow(statement.value,env)
-                        exceptions.extend((exc,dict(env)) for exc in expr_raises)
-                        if expr_normal: next_normals.append(dict(env))
-                    elif isinstance(statement,ast.Raise):
-                        exceptions.extend((exc,dict(env)) for exc in r32_raise_types(statement.exc,env))
-                    elif isinstance(statement,(ast.Return,ast.Break,ast.Continue)):
-                        exceptions.extend((exc,dict(env)) for exc in
-                                          r31_expr_flow(getattr(statement,"value",None))[1])
-                    elif isinstance(statement,ast.If):
-                        known,value=r29_literal(statement.test)
-                        branches=[statement.body] if known and value else [statement.orelse] if known else [statement.body,statement.orelse]
-                        for branch in branches:
-                            branch_normals,branch_exceptions=r35_block_states(branch,[dict(env)])
-                            next_normals.extend(branch_normals);exceptions.extend(branch_exceptions)
-                        exceptions.extend((exc,dict(env)) for exc in r31_expr_flow(statement.test)[1])
-                    elif isinstance(statement,AST_TRY_TYPES):
-                        r44d_trace["try"]+=1
-                        body_normals,body_exceptions=r35_block_states(statement.body,[dict(env)])
-                        try_normals=[];try_exceptions=[]
-                        for body_env in body_normals:
-                            else_normals,else_exceptions=r35_block_states(statement.orelse,[body_env])
-                            try_normals.extend(else_normals);try_exceptions.extend(else_exceptions)
-                        remaining=list(body_exceptions)
-                        for handler in statement.handlers:
-                            still=[]
-                            for exc,exc_env in remaining:
-                                alternatives=r32_handler_types(handler.type,exc_env)
-                                if any(r32_may_match(exc,types) for types in alternatives):
-                                    handler_normals,handler_exceptions=r35_block_states(handler.body,[dict(exc_env)])
-                                    try_normals.extend(handler_normals);try_exceptions.extend(handler_exceptions)
-                                if not r32_definitely_caught(exc,alternatives): still.append((exc,exc_env))
-                            remaining=still
-                        try_exceptions.extend(remaining)
-                        if statement.finalbody:
-                            final_normals=[];final_exceptions=[]
-                            for prior_env in try_normals:
-                                out_normals,out_exceptions=r35_block_states(statement.finalbody,[prior_env])
-                                final_normals.extend(out_normals);final_exceptions.extend(out_exceptions)
-                            for exc,prior_env in try_exceptions:
-                                out_normals,out_exceptions=r35_block_states(statement.finalbody,[prior_env])
-                                final_exceptions.extend(out_exceptions)
-                                final_exceptions.extend((exc,out_env) for out_env in out_normals)
-                            try_normals,try_exceptions=final_normals,final_exceptions
-                        next_normals.extend(try_normals);exceptions.extend(try_exceptions)
-                    else:
-                        stmt_normal,stmt_raises=r30_stmt_flow(statement,dict(env))
-                        if stmt_normal: next_normals.append(dict(env))
-                        exceptions.extend((exc,dict(env)) for exc in stmt_raises)
-                normals=next_normals
-                if not normals: break
-            return normals,exceptions
-        def r30_block_flow(statements,env=None):
-            if env is None: env=r34_initial_env()
-            normals,exceptions=r35_block_states(statements,[env])
-            if normals:
-                env.clear();env.update(r35_join_envs(normals))
-            return bool(normals),frozenset(exc for exc,_ in exceptions)
-        def runtime_walk_function(fn):
-            def walk(node,root=False):
-                yield node
-                if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef,ast.Lambda)) and not root:
-                    args=node.args
-                    for value in list(args.defaults)+[x for x in args.kw_defaults if x]:
-                        yield from walk(value)
-                    annotations=[arg.annotation for arg in
-                        list(args.posonlyargs)+list(args.args)+list(args.kwonlyargs)
-                        if arg.annotation]
-                    if args.vararg and args.vararg.annotation: annotations.append(args.vararg.annotation)
-                    if args.kwarg and args.kwarg.annotation: annotations.append(args.kwarg.annotation)
-                    if getattr(node,"returns",None): annotations.append(node.returns)
-                    for value in list(getattr(node,"decorator_list",[]))+annotations:
-                        yield from walk(value)
-                    return
-                if isinstance(node,ast.ClassDef):
-                    for value in list(node.decorator_list)+list(node.bases)+[
-                            kw.value for kw in node.keywords]: yield from walk(value)
-                    for statement in node.body: yield from walk(statement)
-                    return
-                if isinstance(node,AST_MATCH):
-                    yield from walk(node.subject)
-                    for case,may_match in r29_cases(node):
-                        yield from walk(case.pattern)
-                        if may_match and case.guard is not None: yield from walk(case.guard)
-                        guard_known,guard_value=r29_literal(case.guard) if case.guard else (True,True)
-                        if may_match and not (guard_known and guard_value is False):
-                            for statement in case.body: yield from walk(statement)
-                    return
-                if isinstance(node,AST_TRY_TYPES):
-                    r44d_trace["try"]+=1
-                    for statement in node.body: yield from walk(statement)
-                    point_env=r34_initial_env()
-                    for prior in fn.body:
-                        if prior is node: break
-                        if isinstance(prior,(ast.Assign,ast.AnnAssign)):
-                            targets=prior.targets if isinstance(prior,ast.Assign) else [prior.target]
-                            value=r34_value(prior.value,point_env)
-                            for target in targets:
-                                if isinstance(target,ast.Name): point_env[target.id]=value
-                    normal_states,exception_states=r35_block_states(node.body,[dict(point_env)])
-                    if normal_states:
-                        for statement in node.orelse: yield from walk(statement)
-                    if exception_states:
-                        remaining=list(exception_states)
-                        for handler in node.handlers:
-                            possible=[];still=[]
-                            for exc,exc_env in remaining:
-                                alternatives=r32_handler_types(handler.type,exc_env)
-                                if any(r32_may_match(exc,types) for types in alternatives):
-                                    possible.append((exc,exc_env))
-                                if not r32_definitely_caught(exc,alternatives):
-                                    still.append((exc,exc_env))
-                            if possible: yield from walk(handler)
-                            remaining=still
-                    for statement in node.finalbody: yield from walk(statement)
-                    return
-                for child in ast.iter_child_nodes(node): yield from walk(child)
-            for statement in fn.body: yield from walk(statement,root=False)
-
-        consume_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
-                         and node.name == "_consume_private_result"]
-        exact_consumer_args = ["sink_fd", "canonical_destination", "invocation_id", "run_id", "role"]
-        consumer_calls = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Call)
-                          and isinstance(node.func, ast.Name)
-                          and node.func.id == "_consume_private_result"]
-        run_codex_nodes = [node for node in candidate_tree.body if isinstance(node, ast.FunctionDef)
-                           and node.name == "run_codex"]
-        timeout_assignments = [node for node in candidate_tree.body if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "CODEX_RUN_TIMEOUT_SECONDS"
+    def kernel_structure_inventory(tree, raw_text):
+        expected_args=["sink_fd","canonical_destination","invocation_id","run_id","role"]
+        consumers=[node for node in tree.body if isinstance(node,ast.FunctionDef)
+                   and node.name=="consume_private_result"]
+        exports=[node for node in tree.body if isinstance(node,ast.Assign)
+                 and len(node.targets)==1 and isinstance(node.targets[0],ast.Name)
+                 and node.targets[0].id=="__all__"]
+        export_ok=(len(exports)==1 and isinstance(exports[0].value,(ast.List,ast.Tuple))
+                   and [item.value for item in exports[0].value.elts
+                        if isinstance(item,ast.Constant)]==["consume_private_result"])
+        allowed_modules={"hashlib","json","os","stat","tempfile","pathlib","typing"}
+        imports=[];imports_ok=True
+        for node in tree.body:
+            if isinstance(node,ast.Import):
+                imports.extend(alias.name for alias in node.names)
+                imports_ok &= all(alias.name in allowed_modules and alias.asname is None
+                                  for alias in node.names)
+            elif isinstance(node,ast.ImportFrom):
+                imports.append(node.module or "")
+                imports_ok &= (node.level==0 and node.module in {"pathlib","typing"}
+                               and all(alias.asname is None for alias in node.names))
+        forbidden_names={"eval","exec","compile","__import__","globals","locals","vars",
+                         "getattr","setattr","delattr","subprocess","socket","urllib","http",
+                         "importlib","requests","git"}
+        forbidden_attrs={"environ","getenv","system","popen","fork","forkpty","posix_spawn",
+                         "execv","execve","spawnv","spawnve","__dict__","__globals__"}
+        forbidden_use=any(
+            (isinstance(node,ast.Name) and node.id in forbidden_names)
+            or (isinstance(node,ast.Attribute) and node.attr in forbidden_attrs)
+            or isinstance(node,(ast.Global,ast.Nonlocal,ast.ClassDef))
+            for node in ast.walk(tree))
+        def immutable_literal(node):
+            return (isinstance(node,ast.Constant)
+                or (isinstance(node,ast.Tuple) and all(immutable_literal(item) for item in node.elts)))
+        module_shape=True
+        for node in tree.body:
+            if isinstance(node,(ast.Import,ast.ImportFrom,ast.FunctionDef)): continue
+            if isinstance(node,ast.Assign):
+                names=[target.id for target in node.targets if isinstance(target,ast.Name)]
+                module_shape &= (len(names)==len(node.targets)
+                                 and all(name=="__all__" or name.isupper() for name in names)
+                                 and (names==["__all__"] or immutable_literal(node.value)))
+                continue
+            if isinstance(node,ast.Expr) and isinstance(node.value,ast.Constant) \
+                    and isinstance(node.value.value,str): continue
+            module_shape=False
+        consumer_ok=(len(consumers)==1 and not consumers[0].decorator_list
+            and not consumers[0].args.posonlyargs and not consumers[0].args.kwonlyargs
+            and consumers[0].args.vararg is None and consumers[0].args.kwarg is None
+            and not consumers[0].args.defaults and not consumers[0].args.kw_defaults
+            and [arg.arg for arg in consumers[0].args.args]==expected_args)
+        max_assign=[node for node in tree.body if isinstance(node,ast.Assign)
+            and any(isinstance(target,ast.Name) and target.id=="MAX_RESULT_BYTES"
                     for target in node.targets)]
-        timeout_loads = [node for node in ast.walk(candidate_tree) if isinstance(node, ast.Name)
-                         and isinstance(node.ctx, ast.Load)
-                         and node.id == "CODEX_RUN_TIMEOUT_SECONDS"]
-        consumer_architecture_ok = False
-        if len(consume_nodes) == 1 and len(run_codex_nodes) == 1:
-            consumer = consume_nodes[0]
-            loaded_globals = {node.id for node in runtime_walk_function(consumer)
-                              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
-            tainted = {name for name in loaded_globals
-                       if any(token in name.casefold() for token in
-                              ("provider", "host", "authority", "fixture"))}
-            run_calls = [node for node in runtime_walk_function(run_codex_nodes[0]) if isinstance(node, ast.Call)
-                         and isinstance(node.func, ast.Name)
-                         and node.func.id == "_consume_private_result"]
-            function_nodes=[node for node in ast.walk(candidate_tree)
-                            if isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))]
-            top_functions={node.name:node for node in function_nodes
-                           if sum(1 for other in function_nodes if other.name==node.name)==1}
-            pure_names = {"len","min","max","isinstance","type","bytes","bytearray",
-                          "memoryview","range","enumerate","all","any","bool","str","int"}
-            pure_attrs = {("os","fstat"),("os","read"),("os","pread"),("os","readv"),
-                          ("os","preadv"),("os","fdopen"),("os","dup"),("os","close"),
-                      ("os","fsync"),("os","open"),("os","replace"),
-                      ("os","lseek"),("os","readlink"),
-                      ("io","FileIO"),("io","BytesIO"),("mmap","mmap"),("hashlib","sha256"),
-                      ("io","BufferedReader"),("json","loads"),
-                      ("stat","S_ISREG"),("stat","S_IMODE")}
-            capability_methods = {"read","readinto","read1","readinto1","readall",
-                                  "seek","tell","fileno","close","flush","decode","get"}
-            forbidden_dynamic = {"globals","locals","vars","getattr","setattr","eval","exec",
-                                 "compile","__import__","import_module","open"}
-            graph_nodes=[];graph_ok=True;pending=[consumer.name];seen=set()
-            while pending:
-                name=pending.pop()
-                if name in seen: continue
-                seen.add(name);node=top_functions.get(name)
-                if node is None: graph_ok=False;continue
-                graph_nodes.append(node)
-                for call in (item for item in runtime_walk_function(node) if isinstance(item,ast.Call)):
-                    if isinstance(call.func,ast.Name):
-                        called=call.func.id
-                        if called in top_functions: pending.append(called)
-                        elif called not in pure_names: graph_ok=False
-                        if called in forbidden_dynamic: graph_ok=False
-                    elif isinstance(call.func,ast.Attribute) and isinstance(call.func.value,ast.Name):
-                        if ((call.func.value.id,call.func.attr) not in pure_attrs
-                                and call.func.attr not in capability_methods): graph_ok=False
-                    else: graph_ok=False
-            graph_loaded={item.id for node in graph_nodes for item in runtime_walk_function(node)
-                          if isinstance(item,ast.Name) and isinstance(item.ctx,ast.Load)}
-            graph_tainted={name for name in graph_loaded if any(token in name.casefold()
-                           for token in ("provider","host","authority","fixture"))}
-            helper_identities=set(seen)|{"_consume_private_result"}
-            rebound=[]
-            for node in graph_nodes:
-                for item in runtime_walk_function(node):
-                    if isinstance(item,(ast.Import,ast.ImportFrom,ast.ClassDef,ast.Global,ast.Nonlocal)):
-                        rebound.append(type(item).__name__)
-                    if isinstance(item,ast.NamedExpr): rebound.append("NamedExpr")
-                    if isinstance(item,ast.ExceptHandler) and item.name: rebound.append("ExceptName")
-                    if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del)) \
-                            and item.id in set(exact_consumer_args)|{"_consume_private_result"}:
-                        rebound.append(item.id)
-                    if isinstance(item,ast.Subscript) and isinstance(item.ctx,ast.Store):
-                        rebound.append("SubscriptStore")
-                    if isinstance(item,ast.Call) and isinstance(item.func,ast.Name) \
-                            and item.func.id=="setattr": rebound.append("setattr")
-            for item in ast.walk(candidate_tree):
-                if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del)) \
-                        and item.id in helper_identities:
-                    rebound.append("module-binding:"+item.id)
-                if isinstance(item,(ast.Import,ast.ImportFrom)):
-                    for alias in item.names:
-                        if (alias.asname or alias.name.split(".")[0]) in helper_identities:
-                            rebound.append("import-binding")
-                if isinstance(item,ast.ClassDef) and item.name in helper_identities:
-                    rebound.append("class-binding")
-            helper_loads=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Name)
-                          and isinstance(item.ctx,ast.Load) and item.id in helper_identities]
-            helper_direct=all(isinstance(getattr(item,"_r15_parent",None),ast.Call)
-                              and getattr(item,"_r15_parent").func is item for item in helper_loads)
-            seam_loads=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Name)
-                        and isinstance(item.ctx,ast.Load) and item.id=="_consume_private_result"]
-            exact_call_args=(len(run_calls)==1 and not run_calls[0].keywords
-                             and [arg.id for arg in run_calls[0].args if isinstance(arg,ast.Name)]
-                                 == exact_consumer_args
-                             and len(run_calls[0].args)==len(exact_consumer_args))
-            provenance_values={}
-            for item in ast.walk(run_codex_nodes[0]):
-                if isinstance(item,(ast.Assign,ast.AnnAssign)):
-                    targets=item.targets if isinstance(item,ast.Assign) else [item.target]
-                    for target in targets:
-                        if isinstance(target,ast.Name) and target.id in exact_consumer_args:
-                            provenance_values.setdefault(target.id,[]).append(item.value)
-            sink_values=provenance_values.get("sink_fd",[])
-            sink_nofollow=(len(sink_values)==1 and isinstance(sink_values[0],ast.Call)
-                           and any(isinstance(item,ast.Attribute) and item.attr=="O_NOFOLLOW"
-                                   for item in ast.walk(sink_values[0])))
-            binding_provenance=(sink_nofollow
-                and len(provenance_values.get("canonical_destination",[]))==1
-                and not isinstance(provenance_values["canonical_destination"][0],ast.Constant)
-                and len(provenance_values.get("invocation_id",[]))==1
-                and not isinstance(provenance_values["invocation_id"][0],ast.Constant)
-                and len(provenance_values.get("run_id",[]))==1
-                and not isinstance(provenance_values["run_id"][0],ast.Constant)
-                and "role" in [arg.arg for arg in run_codex_nodes[0].args.args])
-            parent_map={child:parent for parent in ast.walk(candidate_tree)
-                        for child in ast.iter_child_nodes(parent)}
-            # R45 rig-only narrow types vocabulary.  The module is never a
-            # capability: only one exact unaliased import and direct constructor
-            # calls are admissible; every other load/store/escape rejects.
-            r44d_trace["types"]+=1
-            type_imports=[node for node in ast.walk(candidate_tree)
-                if isinstance(node,(ast.Import,ast.ImportFrom))
-                and ((isinstance(node,ast.Import) and any(alias.name=="types"
-                    for alias in node.names)) or
-                    (isinstance(node,ast.ImportFrom) and node.module=="types"))]
-            exact_types_import=(len(type_imports)==1 and isinstance(type_imports[0],ast.Import)
-                and len(type_imports[0].names)==1
-                and type_imports[0].names[0].name=="types"
-                and type_imports[0].names[0].asname is None)
-            types_uses=[];types_invalid=[]
-            for node in ast.walk(candidate_tree):
-                if isinstance(node,ast.Name) and node.id=="types" and isinstance(node.ctx,ast.Load):
-                    attribute=parent_map.get(node);call=parent_map.get(attribute)
-                    direct=(isinstance(attribute,ast.Attribute) and attribute.value is node
-                        and attribute.attr=="SimpleNamespace" and isinstance(call,ast.Call)
-                        and call.func is attribute)
-                    types_uses.append((getattr(node,"lineno",-1),direct))
-                    if not direct: types_invalid.append("load_escape")
-                if isinstance(node,(ast.Attribute,ast.Subscript)):
-                    root=node.value
-                    if isinstance(root,ast.Name) and root.id=="types":
-                        if isinstance(getattr(node,"ctx",None),(ast.Store,ast.Del)):
-                            types_invalid.append("module_mutation")
-                        if isinstance(node,ast.Attribute) and node.attr!="SimpleNamespace":
-                            types_invalid.append("other_api")
-                if isinstance(node,ast.Call) and isinstance(node.func,ast.Name) \
-                        and node.func.id in {"__import__","getattr","setattr","delattr"}:
-                    if any(isinstance(part,ast.Constant) and part.value=="types"
-                           for part in ast.walk(node)) or any(isinstance(part,ast.Name)
-                           and part.id=="types" for part in ast.walk(node)):
-                        types_invalid.append("dynamic_or_reflective")
-            types_ok=exact_types_import and bool(types_uses) and not types_invalid
-            r45_facts["types"]={"exact_import":exact_types_import,
-                "direct_constructor_loads":tuple(types_uses),
-                "invalid_uses":tuple(types_invalid),"verified":types_ok}
-            r44d_components["types"]=types_ok
+        max_ok=(len(max_assign)==1 and isinstance(max_assign[0].value,ast.Constant)
+                and type(max_assign[0].value.value) is int
+                and max_assign[0].value.value==4194304)
+        identity_words={"provider","authority","fixture","session","thread"}
+        hidden_identity=any(isinstance(node,ast.Name)
+            and any(word in node.id.casefold() for word in identity_words)
+            for node in ast.walk(tree))
+        attribute_write=any(isinstance(node,ast.Attribute)
+            and isinstance(node.ctx,(ast.Store,ast.Del)) for node in ast.walk(tree))
+        return (consumer_ok and export_ok and imports_ok and module_shape and max_ok
+                and not forbidden_use and not hidden_identity and not attribute_write), {
+            "consumer":consumer_ok,"export":export_ok,"imports":tuple(imports),
+            "imports_ok":imports_ok,"module_shape":module_shape,"max":max_ok,
+            "forbidden":forbidden_use,"hidden_identity":hidden_identity,
+            "attribute_write":attribute_write}
 
-            # Semantic allocation graph: constructor helpers are discovered from
-            # their returned effect, never from fixture/helper/local spelling.
-            r44d_trace["allocation"]+=1
-            functions={node.name:node for node in candidate_tree.body
-                       if isinstance(node,ast.FunctionDef)}
-            def direct_namespace(call):
-                return (isinstance(call,ast.Call) and isinstance(call.func,ast.Attribute)
-                    and isinstance(call.func.value,ast.Name) and call.func.value.id=="types"
-                    and call.func.attr=="SimpleNamespace")
-            constructors={name for name,fn in functions.items()
-                if any(isinstance(node,ast.Return) and direct_namespace(node.value)
-                       for node in ast.walk(fn))}
-            def allocation_call(node):
-                return (direct_namespace(node) or (isinstance(node,ast.Call)
-                    and isinstance(node.func,ast.Name) and node.func.id in constructors))
-            def under_repetition(node,root):
-                ancestor=parent_map.get(node)
-                while ancestor is not None and ancestor is not root:
-                    if isinstance(ancestor,(ast.For,ast.AsyncFor,ast.While,
-                                            ast.ListComp,ast.SetComp,ast.DictComp,
-                                            ast.GeneratorExp,ast.comprehension)):
-                        return True
-                    ancestor=parent_map.get(ancestor)
-                return False
-            def statically_unreachable(node,root):
-                ancestor=parent_map.get(node)
-                while ancestor is not None and ancestor is not root:
-                    if isinstance(ancestor,(ast.ListComp,ast.SetComp,ast.DictComp,
-                                            ast.GeneratorExp)) and any(
-                            isinstance(condition,ast.Constant) and condition.value is False
-                            for generator in ancestor.generators for condition in generator.ifs):
-                        return True
-                    if isinstance(ancestor,(ast.ListComp,ast.SetComp,ast.DictComp,
-                                            ast.GeneratorExp)) and any(
-                            isinstance(generator.iter,(ast.Tuple,ast.List,ast.Set))
-                            and not generator.iter.elts for generator in ancestor.generators):
-                        return True
-                    if isinstance(ancestor,ast.comprehension) and any(
-                            isinstance(condition,ast.Constant) and condition.value is False
-                            for condition in ancestor.ifs): return True
-                    if isinstance(ancestor,ast.If) and isinstance(ancestor.test,ast.Constant) \
-                            and ancestor.test.value is False and node in set(ast.walk(ancestor)):
-                        return True
-                    ancestor=parent_map.get(ancestor)
-                return False
-            semantic_candidates=[]
-            for fn in functions.values():
-                calls=[node for node in ast.walk(fn) if allocation_call(node)
-                       and not statically_unreachable(node,fn)]
-                comprehensions=[node for node in ast.walk(fn)
-                    if isinstance(node,(ast.ListComp,ast.SetComp,ast.DictComp,ast.GeneratorExp))
-                    and any(allocation_call(part) for part in ast.walk(node))]
-                if len(calls)>=3 and comprehensions:
-                    semantic_candidates.append(fn)
-            allocation_tokens=[];summary_states=[];alias_relations=[];distinct_relations=[]
-            comprehension_steps=[];may_handler_routes=[];recursion_widened=False
-            allocation_ordinal=0
-            def is_object(value): return isinstance(value,tuple) and value[:1]==("OBJECT",)
-            def is_summary(value): return isinstance(value,tuple) and value[:1]==("SUMMARY",)
-            def is_collection(value): return isinstance(value,tuple) and value[:1]==("COLLECTION",)
-            unknown_value=("UNKNOWN",)
-            def make_allocation(call,repeated):
-                nonlocal allocation_ordinal
-                allocation_ordinal+=1
-                token=(("SUMMARY","MAY_ALIAS",getattr(call,"lineno",-1),
-                        getattr(call,"col_offset",-1)) if repeated else
-                       ("OBJECT",getattr(call,"lineno",-1),
-                        getattr(call,"col_offset",-1),allocation_ordinal))
-                allocation_tokens.append(token)
-                if repeated: summary_states.append(("MAY_PRESENT","MAY_ABSENT"))
-                return frozenset({token})
-            def bind_allocation_target(target,values,env):
-                if isinstance(target,ast.Name): env[target.id]=values;return True
-                if isinstance(target,(ast.Tuple,ast.List)):
-                    parts=next((value[1] for value in values if is_collection(value)),())
-                    if len(parts)!=len(target.elts): return False
-                    return all(bind_allocation_target(item,frozenset({parts[index]}),env)
-                               for index,item in enumerate(target.elts))
-                return False
-            def allocation_expr(node,env,repeated=False):
-                if allocation_call(node): return make_allocation(node,repeated)
-                if isinstance(node,ast.Name): return env.get(node.id,frozenset({unknown_value}))
-                if isinstance(node,ast.Constant): return frozenset({("CONST",node.value)})
-                if isinstance(node,(ast.Tuple,ast.List,ast.Set)):
-                    parts=[]
-                    for item in node.elts: parts.extend(allocation_expr(item,env,repeated))
-                    return frozenset({("COLLECTION",tuple(parts))})
-                if isinstance(node,(ast.ListComp,ast.SetComp,ast.GeneratorExp,ast.DictComp)):
-                    local=dict(env);possible=True;steps=[]
-                    for generator in node.generators:
-                        iter_values=allocation_expr(generator.iter,local,repeated)
-                        literal_empty=(isinstance(generator.iter,(ast.Tuple,ast.List,ast.Set))
-                                       and not generator.iter.elts)
-                        target_bound=bind_allocation_target(
-                            generator.target,frozenset({unknown_value}),local)
-                        filter_values=[]
-                        for condition in generator.ifs:
-                            allocation_expr(condition,local,repeated)
-                            truth=(condition.value if isinstance(condition,ast.Constant)
-                                   and isinstance(condition.value,bool) else None)
-                            filter_values.append(truth)
-                            if truth is False: possible=False
-                        if literal_empty: possible=False
-                        steps.append((type(generator.target).__name__,
-                            tuple(sorted(map(repr,iter_values))),tuple(filter_values),target_bound))
-                    produced=frozenset()
-                    if possible:
-                        if isinstance(node,ast.DictComp):
-                            produced=allocation_expr(node.key,local,True) \
-                                | allocation_expr(node.value,local,True)
-                        else: produced=allocation_expr(node.elt,local,True)
-                    comprehension_steps.append((tuple(steps),possible,
-                        tuple(sorted(map(repr,produced)))))
-                    return frozenset({("COLLECTION",tuple(produced))})
-                if isinstance(node,ast.Subscript):
-                    base=allocation_expr(node.value,env,repeated);items=[]
-                    for value in base:
-                        if is_collection(value): items.extend(value[1])
-                    return frozenset(items or {unknown_value})
-                if isinstance(node,ast.Attribute):
-                    base=allocation_expr(node.value,env,repeated)
-                    return (frozenset({("MAY_ATTRIBUTE",node.attr)})
-                            if any(is_summary(value) for value in base)
-                            else frozenset({unknown_value}))
-                return frozenset({unknown_value})
-            def allocation_statements(statements,env):
-                for statement in statements:
-                    if isinstance(statement,ast.Assign):
-                        values=allocation_expr(statement.value,env)
-                        for target in statement.targets:
-                            before=set().union(*(set(value) for value in env.values())) if env else set()
-                            if isinstance(target,ast.Name) and isinstance(statement.value,ast.Name) \
-                                    and any(is_object(value) for value in values & before):
-                                alias_relations.extend(value for value in values if is_object(value))
-                            bind_allocation_target(target,values,env)
-                    elif isinstance(statement,ast.Try):
-                        possible_missing=False
-                        for body_statement in statement.body:
-                            if isinstance(body_statement,ast.Expr) \
-                                    and isinstance(body_statement.value,ast.Attribute):
-                                values=allocation_expr(body_statement.value.value,env)
-                                possible_missing=any(is_summary(value) for value in values)
-                            else: allocation_statements([body_statement],env)
-                        if possible_missing:
-                            for handler in statement.handlers:
-                                handles_attribute=(isinstance(handler.type,ast.Name)
-                                                   and handler.type.id=="AttributeError")
-                                effect=any(isinstance(call,ast.Call)
-                                    and isinstance(call.func,ast.Attribute)
-                                    and isinstance(call.func.value,ast.Name)
-                                    and (call.func.value.id,call.func.attr)==("subprocess","Popen")
-                                    for call in ast.walk(handler))
-                                if handles_attribute: may_handler_routes.append((True,effect))
-                    elif isinstance(statement,ast.Expr): allocation_expr(statement.value,env)
-            for fn in semantic_candidates:
-                env={arg.arg:frozenset({unknown_value}) for arg in fn.args.args}
-                allocation_statements(fn.body,env)
-                concrete=sorted({value for values in env.values() for value in values
-                                 if is_object(value)},key=repr)
-                distinct_relations.extend((left,right) for index,left in enumerate(concrete)
-                                          for right in concrete[index+1:])
-            for name,fn in functions.items():
-                self_calls=[node for node in ast.walk(fn) if isinstance(node,ast.Call)
-                            and isinstance(node.func,ast.Name) and node.func.id==name
-                            and not statically_unreachable(node,fn)]
-                alloc_statements=[statement for statement in fn.body
-                    if any(allocation_call(node) for node in ast.walk(statement))]
-                recursive_statements=[statement for statement in fn.body
-                    if any(node in self_calls for node in ast.walk(statement))]
-                if self_calls and alloc_statements and recursive_statements:
-                    alloc_index=min(fn.body.index(statement) for statement in alloc_statements)
-                    recurse_index=min(fn.body.index(statement) for statement in recursive_statements)
-                    if alloc_index<=recurse_index:
-                        # Two bounded frames prove allocation is per invocation;
-                        # deeper executions widen to a summary object.
-                        frame_refs=(('FRAME',getattr(fn,'lineno',-1),0),
-                                    ('FRAME',getattr(fn,'lineno',-1),1),
-                                    ('SUMMARY','RECURSIVE',getattr(fn,'lineno',-1),2))
-                        allocation_tokens.extend(frame_refs);recursion_widened=True
-                        summary_states.append(("MAY_PRESENT","MAY_ABSENT"))
-            alias_pair=bool(alias_relations)
-            distinct_pair=bool(distinct_relations)
-            may_propagated=bool(may_handler_routes) and all(route[0] for route in may_handler_routes)
-            unsafe_effect=any(effect for _reachable,effect in may_handler_routes)
-            allocation_ok=(bool(semantic_candidates) and alias_pair and distinct_pair
-                and bool(summary_states) and recursion_widened and may_propagated
-                and bool(comprehension_steps) and not unsafe_effect)
-            r45_facts["allocation"]={"object_ids":tuple(sorted(set(allocation_tokens))),
-                "alias_relations":len(alias_relations),
-                "distinct_relations":len(distinct_relations),
-                "summary_states":tuple(summary_states),
-                "comprehension_steps":tuple(comprehension_steps),
-                "handler_routes":tuple(may_handler_routes),
-                "recursion_widened":recursion_widened,"verified":allocation_ok}
-            r44d_components["allocation"]=allocation_ok
-            helper_direct=all(isinstance(parent_map.get(item),ast.Call)
-                              and parent_map[item].func is item for item in helper_loads)
-            all_popen_sites=[item for item in ast.walk(candidate_tree) if isinstance(item,ast.Call)
-                and isinstance(item.func,ast.Attribute) and isinstance(item.func.value,ast.Name)
-                and (item.func.value.id,item.func.attr)==("subprocess","Popen")]
-            popen_assignments=[]
-            for item in ast.walk(run_codex_nodes[0]):
-                if isinstance(item,ast.Assign) and isinstance(item.value,ast.Call) \
-                        and isinstance(item.value.func,ast.Attribute) \
-                        and isinstance(item.value.func.value,ast.Name) \
-                        and (item.value.func.value.id,item.value.func.attr)==("subprocess","Popen"):
-                    names=[target.id for target in item.targets if isinstance(target,ast.Name)]
-                    popen_assignments.extend(names)
-            timeout_calls=[]
-            for item in ast.walk(run_codex_nodes[0]):
-                if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute) \
-                        and isinstance(item.func.value,ast.Name) \
-                        and item.func.value.id in popen_assignments \
-                        and item.func.attr in {"wait","communicate"}:
-                    kws=[kw for kw in item.keywords if kw.arg=="timeout"
-                         and isinstance(kw.value,ast.Name)
-                         and kw.value.id=="CODEX_RUN_TIMEOUT_SECONDS"]
-                    if len(kws)==1: timeout_calls.append(item)
-            popen_reassign=[item for item in ast.walk(run_codex_nodes[0])
-                            if isinstance(item,ast.Name) and isinstance(item.ctx,(ast.Store,ast.Del))
-                            and item.id in popen_assignments]
-            successful_returns=[item for item in ast.walk(run_codex_nodes[0])
-                                if isinstance(item,ast.Return)]
-            timeout_dominates=(len(timeout_calls)==1 and all(
-                timeout_calls[0].lineno < item.lineno for item in successful_returns))
-            ancestor=parent_map.get(timeout_calls[0]) if timeout_calls else None
-            timeout_reachable=True
-            while ancestor is not None and ancestor is not run_codex_nodes[0]:
-                if isinstance(ancestor,ast.If) and isinstance(ancestor.test,ast.Constant) \
-                        and ancestor.test.value is False: timeout_reachable=False
-                ancestor=parent_map.get(ancestor)
-            r44d_trace["timeout"]+=1
-            r44d_components["timeout"]=(len(timeout_assignments)==1
-                and isinstance(timeout_assignments[0].value,ast.Constant)
-                and type(timeout_assignments[0].value.value) is int
-                and timeout_assignments[0].value.value==86400 and len(timeout_loads)==1
-                and timeout_reachable)
-            consumer_architecture_ok = (
-                [arg.arg for arg in consumer.args.args] == exact_consumer_args
-                and consumer.args.vararg is None and consumer.args.kwarg is None
-                and not consumer.args.kwonlyargs and not consumer.decorator_list
-                and len(consumer_calls) == len(run_calls) == len(seam_loads) == 1
-                and exact_call_args and binding_provenance and helper_direct
-                and not tainted and not graph_tainted
-                and graph_ok and not rebound
-                and len(timeout_assignments) == 1
-                and isinstance(timeout_assignments[0].value, ast.Constant)
-                and type(timeout_assignments[0].value.value) is int
-                and timeout_assignments[0].value.value == 86400
-                and len(timeout_loads) == 1 and len(all_popen_sites)==1
-                and len(popen_assignments)==1 and len(popen_reassign)==1
-                and len(timeout_calls)==1 and timeout_dominates and timeout_reachable)
-
-            # R17 semantic overlay.  The earlier syntax inventory remains a useful
-            # closed-language check, but it never grants PASS by itself.  This
-            # monotone def-use analysis attaches security types to values and
-            # propagates them through aliases, containers, parameters and returns.
-            IDENTITY="IDENTITY"; SINK="SINK"; CANONICAL="CANONICAL"
-            INVOCATION="INVOCATION"; RUN="RUN"; ROLE="ROLE"; UNKNOWN="UNKNOWN"
-            MODULE_SUBPROCESS="MODULE_SUBPROCESS"; PROCESS_CONSTRUCTOR="PROCESS_CONSTRUCTOR"
-            PROCESS_OBJECT="PROCESS_OBJECT"
-            module_bindings={};process_binding_unresolved=[]
-            for imported in (item for item in ast.walk(candidate_tree)
-                             if isinstance(item,(ast.Import,ast.ImportFrom))):
-                if isinstance(imported,ast.Import):
-                    for alias in imported.names:
-                        if alias.name=="subprocess":
-                            module_bindings[alias.asname or alias.name]=frozenset({MODULE_SUBPROCESS})
-                elif imported.module=="subprocess":
-                    for alias in imported.names:
-                        if alias.name=="Popen":
-                            module_bindings[alias.asname or alias.name]=frozenset({PROCESS_CONSTRUCTOR})
-            def r17_targets(node):
-                if isinstance(node,ast.Name): return {node.id}
-                if isinstance(node,(ast.Tuple,ast.List)):
-                    return set().union(*(r17_targets(item) for item in node.elts)) if node.elts else set()
-                if isinstance(node,(ast.Attribute,ast.Subscript)):
-                    return r17_targets(node.value)
-                return set()
-            def r17_join(*values): return frozenset().union(*values) if values else frozenset()
-            helper_summaries={name:frozenset() for name in top_functions}
-            identity_helpers={name for name,node in top_functions.items()
-                if {part.value for part in ast.walk(node) if isinstance(part,ast.Constant)
-                    and isinstance(part.value,str)} & {
-                        "config/codex-provider-identity.json","codex-provider-identity.json"}
-                or {part.value for part in ast.walk(node) if isinstance(part,ast.Constant)
-                    and isinstance(part.value,str)} >= {
-                        "executable_path","executable_sha256",
-                    "code_mode_host_path","code_mode_host_sha256"}}
-            origin_names={"_new_run_id","_new_invocation_id"}
-            secrets_imports=[(item,alias) for item in ast.walk(candidate_tree)
-                if isinstance(item,ast.Import) for alias in item.names if alias.name=="secrets"]
-            secrets_from_imports=[item for item in ast.walk(candidate_tree)
-                if isinstance(item,ast.ImportFrom)
-                and (item.module=="secrets" or (item.module or "").startswith("secrets."))]
-            exact_secrets_import=(len(secrets_imports)==1 and not secrets_from_imports
-                and secrets_imports[0][0] in candidate_tree.body
-                and secrets_imports[0][1].asname is None
-                and len(secrets_imports[0][0].names)==1)
-            secrets_rebinds=[item for item in ast.walk(candidate_tree)
-                if isinstance(item,ast.Name) and item.id=="secrets"
-                and isinstance(item.ctx,(ast.Store,ast.Del))]
-            # `secrets` is an exclusive entropy capability, not merely a spelling.
-            # Follow aliases through assignments, containers and helper returns;
-            # every operation on that capability is rejected except the two exact
-            # frozen token_hex calls in the origin bodies below.
-            entropy_aliases={"secrets"};entropy_helpers=set()
-            def entropy_value(node):
-                if node is None: return False
-                if isinstance(node,ast.Name):
-                    return node.id in entropy_aliases
-                if isinstance(node,(ast.Attribute,ast.Subscript)):
-                    return entropy_value(node.value)
-                if isinstance(node,(ast.Tuple,ast.List,ast.Set)):
-                    return any(entropy_value(item) for item in node.elts)
-                if isinstance(node,ast.Dict):
-                    return any(entropy_value(item) for item in node.keys+node.values if item)
-                if isinstance(node,ast.Call) and isinstance(node.func,ast.Name):
-                    return node.func.id in entropy_helpers
-                return False
-            for _ in range(len(list(ast.walk(candidate_tree)))+1):
-                changed=False
-                for fn in (item for item in candidate_tree.body if isinstance(item,ast.FunctionDef)):
-                    if any(entropy_value(ret.value) for ret in ast.walk(fn)
-                           if isinstance(ret,ast.Return) and ret.value):
-                        if fn.name not in entropy_helpers:
-                            entropy_helpers.add(fn.name);changed=True
-                for item in ast.walk(candidate_tree):
-                    if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
-                    value=item.value
-                    if not entropy_value(value): continue
-                    targets=item.targets if isinstance(item,ast.Assign) else [item.target]
-                    for target in targets:
-                        for name in r17_targets(target):
-                            if name not in entropy_aliases:
-                                entropy_aliases.add(name);changed=True
-                if not changed: break
-            entropy_mutations=[]
-            for item in ast.walk(candidate_tree):
-                if isinstance(item,ast.Attribute) and entropy_value(item.value) \
-                        and isinstance(item.ctx,(ast.Store,ast.Del)):
-                    entropy_mutations.append("attribute")
-                if isinstance(item,ast.Subscript) and entropy_value(item.value) \
-                        and isinstance(item.ctx,(ast.Store,ast.Del)):
-                    entropy_mutations.append("subscript")
-                if isinstance(item,ast.Call) and isinstance(item.func,ast.Name) \
-                        and item.func.id in {"setattr","delattr"} \
-                        and item.args and entropy_value(item.args[0]):
-                    entropy_mutations.append(item.func.id)
-            origin_body_ok={}
-            for origin_name in origin_names:
-                origin=top_functions.get(origin_name)
-                expected=ast.parse(
-                    f"def {origin_name}():\n    return secrets.token_hex(16)\n").body[0]
-                origin_body_ok[origin_name]=(origin is not None
-                    and ast.dump(origin,include_attributes=False)
-                        == ast.dump(expected,include_attributes=False)
-                    and exact_secrets_import and not secrets_rebinds
-                    and not entropy_mutations)
-            allowed_entropy_calls={id(origin.body[0].value) for origin in
-                (top_functions.get(name) for name in origin_names)
-                if origin is not None and len(origin.body)==1
-                and isinstance(origin.body[0],ast.Return)
-                and isinstance(origin.body[0].value,ast.Call)}
-            allowed_entropy_names={id(call.func.value) for call in
-                (origin.body[0].value for origin in
-                 (top_functions.get(name) for name in origin_names)
-                 if origin is not None and len(origin.body)==1
-                 and isinstance(origin.body[0],ast.Return)
-                 and isinstance(origin.body[0].value,ast.Call))
-                if isinstance(call.func,ast.Attribute)}
-            allowed_entropy_attrs={id(call.func) for call in
-                (origin.body[0].value for origin in
-                 (top_functions.get(name) for name in origin_names)
-                 if origin is not None and len(origin.body)==1
-                 and isinstance(origin.body[0],ast.Return)
-                 and isinstance(origin.body[0].value,ast.Call))
-                if isinstance(call.func,ast.Attribute)}
-            lexical_entropy_ok=(all(id(item) in allowed_entropy_names for item in
-                ast.walk(candidate_tree) if isinstance(item,ast.Name)
-                and isinstance(item.ctx,ast.Load) and item.id=="secrets")
-                and all(id(item) in allowed_entropy_attrs for item in
-                    ast.walk(candidate_tree) if isinstance(item,ast.Attribute)
-                    and isinstance(item.ctx,ast.Load) and item.attr=="token_hex"))
-            for item in (part for part in ast.walk(candidate_tree) if isinstance(part,ast.Call)):
-                receiver=item.func.value if isinstance(item.func,ast.Attribute) else None
-                touches_receiver=entropy_value(receiver)
-                passes_capability=any(entropy_value(arg) for arg in item.args) or any(
-                    entropy_value(keyword.value) for keyword in item.keywords)
-                exact_allowed=(id(item) in allowed_entropy_calls
-                    and isinstance(item.func,ast.Attribute) and item.func.attr=="token_hex"
-                    and len(item.args)==1 and isinstance(item.args[0],ast.Constant)
-                    and item.args[0].value==16 and not item.keywords)
-                if (touches_receiver or passes_capability) and not exact_allowed:
-                    entropy_mutations.append("capability-use")
-            for name in origin_body_ok:
-                origin_body_ok[name]=origin_body_ok[name] and lexical_entropy_ok \
-                    and not entropy_mutations
-            capability_calls={"read","readinto","read1","readinto1","readall",
-                              "pread","preadv","readv","fdopen","FileIO","mmap",
-                              "dup","fileno","raw","buffer","seek","tell"}
-            r17_active=set()
-            process_sites=set()
-            semantic_unhandled=[]
-            def r17_expr(node,env):
-                if node is None: return frozenset()
-                if isinstance(node,ast.Lambda):
-                    values=list(node.args.defaults)+[x for x in node.args.kw_defaults if x]
-                    return r17_join(*(r17_expr(value,env) for value in values))
-                if isinstance(node,ast.Name):
-                    if node.id in module_bindings: return module_bindings[node.id]
-                    if node.id in pure_names|{"os","io","mmap","json","hashlib","stat",
-                                             "Path","Stop","MAX_RESULT_BYTES"}:
-                        return frozenset()
-                    return env.get(node.id,frozenset({UNKNOWN}))
-                if isinstance(node,ast.Constant): return frozenset()
-                if isinstance(node,(ast.List,ast.Tuple,ast.Set)):
-                    return r17_join(*(r17_expr(item,env) for item in node.elts))
-                if isinstance(node,ast.Dict):
-                    return r17_join(*(r17_expr(item,env) for item in node.keys+node.values if item))
-                if isinstance(node,ast.Subscript): return r17_expr(node.value,env)
-                if isinstance(node,ast.Attribute):
-                    base=r17_expr(node.value,env)
-                    if node.attr=="Popen" and MODULE_SUBPROCESS in base:
-                        return frozenset({PROCESS_CONSTRUCTOR})
-                    return base
-                if isinstance(node,ast.Call):
-                    if (isinstance(node.func,ast.Attribute) and node.func.attr=="SimpleNamespace"
-                            and isinstance(node.func.value,ast.Name) and node.func.value.id=="types"):
-                        r44d_trace["heap"]+=1
-                    transferred=r17_join(*(r17_expr(item,env) for item in
-                        list(node.args)+[kw.value for kw in node.keywords]))
-                    if isinstance(node.func,ast.Name) and node.func.id=="journal_root":
-                        return r17_join(transferred,frozenset({CANONICAL}))
-                    if (isinstance(node.func,ast.Name) and node.func.id=="_new_run_id"
-                            and origin_body_ok.get("_new_run_id",False)):
-                        return r17_join(transferred,frozenset({RUN}))
-                    if (isinstance(node.func,ast.Name) and node.func.id=="_new_invocation_id"
-                            and origin_body_ok.get("_new_invocation_id",False)):
-                        return r17_join(transferred,frozenset({INVOCATION}))
-                    callable_tags=r17_expr(node.func,env)
-                    if PROCESS_CONSTRUCTOR in callable_tags:
-                        process_sites.add((getattr(node,"lineno",-1),getattr(node,"col_offset",-1)))
-                        return frozenset({PROCESS_OBJECT})
-                    if isinstance(node.func,ast.Name) and node.func.id in identity_helpers:
-                        return r17_join(transferred,frozenset({IDENTITY}))
-                    if isinstance(node.func,ast.Name) and node.func.id in helper_summaries:
-                        helper=top_functions[node.func.id]
-                        if node.func.id in r17_active: return frozenset({UNKNOWN})
-                        seeds,valid=r20_bind_call(helper,node,env)
-                        if not valid: return frozenset({UNKNOWN})
-                        r17_active.add(node.func.id)
-                        try: returned=r17_interpret(helper,seeds)[1]
-                        finally: r17_active.remove(node.func.id)
-                        return r17_join(transferred,returned)
-                    if isinstance(node.func,ast.Attribute) and node.func.attr in capability_calls:
-                        return r17_join(transferred,r17_expr(node.func.value,env))
-                    return transferred
-                return r17_join(*(r17_expr(item,env) for item in ast.iter_child_nodes(node)))
-            def r20_bind_call(fn,call,env):
-                positional=list(fn.args.posonlyargs)+list(fn.args.args)
-                names=[arg.arg for arg in positional]
-                posonly={arg.arg for arg in fn.args.posonlyargs}
-                kwonly=[arg.arg for arg in fn.args.kwonlyargs]
-                bound={};valid=True
-                expanded=[]
-                for arg in call.args:
-                    if isinstance(arg,ast.Starred):
-                        if isinstance(arg.value,(ast.Tuple,ast.List)): expanded.extend(arg.value.elts)
-                        else: valid=False
-                    else: expanded.append(arg)
-                if len(expanded)>len(positional) and fn.args.vararg is None: valid=False
-                for index,arg in enumerate(expanded[:len(positional)]):
-                    bound[names[index]]=r17_expr(arg,env)
-                if len(expanded)>len(positional) and fn.args.vararg is not None:
-                    bound[fn.args.vararg.arg]=r17_join(*(r17_expr(arg,env)
-                        for arg in expanded[len(positional):]))
-                for kw in call.keywords:
-                    if kw.arg is None:
-                        if not isinstance(kw.value,ast.Dict): valid=False;continue
-                        for key,value in zip(kw.value.keys,kw.value.values):
-                            if not isinstance(key,ast.Constant) or not isinstance(key.value,str):
-                                valid=False;continue
-                            expanded_name=key.value
-                            if expanded_name in bound: valid=False;continue
-                            if expanded_name in posonly: valid=False;continue
-                            if expanded_name in names or expanded_name in kwonly:
-                                bound[expanded_name]=r17_expr(value,env)
-                            elif fn.args.kwarg is not None:
-                                bound[fn.args.kwarg.arg]=r17_join(
-                                    bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(value,env))
-                            else: valid=False
-                        continue
-                    if kw.arg in bound: valid=False;continue
-                    if kw.arg in posonly: valid=False;continue
-                    if kw.arg in names or kw.arg in kwonly: bound[kw.arg]=r17_expr(kw.value,env)
-                    elif fn.args.kwarg is not None: bound[fn.args.kwarg.arg]=r17_join(
-                        bound.get(fn.args.kwarg.arg,frozenset()),r17_expr(kw.value,env))
-                    else: valid=False
-                defaults=dict(zip(names[len(names)-len(fn.args.defaults):],fn.args.defaults))
-                kwdefaults=dict(zip(kwonly,fn.args.kw_defaults))
-                for name in names:
-                    if name not in bound:
-                        if name in defaults: bound[name]=r17_expr(defaults[name],env)
-                        else: valid=False;bound[name]=frozenset({UNKNOWN})
-                for name in kwonly:
-                    if name not in bound:
-                        default=kwdefaults.get(name)
-                        if default is not None: bound[name]=r17_expr(default,env)
-                        else: valid=False;bound[name]=frozenset({UNKNOWN})
-                if fn.args.vararg is not None: bound.setdefault(fn.args.vararg.arg,frozenset())
-                if fn.args.kwarg is not None: bound.setdefault(fn.args.kwarg.arg,frozenset())
-                return bound,valid
-            def r17_interpret(fn,seeds):
-                formals=(list(fn.args.posonlyargs)+list(fn.args.args)+list(fn.args.kwonlyargs))
-                env={arg.arg:seeds.get(arg.arg,frozenset({UNKNOWN})) for arg in formals}
-                if fn.args.vararg is not None:
-                    env[fn.args.vararg.arg]=seeds.get(fn.args.vararg.arg,frozenset({UNKNOWN}))
-                if fn.args.kwarg is not None:
-                    env[fn.args.kwarg.arg]=seeds.get(fn.args.kwarg.arg,frozenset({UNKNOWN}))
-                returns=[]
-                def target_effect(target,env):
-                    if isinstance(target,ast.Starred): return target_effect(target.value,env)
-                    if isinstance(target,(ast.Tuple,ast.List)):
-                        return r17_join(*(target_effect(item,env) for item in target.elts))
-                    if isinstance(target,ast.Attribute): return r17_expr(target.value,env)
-                    if isinstance(target,ast.Subscript):
-                        return r17_join(r17_expr(target.value,env),r17_expr(target.slice,env))
-                    return frozenset()
-                def pattern_effect(pattern,env):
-                    if isinstance(pattern,AST_MATCH_VALUE): return r17_expr(pattern.value,env)
-                    if isinstance(pattern,AST_MATCH_SINGLETON): return frozenset()
-                    if isinstance(pattern,AST_MATCH_SEQUENCE):
-                        return r17_join(*(pattern_effect(value,env) for value in pattern.patterns))
-                    if isinstance(pattern,AST_MATCH_MAPPING):
-                        return r17_join(*(r17_expr(key,env) for key in pattern.keys),
-                            *(pattern_effect(value,env) for value in pattern.patterns))
-                    if isinstance(pattern,AST_MATCH_CLASS):
-                        return r17_join(r17_expr(pattern.cls,env),
-                            *(pattern_effect(value,env) for value in pattern.patterns),
-                            *(pattern_effect(value,env) for value in pattern.kwd_patterns))
-                    if isinstance(pattern,AST_MATCH_AS):
-                        return pattern_effect(pattern.pattern,env) if pattern.pattern else frozenset()
-                    if isinstance(pattern,AST_MATCH_OR):
-                        return r17_join(*(pattern_effect(value,env) for value in pattern.patterns))
-                    if isinstance(pattern,AST_MATCH_STAR): return frozenset()
-                    semantic_unhandled.append(type(pattern).__name__);return frozenset({UNKNOWN})
-                for _ in range(max(2,len(list(runtime_walk_function(fn))))):
-                    changed=False;returns=[]
-                    for item in runtime_walk_function(fn):
-                        if isinstance(item,(ast.Assign,ast.AnnAssign,ast.NamedExpr)):
-                            targets=item.targets if isinstance(item,ast.Assign) else [item.target]
-                            value=r17_expr(item.value,env)
-                            for target in targets:
-                                target_flow=target_effect(target,env)
-                                if target_flow & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,PROCESS_OBJECT}:
-                                    process_binding_unresolved.append(type(target).__name__)
-                                names=r17_targets(target)
-                                if not names and value & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,
-                                                          PROCESS_OBJECT}:
-                                    process_binding_unresolved.append(type(target).__name__)
-                                for name in names:
-                                    joined=r17_join(env.get(name,frozenset()),value)
-                                    if joined != env.get(name): env[name]=joined;changed=True
-                        elif isinstance(item,ast.AugAssign):
-                            value=r17_join(r17_expr(item.value,env),target_effect(item.target,env),
-                                           r17_expr(item.target,env))
-                            names=r17_targets(item.target)
-                            if not names and value & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,
-                                                      PROCESS_OBJECT}:
-                                process_binding_unresolved.append(type(item.target).__name__)
-                            for name in names:
-                                joined=r17_join(env.get(name,frozenset()),value)
-                                if joined != env.get(name): env[name]=joined;changed=True
-                        elif isinstance(item,ast.Delete):
-                            for target in item.targets: target_effect(target,env)
-                        elif isinstance(item,ast.Return): returns.append(r17_expr(item.value,env))
-                        elif isinstance(item,ast.Expr): r17_expr(item.value,env)
-                        elif isinstance(item,(ast.If,ast.While,ast.Assert)):
-                            r17_expr(item.test,env)
-                        elif isinstance(item,(ast.For,ast.AsyncFor)):
-                            r17_expr(item.iter,env)
-                        elif isinstance(item,(ast.With,ast.AsyncWith)):
-                            for context in item.items:
-                                r17_expr(context.context_expr,env)
-                        elif isinstance(item,ast.Raise):
-                            r17_expr(item.exc,env);r17_expr(item.cause,env)
-                        elif isinstance(item,AST_MATCH):
-                            flow=r17_expr(item.subject,env)
-                            for case,may_match in r29_cases(item):
-                                flow=r17_join(flow,pattern_effect(case.pattern,env))
-                                if may_match: flow=r17_join(flow,r17_expr(case.guard,env))
-                            # Merely resolving a class/value pattern constructor is
-                            # not process creation; only an executed Call yields an object.
-                            if PROCESS_OBJECT in flow:
-                                process_binding_unresolved.append("Match")
-                        elif isinstance(item,ast.ExceptHandler):
-                            flow=r17_expr(item.type,env)
-                            if flow & {MODULE_SUBPROCESS,PROCESS_CONSTRUCTOR,PROCESS_OBJECT}:
-                                process_binding_unresolved.append("ExceptHandler")
-                        elif isinstance(item,ast.comprehension):
-                            r17_expr(item.iter,env)
-                            for condition in item.ifs: r17_expr(condition,env)
-                        elif isinstance(item,(ast.FunctionDef,ast.AsyncFunctionDef)):
-                            values=list(item.decorator_list)+list(item.args.defaults)+[
-                                x for x in item.args.kw_defaults if x]
-                            annotations=[arg.annotation for arg in
-                                list(item.args.posonlyargs)+list(item.args.args)+
-                                list(item.args.kwonlyargs) if arg.annotation]
-                            if item.args.vararg and item.args.vararg.annotation:
-                                annotations.append(item.args.vararg.annotation)
-                            if item.args.kwarg and item.args.kwarg.annotation:
-                                annotations.append(item.args.kwarg.annotation)
-                            if item.returns: annotations.append(item.returns)
-                            for value in values+annotations: r17_expr(value,env)
-                        elif isinstance(item,ast.ClassDef):
-                            for value in list(item.decorator_list)+list(item.bases)+[
-                                    keyword.value for keyword in item.keywords]:
-                                r17_expr(value,env)
-                        elif isinstance(item,AST_TRY_TYPES+(ast.Pass,ast.Break,
-                                              ast.Continue,ast.Global,ast.Nonlocal)):
-                            pass
-                        elif isinstance(item,ast.stmt):
-                            semantic_unhandled.append(type(item).__name__)
-                    if not changed: break
-                return env,r17_join(*returns)
-            for name in identity_helpers: helper_summaries[name]=frozenset({IDENTITY})
-            for _ in range(len(top_functions)+2):
-                prior=dict(helper_summaries)
-                for name in seen:
-                    _,helper_summaries[name]=r17_interpret(top_functions[name],{})
-                if prior==helper_summaries: break
-            seam_seeds={"sink_fd":frozenset({SINK}),
-                        "canonical_destination":frozenset({CANONICAL}),
-                        "invocation_id":frozenset({INVOCATION}),"run_id":frozenset({RUN}),
-                        "role":frozenset({ROLE})}
-            seam_env,_=r17_interpret(consumer,seam_seeds)
-            # Context-sensitive call-site propagation.  Formal tags are the union
-            # of actual tags at each reachable call; recursion is rejected rather
-            # than widened optimistically.
-            contexts={consumer.name:seam_seeds};context_queue=[consumer.name];recursive=False
-            while context_queue:
-                name=context_queue.pop();node=top_functions[name]
-                env,_=r17_interpret(node,contexts[name])
-                for call in (item for item in runtime_walk_function(node) if isinstance(item,ast.Call)
-                             and isinstance(item.func,ast.Name) and item.func.id in seen):
-                    child=call.func.id
-                    if child==name: recursive=True;continue
-                    seeds,valid=r20_bind_call(top_functions[child],call,env)
-                    if not valid: recursive=True;continue
-                    prior=contexts.get(child,{})
-                    joined={key:r17_join(prior.get(key,frozenset()),value)
-                            for key,value in seeds.items()}
-                    if joined!=prior: contexts[child]=joined;context_queue.append(child)
-            receiver_ok=not recursive
-            for name,seeds in contexts.items():
-                node=top_functions[name];env,_=r17_interpret(node,seeds)
-                for call in (item for item in runtime_walk_function(node) if isinstance(item,ast.Call)
-                             and isinstance(item.func,ast.Attribute)
-                             and item.func.attr in capability_calls):
-                    flow=r17_join(r17_expr(call.func.value,env),
-                                  *(r17_expr(arg,env) for arg in call.args))
-                    if SINK not in flow: receiver_ok=False
-            sensitive_nodes=[item.test for item in runtime_walk_function(consumer)
-                             if isinstance(item,(ast.If,ast.While,ast.Assert))]
-            sensitive_nodes += [item.value for item in runtime_walk_function(consumer)
-                                if isinstance(item,ast.Return)]
-            sensitive_nodes += [arg for item in runtime_walk_function(consumer) if isinstance(item,ast.Call)
-                                for arg in list(item.args)+[kw.value for kw in item.keywords]]
-            sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
-            identity_escape=any(IDENTITY in value or UNKNOWN in value
-                                for value in sensitive_flow)
-
-            # Exact capability provenance is established at the producer call, not
-            # by a conveniently named local.  The open must use O_RDONLY and
-            # O_NOFOLLOW as actual flag operands; the resulting value then seeds
-            # def-use propagation into the direct seam call.
-            def r17_open(node):
-                if not (isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute)
-                        and isinstance(node.func.value,ast.Name)
-                        and (node.func.value.id,node.func.attr)==("os","open")): return False
-                flags=node.args[1] if len(node.args)>1 else next((kw.value for kw in node.keywords
-                                                                  if kw.arg=="flags"),None)
-                attrs={(part.value.id,part.attr) for part in ast.walk(flags)
-                       if isinstance(part,ast.Attribute) and isinstance(part.value,ast.Name)} if flags else set()
-                return {("os","O_RDONLY"),("os","O_NOFOLLOW")} <= attrs
-            semantic_call_ok=False
-            seam_return=frozenset({UNKNOWN})
-            if len(run_calls)==1:
-                call=run_calls[0];env={arg.arg:(frozenset({ROLE}) if arg.arg=="role"
-                                               else frozenset({CANONICAL}) if arg.arg=="repo"
-                                               else frozenset({UNKNOWN}))
-                                          for arg in run_codex_nodes[0].args.args}
-                # Fixed-point assignments, with semantic origins attached to the
-                # operation that creates each authority rather than its target name.
-                for _ in range(max(2,len(list(ast.walk(run_codex_nodes[0]))))):
-                    changed=False
-                    for item in ast.walk(run_codex_nodes[0]):
-                        if not isinstance(item,(ast.Assign,ast.AnnAssign)): continue
-                        targets=item.targets if isinstance(item,ast.Assign) else [item.target]
-                        value=r17_expr(item.value,env)
-                        if r17_open(item.value): value=frozenset({SINK})
-                        for target in targets:
-                            for name in r17_targets(target):
-                                joined=r17_join(env.get(name,frozenset()),value)
-                                if joined != env.get(name): env[name]=joined;changed=True
-                    if not changed: break
-                actual=[r17_expr(arg,env) for arg in call.args]
-                exact_actual=(frozenset({SINK}),frozenset({CANONICAL}),
-                              frozenset({INVOCATION}),frozenset({RUN}),frozenset({ROLE}))
-                semantic_call_ok=(len(actual)==5 and tuple(actual)==exact_actual)
-                r44d_trace["helper_provenance"]+=1
-                r44d_components["helper_provenance"]=(semantic_call_ok and sink_nofollow
-                    and bool(provenance_values.get("canonical_destination")))
-                # The consumer receives exactly the proven call-site tag sets; no
-                # clean re-seeding may launder helper/container aliases.
-                if semantic_call_ok:
-                    seam_seeds=dict(zip(exact_consumer_args,actual))
-                    seam_env,seam_return=r17_interpret(consumer,seam_seeds)
-                    sensitive_flow=[r17_expr(item,seam_env) for item in sensitive_nodes]
-                    identity_escape=any(IDENTITY in value or UNKNOWN in value
-                                        for value in sensitive_flow)
-                    contexts={consumer.name:seam_seeds};context_queue=[consumer.name]
-                    receiver_ok=receiver_ok and not recursive;recursive=False
-                    while context_queue:
-                        name=context_queue.pop();node=top_functions[name]
-                        child_env,_=r17_interpret(node,contexts[name])
-                        for helper_call in (item for item in runtime_walk_function(node)
-                            if isinstance(item,ast.Call) and isinstance(item.func,ast.Name)
-                            and item.func.id in seen):
-                            child=helper_call.func.id
-                            if child==name: recursive=True;continue
-                            seeds,valid=r20_bind_call(top_functions[child],helper_call,child_env)
-                            if not valid: recursive=True;continue
-                            prior=contexts.get(child,{})
-                            joined={key:r17_join(prior.get(key,frozenset()),value)
-                                    for key,value in seeds.items()}
-                            if joined!=prior: contexts[child]=joined;context_queue.append(child)
-                    for name,seeds in contexts.items():
-                        node=top_functions[name];child_env,_=r17_interpret(node,seeds)
-                        for capability_call in (item for item in runtime_walk_function(node)
-                                if isinstance(item,ast.Call) and isinstance(item.func,ast.Attribute)
-                                and item.func.attr in capability_calls):
-                            flow=r17_join(r17_expr(capability_call.func.value,child_env),
-                                *(r17_expr(arg,child_env) for arg in capability_call.args))
-                            if SINK not in flow: receiver_ok=False
-                    receiver_ok=receiver_ok and not recursive
-            helper_nodes=[node for node in candidate_tree.body
-                if isinstance(node,ast.FunctionDef) and node.name=="_r44e_identity"]
-            helper_calls=[call for call in runtime_walk_function(consumer)
-                if isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
-                and call.func.id=="_r44e_identity"]
-            helper_return_bound=(len(helper_nodes)==1 and len(helper_calls)==1
-                and len(helper_nodes[0].args.args)==1
-                and len(helper_nodes[0].body)==1
-                and isinstance(helper_nodes[0].body[0],ast.Return)
-                and isinstance(helper_nodes[0].body[0].value,ast.Name)
-                and helper_nodes[0].body[0].value.id==helper_nodes[0].args.args[0].arg
-                and len(helper_calls[0].args)==1
-                and r17_expr(helper_calls[0].args[0],seam_env)==frozenset({ROLE}))
-            helper_path_ok=(semantic_call_ok and seam_return==frozenset({ROLE})
-                            and helper_return_bound)
-            r44e_facts["helper_provenance"]={
-                "actual_formal_bound":semantic_call_ok,
-                "return_tags":tuple(sorted(seam_return)),
-                "formal_return_bound":helper_return_bound,
-                "effect_resolved":helper_path_ok}
-            r44d_components["helper_provenance"]=(
-                r44d_components["helper_provenance"] and helper_path_ok)
-
-            # Postcondition credit is derived from terminal abstract state. Merely
-            # visiting a constructor, Try or helper branch cannot make it true.
-            post_body=[]
-            for statement in consumer.body:
-                if isinstance(statement,ast.Return): break
-                post_body.append(statement)
-            post_seed=r34_initial_env()
-            post_seed.update({name:(frozenset({name.upper()}),)
-                for name in exact_consumer_args})
-            post_normals,post_exceptions=r35_block_states(post_body,[post_seed])
-            heap_body=[]
-            for statement in post_body:
-                if isinstance(statement,ast.Try): break
-                heap_body.append(statement)
-            heap_normals,_=r35_block_states(heap_body,[post_seed])
-            heap_relations=[];terminal_flows=[]
-            for post_env in heap_normals:
-                marker=post_env.get("marker");alias=post_env.get("alias")
-                observed=post_env.get("observed");heap=post_env.get("__heap__",{})
-                marker_id=marker.get("__objref__") if isinstance(marker,dict) else None
-                alias_id=alias.get("__objref__") if isinstance(alias,dict) else None
-                attrs=heap.get(marker_id,{}) if marker_id else {}
-                heap_relations.append(marker_id is not None and marker_id==alias_id
-                    and "checked" in attrs and observed==attrs.get("checked"))
-            for post_env in post_normals:
-                terminal_flows.append("handled" in post_env and "finalized" in post_env
-                    and "bypassed" not in post_env)
-            heap_ok=any(heap_relations)
-            try_nodes=[node for node in consumer.body if isinstance(node,ast.Try)]
-            explicit_routes=[]
-            for try_node in try_nodes:
-                raised={call.func.id for call in ast.walk(try_node)
-                    if isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
-                    and any(isinstance(parent,ast.Raise) and parent.exc is call
-                            for parent in ast.walk(try_node))}
-                caught={handler.type.id for handler in try_node.handlers
-                    if isinstance(handler.type,ast.Name)}
-                explicit_routes.append(bool(raised & caught))
-            try_ok=(bool(terminal_flows) and all(terminal_flows)
-                    and explicit_routes==[True])
-            r44e_facts["heap"]={"normal_states":len(heap_normals),
-                "alias_write_read_relations":tuple(heap_relations),"verified":heap_ok}
-            r44e_facts["try"]={"normal_states":len(post_normals),
-                "exception_states":len(post_exceptions),
-                "explicit_raise_to_handler":tuple(explicit_routes),
-                "handler_else_finally_terminal":tuple(terminal_flows),"verified":try_ok}
-            r44d_components["heap"]=heap_ok
-            r44d_components["try"]=try_ok
-
-            id_origin_nodes={name:[node for node in candidate_tree.body
-                if isinstance(node,ast.FunctionDef) and node.name==name]
-                for name in ("_new_run_id","_new_invocation_id")}
-            id_origin_calls={name:[node for node in ast.walk(run_codex_nodes[0])
-                if isinstance(node,ast.Call) and isinstance(node.func,ast.Name)
-                and node.func.id==name] for name in id_origin_nodes}
-            id_origins_ok=all(len(id_origin_nodes[name])==1
-                and not (id_origin_nodes[name][0].args.posonlyargs
-                         or id_origin_nodes[name][0].args.args
-                         or id_origin_nodes[name][0].args.kwonlyargs
-                         or id_origin_nodes[name][0].args.vararg
-                         or id_origin_nodes[name][0].args.kwarg)
-                and len(id_origin_calls[name])==1 and not id_origin_calls[name][0].args
-                and not id_origin_calls[name][0].keywords
-                and origin_body_ok.get(name,False)
-                for name in id_origin_nodes)
-            origin_runtime_ok=False
-            if id_origins_ok:
-                try:
-                    run_values=[module._new_run_id() for _ in range(3)]
-                    invocation_values=[module._new_invocation_id() for _ in range(3)]
-                    all_values=run_values+invocation_values
-                    origin_runtime_ok=(all(isinstance(value,str)
-                        and re.fullmatch(r"[A-Za-z0-9_-]{16,128}",value)
-                        for value in all_values)
-                        and len(set(run_values))==len(run_values)
-                        and len(set(invocation_values))==len(invocation_values)
-                        and set(run_values).isdisjoint(invocation_values))
-                except Exception:
-                    origin_runtime_ok=False
-
-            # Resolve constructor values (module aliases, attributes, containers and
-            # helper returns) with the same value interpreter before building CFG.
-            run_flow_env,_=r17_interpret(run_codex_nodes[0],{
-                arg.arg:(frozenset({ROLE}) if arg.arg=="role"
-                         else frozenset({CANONICAL}) if arg.arg=="repo"
-                         else frozenset({UNKNOWN}))
-                for arg in run_codex_nodes[0].args.args})
-            # Constructor sites are recorded only while the context-sensitive
-            # interpreter evaluates a reachable call with actual→formal tags.
-            # No global rescan under one unrelated run environment is allowed.
-            resolved_popen=set(process_sites)
-
-            # Conservative structured CFG.  A wait nested in any conditional,
-            # loop, with or exception region cannot dominate the success exits.
-            # This rejects bypass edges rather than guessing from line numbers.
-            cfg_ok=False
-            r44d_trace["cfg"]+=1
-            if len(timeout_calls)==1 and len(resolved_popen)==1:
-                call=timeout_calls[0];ancestor=parent_map.get(call);guarded=False
-                while ancestor is not None and ancestor is not run_codex_nodes[0]:
-                    if isinstance(ancestor,(ast.If,ast.For,ast.AsyncFor,ast.While,
-                                            ast.ExceptHandler,ast.With,ast.AsyncWith)+AST_TRY_TYPES):
-                        guarded=True
-                    ancestor=parent_map.get(ancestor)
-                top={node:index for index,node in enumerate(run_codex_nodes[0].body)}
-                stmt=call
-                while parent_map.get(stmt) is not run_codex_nodes[0]: stmt=parent_map[stmt]
-                call_index=top.get(stmt,-1);return_indices=[]
-                for ret in successful_returns:
-                    stmt=ret
-                    while parent_map.get(stmt) is not run_codex_nodes[0]: stmt=parent_map[stmt]
-                    return_indices.append(top.get(stmt,-1))
-                cfg_ok=(not guarded and call_index>=0
-                        and all(index>call_index for index in return_indices))
-            r44d_components["cfg"]=cfg_ok
-            unresolved_process_calls=[call for call in ast.walk(candidate_tree)
-                if isinstance(call,ast.Call) and UNKNOWN in r17_expr(call.func,run_flow_env)
-                and any(isinstance(part,ast.Name) and part.id in module_bindings
-                        for part in ast.walk(call.func))]
-            non_receiver_verdict=(consumer_architecture_ok and semantic_call_ok
-                                      and not identity_escape and cfg_ok
-                                      and len(resolved_popen)==1 and not process_binding_unresolved
-                                      and not unresolved_process_calls and not semantic_unhandled
-                                      and r20_complete_tree_analysis(candidate_tree)
-                                      and id_origins_ok and origin_runtime_ok)
-            consumer_architecture_ok=non_receiver_verdict and receiver_ok
-        if r44c_unsupported: consumer_architecture_ok=False
-        return {"verdict": consumer_architecture_ok,
-                "exact_consumer_args": exact_consumer_args,
-                "receiver_ok": receiver_ok if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
-                "non_receiver_verdict": non_receiver_verdict if len(consume_nodes)==1 and len(run_codex_nodes)==1 else False,
-                "tree_shape": r20_complete_tree_analysis,
-                "unsupported":r44c_unsupported,"components":r44d_components,
-                "trace":r44d_trace,"facts":{**r44e_facts,**r45_facts}}
-    r44c_source='''import os
-import subprocess
-import secrets
-import types
-CODEX_RUN_TIMEOUT_SECONDS = 86400
-def _new_run_id():
-    return secrets.token_hex(16)
-def _new_invocation_id():
-    return secrets.token_hex(16)
-def journal_root(repo):
-    return repo
-def _r44e_identity(value):
-    return value
-def _r45_make():
-    return types.SimpleNamespace()
-def _r45_recursive(n):
-    frame_object = _r45_make()
-    if n:
-        return frame_object, _r45_recursive(n - 1)
-    return frame_object
-def _r45_allocation_probe(repo):
-    shared = _r45_make()
-    alias = shared
-    alias.value = 1
-    first = _r45_make()
-    second = _r45_make()
-    repeated = [_r45_make() for item in repo]
-    candidate = repeated[0]
-    try:
-        candidate.value
-    except AttributeError:
-        pass
-    return shared, alias, first, second, repeated
-def _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
-    raw = os.read(sink_fd, 1)
-    marker = types.SimpleNamespace(value=raw)
-    alias = marker
-    alias.checked = raw
-    observed = marker.checked
-    try:
-        raise RuntimeError()
-    except RuntimeError:
-        handled = role
-    else:
-        bypassed = role
-    finally:
-        finalized = role
-    return _r44e_identity(role)
-def run_codex(repo, role):
-    run_id = _new_run_id()
-    invocation_id = _new_invocation_id()
-    canonical_destination = journal_root(repo)
-    sink_fd = os.open(repo, os.O_RDONLY | os.O_NOFOLLOW)
-    process = subprocess.Popen(['/usr/bin/true'])
-    process.communicate(timeout=CODEX_RUN_TIMEOUT_SECONDS)
-    return _consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role)
+    # Unconditional rig-only structural sensitivity.  It proves only that the
+    # narrow inventory itself rejects one-defect source shapes; it grants no
+    # production or result-delivery credit.
+    kernel_inventory_fixture='''import hashlib
+import json
+import os
+import stat
+MAX_RESULT_BYTES = 4194304
+__all__ = ["consume_private_result"]
+def _bounded(fd):
+    return os.pread(fd, MAX_RESULT_BYTES + 1, 0)
+def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
+    return _bounded(sink_fd)
 '''
-    r44c_tree=ast.parse(r44c_source);r44c_base=analyze_candidate_tree(r44c_tree)
-    required_r44c_markers={"timeout","cfg","helper_provenance","heap","try",
-                           "types","allocation"}
-    r44c_deep_ok=(set(r44c_base)=={"verdict","exact_consumer_args","receiver_ok",
-        "non_receiver_verdict","tree_shape","unsupported","components","trace","facts"}
-        and required_r44c_markers=={key for key,value in r44c_base["components"].items() if value}
-        and all(r44c_base["trace"][key]>0 for key in required_r44c_markers))
-    r44c_timeout=copy.deepcopy(r44c_tree)
-    next(node for node in r44c_timeout.body if isinstance(node,ast.Assign)
-         and any(isinstance(target,ast.Name) and target.id=="CODEX_RUN_TIMEOUT_SECONDS" for target in node.targets)).value=ast.Name(id="BAD_TIMEOUT",ctx=ast.Load())
-    r44c_keyword=copy.deepcopy(r44c_tree)
-    wait_call=next(node for node in ast.walk(r44c_keyword) if isinstance(node,ast.Call)
-        and isinstance(node.func,ast.Attribute) and node.func.attr=="communicate")
-    wait_call.keywords=[ast.keyword(arg="wrong",value=ast.Name(id="CODEX_RUN_TIMEOUT_SECONDS",ctx=ast.Load()))]
-    ast.fix_missing_locations(r44c_timeout);ast.fix_missing_locations(r44c_keyword)
-    timeout_result=analyze_candidate_tree(r44c_timeout);keyword_result=analyze_candidate_tree(r44c_keyword)
-    r44c_mutants_ok=(timeout_result["components"]["timeout"] is False
-        and all(timeout_result["components"][key]==r44c_base["components"][key]
-                for key in required_r44c_markers-{"timeout"})
-        and timeout_result["trace"]==r44c_base["trace"]
-        and keyword_result["components"]["cfg"] is False
-        and all(keyword_result["components"][key]==r44c_base["components"][key]
-                for key in required_r44c_markers-{"cfg"})
-        and keyword_result["trace"]==r44c_base["trace"])
-    def r44e_mutate(transform):
-        tree=copy.deepcopy(r44c_tree);transform(tree);ast.fix_missing_locations(tree)
-        return analyze_candidate_tree(tree)
-    def r44e_consumer(tree):
-        return next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                    and node.name=="_consume_private_result")
-    def r44e_remove_checked_store(tree):
-        consumer=r44e_consumer(tree)
-        target=next(node for node in ast.walk(consumer) if isinstance(node,ast.Assign)
-            and any(isinstance(item,ast.Attribute) and item.attr=="checked" for item in node.targets))
-        target.targets=[ast.Name(id="discarded",ctx=ast.Store())]
-    def r44e_bypass_raise(tree):
-        consumer=r44e_consumer(tree)
-        try_node=next(node for node in consumer.body if isinstance(node,ast.Try))
-        try_node.handlers[0].type=ast.Name(id="ValueError",ctx=ast.Load())
-    def r44e_break_helper_return(tree):
-        helper=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                    and node.name=="_r44e_identity")
-        helper.body=[ast.Return(value=ast.Constant(value=None))]
-    def r45_alias_types_import(tree):
-        imported=next(node for node in tree.body if isinstance(node,ast.Import)
-                      and any(alias.name=="types" for alias in node.names))
-        next(alias for alias in imported.names if alias.name=="types").asname="types_alias"
-    def r45_break_stable_alias(tree):
-        probe=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                   and node.name=="_r45_allocation_probe")
-        assignment=next(node for node in probe.body if isinstance(node,ast.Assign)
-                        and isinstance(node.targets[0],ast.Name)
-                        and node.targets[0].id=="alias")
-        assignment.value=ast.Constant(value=None)
-    def r45_other_types_api(tree):
-        consumer=r44e_consumer(tree)
-        consumer.body.insert(0,ast.Expr(value=ast.Call(func=ast.Attribute(
-            value=ast.Name(id="types",ctx=ast.Load()),attr="MappingProxyType",ctx=ast.Load()),
-            args=[ast.Dict(keys=[],values=[])],keywords=[])))
-    def r45_types_alias_escape(tree):
-        consumer=r44e_consumer(tree)
-        consumer.body.insert(0,ast.Assign(targets=[ast.Name(id="escaped",ctx=ast.Store())],
-                                         value=ast.Name(id="types",ctx=ast.Load())))
-    def r45_remove_repetition(tree):
-        probe=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                   and node.name=="_r45_allocation_probe")
-        comprehension=next(node for node in ast.walk(probe) if isinstance(node,ast.ListComp))
-        comprehension.generators[0].iter=ast.Tuple(elts=[],ctx=ast.Load())
-    def r45_remove_recursion(tree):
-        recursive=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                       and node.name=="_r45_recursive")
-        recursive_if=next(node for node in recursive.body if isinstance(node,ast.If))
-        recursive_if.test=ast.Constant(value=False)
-    class r46_alpha_rename(ast.NodeTransformer):
-        mapping={"_r45_make":"factory_q","_r45_recursive":"recur_q",
-                 "_r45_allocation_probe":"probe_q","shared":"object_q",
-                 "alias":"reference_q","first":"left_q","second":"right_q",
-                 "repeated":"collection_q","candidate":"member_q",
-                 "frame_object":"frame_q","item":"element_q"}
-        active=False
-        def visit_Name(self,node):
-            if self.active and node.id in self.mapping: node.id=self.mapping[node.id]
-            return node
-        def visit_arg(self,node):
-            if self.active and node.arg in self.mapping: node.arg=self.mapping[node.arg]
-            return node
-        def visit_FunctionDef(self,node):
-            was=self.active
-            if node.name in self.mapping:
-                self.active=True;node.name=self.mapping[node.name]
-            result=self.generic_visit(node);self.active=was
-            return result
-    def r46_alpha_tree(tree):
-        return r46_alpha_rename().visit(tree)
-    def r46_causal_effect(tree):
-        probe=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                   and node.name=="_r45_allocation_probe")
-        handler=next(node for node in ast.walk(probe) if isinstance(node,ast.ExceptHandler))
-        handler.body=[ast.Expr(value=ast.Call(func=ast.Attribute(
-            value=ast.Name(id="subprocess",ctx=ast.Load()),attr="Popen",ctx=ast.Load()),
-            args=[ast.List(elts=[ast.Constant(value="/usr/bin/true")],ctx=ast.Load())],
-            keywords=[]))]
-    heap_result=r44e_mutate(r44e_remove_checked_store)
-    try_result=r44e_mutate(r44e_bypass_raise)
-    helper_result=r44e_mutate(r44e_break_helper_return)
-    types_result=r44e_mutate(r45_alias_types_import)
-    allocation_result=r44e_mutate(r45_break_stable_alias)
-    r44e_results={"heap":heap_result,"try":try_result,
-                  "helper_provenance":helper_result,"types":types_result,
-                  "allocation":allocation_result}
-    r44e_postconditions_ok=all(
-        result["components"][target] is False
-        and all(result["components"][key]==r44c_base["components"][key]
-                for key in required_r44c_markers-{target})
-        and result["trace"]==r44c_base["trace"]
-        for target,result in r44e_results.items())
-    r45_extra_mutants=[("types",r44e_mutate(r45_other_types_api)),
-        ("types",r44e_mutate(r45_types_alias_escape)),
-        ("allocation",r44e_mutate(r45_remove_repetition)),
-        ("allocation",r44e_mutate(r45_remove_recursion))]
-    r45_extra_ok=all(result["components"][target] is False
-        and all(result["components"][key]==r44c_base["components"][key]
-                for key in required_r44c_markers-{target})
-        and (result["trace"]==r44c_base["trace"] if target=="types"
-             else result["trace"]["allocation"]==r44c_base["trace"]["allocation"])
-        for target,result in r45_extra_mutants)
-    alpha_result=r44e_mutate(r46_alpha_tree)
-    alpha_ok=(alpha_result["components"]==r44c_base["components"]
-        and alpha_result["facts"]["allocation"]==r44c_base["facts"]["allocation"]
-        and alpha_result["trace"]==r44c_base["trace"])
-    causal_result=r44e_mutate(r46_causal_effect)
-    causal_ok=(causal_result["components"]["allocation"] is False
-        and any(effect for _reachable,effect
-                in causal_result["facts"]["allocation"]["handler_routes"])
-        and causal_result["verdict"] is False)
-    r44c_trystar_ok=True
-    if isinstance(AST_TRY_STAR,type):
-        r44c_star=analyze_candidate_tree(ast.parse("try:\n    pass\nexcept* Exception:\n    pass\n"))
-        r44c_trystar_ok=(r44c_star["verdict"] is False and r44c_star["unsupported"]==("TryStar",))
-    r44b_totality_ok=(r44c_deep_ok and r44c_mutants_ok and r44c_trystar_ok
-                      and r44e_postconditions_ok and r45_extra_ok
-                      and alpha_ok and causal_ok)
-    candidate_analysis = analyze_candidate_tree(candidate_tree)
-    consumer_architecture_ok = candidate_analysis["verdict"]
-    exact_consumer_args = candidate_analysis["exact_consumer_args"]
-    # R25 connected static mutants run once a candidate reaches the frozen
-    # architecture.  They exercise the same analyzer, never a shallow surrogate.
-    r25_static_mutants_ok=True
-    if consumer_architecture_ok:
-        def r25_tree_with_module(statement):
-            tree=copy.deepcopy(candidate_tree)
-            tree.body.extend(ast.parse(statement).body);ast.fix_missing_locations(tree)
-            return tree
-        computed_key=("_r25_entropy = secrets\n"
-                      "_r25_entropy.__dict__['token_' + 'hex'] = lambda n: '0' * n\n")
-        dict_update=("_r25_box = {'cap': secrets}\n"
-                     "_r25_box['cap'].__dict__.update({'token_hex': lambda n: '0' * n})\n")
-        ifexp="_r26_entropy = secrets if True else None\n"
-        boolop="_r26_entropy = secrets or None\n"
-        callable_alias="_r26_entropy = secrets.token_hex\n"
-        import_alias="import secrets as _r27_secrets\n_r27_entropy = _r27_secrets.token_hex(16)\n"
-        entropy_rejects=all(not analyze_candidate_tree(r25_tree_with_module(source))["verdict"]
-                            for source in (computed_key,dict_update,ifexp,boolop,callable_alias,
-                                           import_alias))
-        def r25_receiver_variant(first,second):
-            tree=copy.deepcopy(candidate_tree)
-            seam=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                      and node.name=="_consume_private_result")
-            seam.body=ast.parse(first).body+seam.body+ast.parse(second).body
-            ast.fix_missing_locations(tree);return analyze_candidate_tree(tree)
-        safe="os.pread(sink_fd, 0, 0)\n"
-        unsafe="io.BytesIO(b'x').read(0)\n"
-        unsafe_first=r25_receiver_variant(unsafe,safe)
-        unsafe_last=r25_receiver_variant(safe,unsafe)
-        all_safe=r25_receiver_variant(safe,safe)
-        receiver_rejects=(unsafe_first["non_receiver_verdict"] and not unsafe_first["receiver_ok"]
-                          and not unsafe_first["verdict"]
-                          and unsafe_last["non_receiver_verdict"] and not unsafe_last["receiver_ok"]
-                          and not unsafe_last["verdict"])
-        receiver_positive=(all_safe["non_receiver_verdict"] and all_safe["receiver_ok"]
-                           and all_safe["verdict"])
-        aug_tree=copy.deepcopy(candidate_tree)
-        aug_tree.body.append(ast.parse("def _r26_spawn(ctor):\n    return ctor(['/usr/bin/true'])\n").body[0])
-        aug_run=next(node for node in aug_tree.body if isinstance(node,ast.FunctionDef)
-                     and node.name=="run_codex")
-        aug_run.body=ast.parse("_r26_x = 0\n_r26_x += _r26_spawn(subprocess.Popen)\n").body+aug_run.body
-        ast.fix_missing_locations(aug_tree)
-        augassign_rejects=not analyze_candidate_tree(aug_tree)["verdict"]
-        def r27_target_mutant(statement):
-            tree=copy.deepcopy(candidate_tree)
-            tree.body.append(ast.parse(
-                "def _r27_spawn(ctor):\n    return ctor(['/usr/bin/true'])\n").body[0])
-            run=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                     and node.name=="run_codex")
-            run.body=ast.parse("_r27_holder = {}\n"+statement).body+run.body
-            ast.fix_missing_locations(tree);return not analyze_candidate_tree(tree)["verdict"]
-        target_effects_reject=(r27_target_mutant(
-                "_r27_holder[_r27_spawn(subprocess.Popen)] = 1\n")
-            and r27_target_mutant(
-                "_r27_spawn(subprocess.Popen).attribute = 1\n")
-            and r27_target_mutant(
-                "del _r27_holder[_r27_spawn(subprocess.Popen)]\n"))
-        def r28_control(statement,with_spawn):
-            tree=copy.deepcopy(candidate_tree)
-            if with_spawn:
-                tree.body.append(ast.parse(
-                    "def _r28_spawn(ctor):\n    return ctor(['/usr/bin/true'])\n").body[0])
-            run=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                     and node.name=="run_codex")
-            run.body=ast.parse(statement).body+run.body
-            ast.fix_missing_locations(tree);return analyze_candidate_tree(tree)["verdict"]
-        match_process_rejects=all(not r28_control(source,True) for source in (
-            "match _r28_spawn(subprocess.Popen):\n    case _:\n        pass\n",
-            "match 1:\n    case 1 if _r28_spawn(subprocess.Popen):\n        pass\n",
-            "try:\n    raise RuntimeError('x')\nexcept _r28_spawn(subprocess.Popen):\n    pass\n"))
-        match_legitimate_positive=all(r28_control(source,False) for source in (
-            "match 1:\n    case 1:\n        pass\n    case _:\n        pass\n",
-            "try:\n    pass\nexcept Exception:\n    pass\n"))
-        reference_legitimate_positive=r28_control(
-            "match 1:\n    case subprocess.Popen():\n        pass\n",False)
-        nonmatching_guard_positive=r28_control(
-            "match 1:\n    case 2 if _r28_spawn(subprocess.Popen):\n        pass\n",True)
-        no_raise_handler_positive=r28_control(
-            "try:\n    pass\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
-        try_else_negative=not r28_control(
-            "try:\n    if False:\n        raise RuntimeError('x')\n"
-            "except Exception:\n    pass\n"
-            "else:\n    _r28_spawn(subprocess.Popen)\n",True)
-        dormant_raise_positive=r28_control(
-            "try:\n    def _r30_dormant():\n        raise RuntimeError('x')\n"
-            "except _r28_spawn(subprocess.Popen):\n    pass\n",True)
-        starred_sequence_negative=not r28_control(
-            "match [1, 2]:\n    case [*rest] if _r28_spawn(subprocess.Popen):\n        pass\n",True)
-        fixed_sequence_nonmatch_positive=r28_control(
-            "match [1, 2]:\n    case [1, 2, 3] if _r28_spawn(subprocess.Popen):\n        pass\n",True)
-        arithmetic_raise_negative=not r28_control(
-            "try:\n    1 / 0\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
-        assert_false_negative=not r28_control(
-            "try:\n    assert False\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
-        arithmetic_safe_positive=r28_control(
-            "try:\n    1 + 1\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
-        unknown_attribute_conservative=not r28_control(
-            "try:\n    repo.r31_unknown_attribute\nexcept _r28_spawn(subprocess.Popen):\n    pass\n",True)
-        definite_inner_catch_positive=r28_control(
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except RuntimeError:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        uncaught_inner_negative=not r28_control(
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except ValueError:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        ordered_handler_positive=r28_control(
-            "try:\n    raise ValueError('x')\n"
-            "except RuntimeError:\n    _r28_spawn(subprocess.Popen)\n"
-            "except Exception:\n    pass\n",True)
-        tuple_handler_positive=r28_control(
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except (ValueError, RuntimeError):\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        bare_handler_positive=r28_control(
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except:\n        pass\n"
-            "except BaseException:\n    _r28_spawn(subprocess.Popen)\n",True)
-        alias_handler_negative=not r28_control(
-            "E = RuntimeError\ntry:\n    raise RuntimeError('x')\n"
-            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
-        keyboardinterrupt_outer_negative=not r28_control(
-            "try:\n    try:\n        raise KeyboardInterrupt()\n"
-            "    except Exception:\n        pass\n"
-            "except BaseException:\n    _r28_spawn(subprocess.Popen)\n",True)
-        runtime_exception_outer_positive=r28_control(
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except Exception:\n        pass\n"
-            "except BaseException:\n    _r28_spawn(subprocess.Popen)\n",True)
-        tuple_alias_outer_positive=r28_control(
-            "E = (ValueError, RuntimeError)\n"
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        helper_alias_outer_positive=r28_control(
-            "def _r33_error_type():\n    return RuntimeError\n"
-            "E = _r33_error_type()\n"
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        shadowed_unknown_negative=not r28_control(
-            "E = repo.r33_unknown_exception\n"
-            "try:\n    raise RuntimeError('x')\n"
-            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
-        reassigned_to_valueerror_negative=not r28_control(
-            "E = RuntimeError\nE = ValueError\n"
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        reassigned_to_runtime_positive=r28_control(
-            "E = ValueError\nE = RuntimeError\n"
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        branch_alternative_negative=not r28_control(
-            "if repo:\n    E = RuntimeError\nelse:\n    E = ValueError\n"
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        dict_key_positive=r28_control(
-            "M = {'runtime': RuntimeError}\nE = M['runtime']\n"
-            "try:\n    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        try_assignment_catch_negative=not r28_control(
-            "E = ValueError\ntry:\n    E = RuntimeError\n    raise RuntimeError('x')\n"
-            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
-        try_assignment_escape_negative=not r28_control(
-            "E = RuntimeError\ntry:\n    try:\n        E = ValueError\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        branch_same_type_positive=r28_control(
-            "try:\n    if repo:\n        E = RuntimeError\n    else:\n        E = RuntimeError\n"
-            "    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        branch_divergent_negative=not r28_control(
-            "try:\n    if repo:\n        E = RuntimeError\n    else:\n        E = ValueError\n"
-            "    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        try_dict_helper_positive=r28_control(
-            "def _r35_types():\n    return {'runtime': RuntimeError}\n"
-            "try:\n    M = _r35_types()\n    E = M['runtime']\n"
-            "    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        target_index_raise_negative=not r28_control(
-            "holder = {}\ntry:\n    holder[1 / 0] = 1\n"
-            "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        target_index_unknown_negative=not r28_control(
-            "holder = {}\ntry:\n    holder[repo.r36_index] = 1\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        target_safe_positive=r28_control(
-            "holder = {}\ntry:\n    holder[0] = 1\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        chained_target_causal_negative=not r28_control(
-            "holder = {}\nE = ValueError\ntry:\n    E = holder[1 / 0] = ZeroDivisionError\n"
-            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
-        chained_target_reverse_positive=r28_control(
-            "holder = {}\nE = ValueError\ntry:\n    holder[1 / 0] = E = RuntimeError\n"
-            "except E:\n    _r28_spawn(subprocess.Popen)\n",True)
-        nested_unpack_positive=r28_control(
-            "(E, (F, G)) = (RuntimeError, (ValueError, Exception))\n"
-            "try:\n    raise RuntimeError('x')\n"
-            "except E:\n    pass\n"
-            "except F:\n    _r28_spawn(subprocess.Popen)\n",True)
-        unpack_mismatch_negative=not r28_control(
-            "try:\n    (E, F) = (RuntimeError,)\n"
-            "except ValueError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        starred_unpack_positive=r28_control(
-            "(E, *middle, F) = (RuntimeError, ValueError, Exception)\n"
-            "try:\n    raise RuntimeError('x')\n"
-            "except E:\n    pass\n"
-            "except F:\n    _r28_spawn(subprocess.Popen)\n",True)
-        augassign_target_first_negative=not r28_control(
-            "holder = {}\ntry:\n    holder[1 / 0] += repo.r37_rhs\n"
-            "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        tuple_store_negative=not r28_control(
-            "holder = (1,)\ntry:\n    holder[0] = 2\n"
-            "except TypeError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        augassign_zero_negative=not r28_control(
-            "x = 1\ntry:\n    x /= 0\n"
-            "except ZeroDivisionError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        attribute_store_negative=not r28_control(
-            "holder = repo\ntry:\n    holder.value = 1\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        attribute_delete_negative=not r28_control(
-            "holder = repo\ntry:\n    del holder.value\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        safe_store_delete_positive=all(r28_control(source,True) for source in (
-            "holder = [1]\ntry:\n    holder[0] = 2\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n",
-            "holder = {'x': 1}\ntry:\n    del holder['x']\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n",
-            "x = 1\ntry:\n    x += 1\nexcept Exception:\n    _r28_spawn(subprocess.Popen)\n"))
-        delete_absent_negative=not r28_control(
-            "try:\n    del r40_absent\n"
-            "except NameError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        delete_then_read_negative=not r28_control(
-            "x = 1\ntry:\n    del x\n    x\n"
-            "except NameError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        bound_delete_positive=r28_control(
-            "x = 1\ntry:\n    del x\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        namespace_controls=(r28_control(
-            "import types\nholder = types.SimpleNamespace(value=1)\n"
-            "try:\n    holder.value = 2\n    del holder.value\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-            and not r28_control(
-            "import types\nholder = types.SimpleNamespace()\n"
-            "try:\n    del holder.missing\n"
-            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True))
-        namespace_branch_isolation_negative=not r28_control(
-            "import types\nholder = types.SimpleNamespace()\n"
-            "try:\n    if repo:\n        holder.value = 1\n"
-            "    else:\n        del holder.value\n"
-            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        namespace_sibling_positive=r28_control(
-            "import types\nholder = types.SimpleNamespace(value=1)\n"
-            "if repo:\n    holder.value = 2\n"
-            "else:\n    holder.value = 3\n"
-            "try:\n    del holder.value\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        namespace_alias_delete_negative=not r28_control(
-            "import types\nholder = types.SimpleNamespace(value=1)\nalias = holder\n"
-            "try:\n    del alias.value\n    holder.value\n"
-            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        namespace_alias_store_positive=r28_control(
-            "import types\nholder = types.SimpleNamespace()\nalias = holder\nalias.value = 1\n"
-            "try:\n    del holder.value\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        namespace_alias_branch_negative=not r28_control(
-            "import types\nholder = types.SimpleNamespace()\nalias = holder\n"
-            "try:\n    if repo:\n        alias.value = 1\n"
-            "    else:\n        del holder.value\n"
-            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        types_admission_positive=r28_control(
-            "import types\nholder = types.SimpleNamespace(value=1)\n"
-            "try:\n    del holder.value\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        types_admission_negatives=all(not r28_control(source,False) for source in (
-            "import types as t\nholder = t.SimpleNamespace()\n",
-            "from types import SimpleNamespace\nholder = SimpleNamespace()\n",
-            "holder = __import__('types').SimpleNamespace()\n",
-            "import importlib\nholder = importlib.import_module('types').SimpleNamespace()\n",
-            "import types\nholder = getattr(types, 'SimpleNamespace')()\n",
-            "import types\ntypes.__dict__['SimpleNamespace'] = object\n",
-            "import types\nholder = types.MappingProxyType({})\n"))
-        repeated_helper_isolation_negative=not r28_control(
-            "import types\ndef _r43_make():\n    return types.SimpleNamespace()\n"
-            "a = _r43_make()\nb = _r43_make()\na.value = 1\n"
-            "try:\n    del b.value\n"
-            "except AttributeError:\n    _r28_spawn(subprocess.Popen)\n",True)
-        helper_multikey_positive=r28_control(
-            "def _r36_types():\n    return {'runtime': RuntimeError, 'value': ValueError}\n"
-            "try:\n    M = _r36_types()\n    E = M['runtime']\n"
-            "    try:\n        raise RuntimeError('x')\n"
-            "    except E:\n        pass\n"
-            "except Exception:\n    _r28_spawn(subprocess.Popen)\n",True)
-        r25_static_mutants_ok=(entropy_rejects and receiver_rejects
-                               and receiver_positive and augassign_rejects
-                               and target_effects_reject and match_process_rejects
-                               and match_legitimate_positive
-                               and reference_legitimate_positive
-                               and nonmatching_guard_positive
-                               and no_raise_handler_positive and try_else_negative
-                               and dormant_raise_positive and starred_sequence_negative
-                               and fixed_sequence_nonmatch_positive
-                               and arithmetic_raise_negative and assert_false_negative
-                               and arithmetic_safe_positive and unknown_attribute_conservative
-                               and definite_inner_catch_positive and uncaught_inner_negative
-                               and ordered_handler_positive and tuple_handler_positive
-                               and bare_handler_positive and alias_handler_negative
-                               and keyboardinterrupt_outer_negative
-                               and runtime_exception_outer_positive
-                               and tuple_alias_outer_positive and helper_alias_outer_positive
-                               and shadowed_unknown_negative
-                               and reassigned_to_valueerror_negative
-                               and reassigned_to_runtime_positive
-                               and branch_alternative_negative and dict_key_positive
-                               and try_assignment_catch_negative
-                               and try_assignment_escape_negative
-                               and branch_same_type_positive
-                               and branch_divergent_negative
-                               and try_dict_helper_positive
-                               and target_index_raise_negative
-                               and target_index_unknown_negative
-                               and target_safe_positive
-                               and helper_multikey_positive
-                               and chained_target_causal_negative
-                               and chained_target_reverse_positive
-                               and nested_unpack_positive
-                               and unpack_mismatch_negative
-                               and starred_unpack_positive
-                               and augassign_target_first_negative
-                               and tuple_store_negative and augassign_zero_negative
-                               and attribute_store_negative and attribute_delete_negative
-                               and safe_store_delete_positive
-                               and delete_absent_negative and delete_then_read_negative
-                               and bound_delete_positive and namespace_controls)
-        r25_static_mutants_ok=(r25_static_mutants_ok
-                               and namespace_branch_isolation_negative
-                               and namespace_sibling_positive)
-        r25_static_mutants_ok=(r25_static_mutants_ok
-                               and namespace_alias_delete_negative
-                               and namespace_alias_store_positive
-                               and namespace_alias_branch_negative)
-        r25_static_mutants_ok=(r25_static_mutants_ok and types_admission_positive
-                               and types_admission_negatives
-                               and repeated_helper_isolation_negative)
+    rig_inventory_base=kernel_structure_inventory(
+        ast.parse(kernel_inventory_fixture),kernel_inventory_fixture)
+    rig_inventory_mutants=[]
+    for needle,replacement in (
+        ('["consume_private_result"]','["other"]'),
+        ('4194304','4194305'),
+        ('sink_fd, canonical_destination, invocation_id, run_id, role',
+         'sink_fd, canonical_destination, invocation_id, run_id, role, provider'),
+        ('import stat','import subprocess'),
+        ('return _bounded(sink_fd)','return os.getenv("H032_MODE")')):
+        mutant=kernel_inventory_fixture.replace(needle,replacement,1)
+        rig_inventory_mutants.append(kernel_structure_inventory(ast.parse(mutant),mutant)[0])
+    kernel_inventory_rig_ok=(rig_inventory_base[0] and not any(rig_inventory_mutants))
+
+    kernel_structure_ok=False;kernel_structure_detail={"absent":True}
+    kernel_module=None
+    if result_kernel.is_file() and not result_kernel.is_symlink():
+        kernel_bytes=result_kernel.read_bytes()
+        if len(kernel_bytes)<=65536:
+            try:
+                kernel_text=kernel_bytes.decode("utf-8",errors="strict")
+                kernel_tree=ast.parse(kernel_text)
+                kernel_structure_ok,kernel_structure_detail=kernel_structure_inventory(
+                    kernel_tree,kernel_text)
+                if kernel_structure_ok:
+                    kernel_spec=importlib.util.spec_from_file_location(
+                        "h032_result_kernel",result_kernel)
+                    if kernel_spec is not None and kernel_spec.loader is not None:
+                        kernel_module=importlib.util.module_from_spec(kernel_spec)
+                        kernel_spec.loader.exec_module(kernel_module)
+            except Exception as exc:
+                kernel_structure_detail={"error":f"{type(exc).__name__}:{exc}"}
+    source_tree=ast.parse(source.read_text(encoding="utf-8"))
+    kernel_imports=[node for node in ast.walk(source_tree) if isinstance(node,ast.ImportFrom)
+        and node.module in {"consumer","controller.result.consumer"}
+        and len(node.names)==1 and node.names[0].name=="consume_private_result"
+        and node.names[0].asname is None]
+    kernel_calls=[node for node in ast.walk(source_tree) if isinstance(node,ast.Call)
+        and isinstance(node.func,ast.Name) and node.func.id=="consume_private_result"]
+    kernel_integration_structure_ok=(len(kernel_imports)==1 and len(kernel_calls)==1
+        and len(kernel_calls[0].args)==5 and not kernel_calls[0].keywords
+        and not any(isinstance(node,ast.FunctionDef)
+                    and node.name=="consume_private_result" for node in source_tree.body))
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -2821,11 +819,10 @@ def run_codex(repo, role):
     valid_schema = False
     try:
         schema_document = strict_json(schema_source.read_text(encoding="utf-8"))
-        valid_raw = bounded_stable_result(valid_canonical)
+        valid_raw = bounded_stable_result(valid_canonical,MAX_CANONICAL_BYTES)
         valid_document = strict_json(valid_raw.decode("utf-8", errors="strict"))
-        valid_schema = (len(valid_raw) <= MAX_RESULT_BYTES
-            and complete_schema_valid(valid_document, schema_document)
-            and valid_document["role"] == "TEST_AUTHOR")
+        valid_schema = (len(valid_raw) <= MAX_CANONICAL_BYTES
+            and canonical_result_valid(valid_document,schema_document))
     except Exception: pass
     negative_modes = (
         "extra", "malformed", "missing", "empty", "partial", "trailing",
@@ -3430,8 +1427,8 @@ def run_codex(repo, role):
 "def audit(event,args):\n"
 " if event=='os.rename' and len(args)>=2 and str(args[1]).endswith('/result.json'):\n"
 "  os=__import__('os');hashlib=__import__('hashlib');fd=os.open(args[0],os.O_RDONLY|getattr(os,'O_NOFOLLOW',0));st=os.fstat(fd);raw=b''\n"
-"  while len(raw)<=4*1024*1024:\n"
-"   chunk=os.read(fd,min(65536,4*1024*1024+1-len(raw)))\n"
+"  while len(raw)<=5*1024*1024:\n"
+"   chunk=os.read(fd,min(65536,5*1024*1024+1-len(raw)))\n"
 "   if not chunk: break\n"
 "   raw+=chunk\n"
 "  held_transition_fds.append(fd)\n"
@@ -3570,14 +1567,16 @@ def run_codex(repo, role):
             try:
                 fd=os.open(canonical,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0));st=os.fstat(fd)
                 raw=b""
-                while len(raw)<=MAX_RESULT_BYTES:
-                    chunk=os.read(fd,min(65536,MAX_RESULT_BYTES+1-len(raw)))
+                while len(raw)<=MAX_CANONICAL_BYTES:
+                    chunk=os.read(fd,min(65536,MAX_CANONICAL_BYTES+1-len(raw)))
                     if not chunk: break
                     raw+=chunk
                 end=os.fstat(fd);os.close(fd)
+                document=strict_json(raw.decode("utf-8"))
                 post_canonical=(st.st_dev,st.st_ino,st.st_size,end.st_dev,end.st_ino,
                                 end.st_size,hashlib.sha256(raw).hexdigest(),
-                                complete_schema_valid(strict_json(raw.decode("utf-8")),schema_document))
+                                canonical_result_valid(document,schema_document),
+                                document.get("result_sha256") if isinstance(document,dict) else None)
             except Exception: post_canonical=None
         selector.close(); shutil.rmtree(release)
         return (outcome,popen_type,identities,canonical_absent,post_canonical,
@@ -3587,68 +1586,159 @@ def run_codex(repo, role):
     r12_promote = r12_real_case("one", True)
     r12_mutate = r12_real_case("one", sink_attack="mutate")
     r12_swap = r12_real_case("one", sink_attack="swap")
-    # R13 freezes semantic seams rather than current source spellings.  A
-    # conforming candidate exposes a positive finite integer timeout value;
-    # absence is part of the intended prebuilder RED, never a rig error.
+    kernel_valid_report={
+        "role":"TEST_AUTHOR","outcome":"READY","summary":"kernel result",
+        "changed_files":[],"blocking_findings":[],"tests":[],
+        "allowed_write_violation":False,"frozen_artifacts_modified":False,
+        "production_files_modified":False,"frozen_gate_ready":True,
+        "baseline_red_for_right_reason":True,"owner_decision_required":False,
+        "stop_reason":"NONE","next_action":"BUILD","next_task_id":"h-032"}
+    def encoded_report(report):
+        return json.dumps(report,ensure_ascii=False,separators=(",",":"),
+                          sort_keys=True).encode("utf-8")
+    def exact_sized_report(size):
+        report=dict(kernel_valid_report);report["summary"]=""
+        base_raw=encoded_report(report)
+        report["summary"]="x"*(size-len(base_raw))
+        raw=encoded_report(report)
+        if len(raw)!=size: raise RuntimeError("exact result-size fixture drift")
+        return raw
+    rig_valid_raw=encoded_report(kernel_valid_report)
+    rig_duplicate_raw=rig_valid_raw[:-1]+b',"role":"TEST_AUTHOR"}'
+    rig_bad_nested=dict(kernel_valid_report)
+    rig_bad_nested["tests"]=[{"name":"x","command":"x","exit":"zero",
+                              "result":"PASS","decisive_evidence":"x"}]
+    try:
+        strict_json(rig_duplicate_raw.decode("utf-8"));rig_duplicate_rejected=False
+    except DuplicateKey: rig_duplicate_rejected=True
+    kernel_oracle_rig_ok=(complete_schema_valid(kernel_valid_report,schema_document)
+        and rig_duplicate_rejected
+        and not complete_schema_valid(rig_bad_nested,schema_document)
+        and len(exact_sized_report(MAX_RESULT_BYTES))==MAX_RESULT_BYTES
+        and len(exact_sized_report(MAX_RESULT_BYTES+1))==MAX_RESULT_BYTES+1)
+
+    kernel_direct_detail={};kernel_direct_ok=False
+    kernel_case_counter=[0]
+    def direct_kernel_case(raw, *, invocation_id="1"*32, run_id="2"*32,
+                           role="TEST_AUTHOR", preseed=False, hardlink=False,
+                           mutate=False):
+        kernel_case_counter[0]+=1
+        arena=work/f"kernel-direct-{kernel_case_counter[0]}";arena.mkdir(mode=0o700)
+        staging=arena/"private-staging";staging.mkdir(mode=0o700)
+        sink=staging/"result-sink";canonical_parent=arena/"canonical"
+        canonical_parent.mkdir(mode=0o700);canonical=canonical_parent/"result.json"
+        writer=os.open(sink,os.O_WRONLY|os.O_CREAT|os.O_EXCL
+                       |getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0),0o600)
+        view=memoryview(raw)
+        while view:
+            count=os.write(writer,view)
+            if count<=0: raise RuntimeError("direct fixture short write")
+            view=view[count:]
+        os.fsync(writer);os.close(writer)
+        sink_fd=os.open(sink,os.O_RDONLY|getattr(os,"O_CLOEXEC",0)
+                        |getattr(os,"O_NOFOLLOW",0))
+        sink_stat=os.fstat(sink_fd)
+        if hardlink: os.link(sink,staging/"second-link")
+        if preseed: canonical.write_bytes(b"preseed")
+        visible=[];stop_observer=threading.Event()
+        def observe():
+            while not stop_observer.is_set():
+                if canonical.exists():
+                    try: visible.append(canonical.stat().st_size)
+                    except OSError: pass
+                time.sleep(.0005)
+        observer=threading.Thread(target=observe,daemon=True);observer.start()
+        stop_mutator=threading.Event();mutator=None
+        if mutate:
+            offset=max(1,raw.find(b"xxxx"))
+            def change_same_object():
+                fd=os.open(sink,os.O_WRONLY|getattr(os,"O_NOFOLLOW",0))
+                flip=False
+                try:
+                    while not stop_mutator.is_set():
+                        os.pwrite(fd,b"y" if flip else b"x",offset);flip=not flip
+                finally: os.close(fd)
+            mutator=threading.Thread(target=change_same_object,daemon=True);mutator.start()
+            time.sleep(.005)
+        accepted=False;returned=None;error="NONE"
+        try:
+            returned=kernel_module.consume_private_result(
+                sink_fd,canonical,invocation_id,run_id,role)
+            accepted=True
+        except Exception as exc:
+            error=f"{type(exc).__name__}:{exc}"
+        finally:
+            stop_mutator.set()
+            if mutator is not None: mutator.join(timeout=1)
+            stop_observer.set();observer.join(timeout=1)
+        fd_closed=False
+        try: fcntl.fcntl(sink_fd,fcntl.F_GETFD)
+        except OSError: fd_closed=True
+        canonical_info=None
+        if canonical.is_file() and not canonical.is_symlink():
+            fd=os.open(canonical,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0));st=os.fstat(fd)
+            canonical_raw=b""
+            while True:
+                chunk=os.read(fd,65536)
+                if not chunk: break
+                canonical_raw+=chunk
+            end=os.fstat(fd);os.close(fd)
+            try: canonical_doc=strict_json(canonical_raw.decode("utf-8",errors="strict"))
+            except Exception: canonical_doc=None
+            canonical_info=(st,end,canonical_raw,canonical_doc)
+        temp_entries=sorted(path.name for path in canonical_parent.iterdir()
+                            if path.name!="result.json")
+        # Caller owns transport-path cleanup; the kernel owns the fd and every
+        # publication temporary.  Actual run_codex cleanup is tested separately.
+        if staging.exists(): shutil.rmtree(staging)
+        staging_absent=not staging.exists()
+        result={"accepted":accepted,"returned":returned,"error":error,
+            "sink_stat":sink_stat,"fd_closed":fd_closed,"canonical":canonical_info,
+            "visible":tuple(visible),"temps":tuple(temp_entries),
+            "staging_absent":staging_absent,"preseed":preseed}
+        shutil.rmtree(arena)
+        return result
+    if kernel_structure_ok and kernel_module is not None:
+        valid_kernel=direct_kernel_case(rig_valid_raw)
+        max_kernel=direct_kernel_case(exact_sized_report(MAX_RESULT_BYTES))
+        over_kernel=direct_kernel_case(exact_sized_report(MAX_RESULT_BYTES+1))
+        duplicate_kernel=direct_kernel_case(rig_duplicate_raw)
+        nested_kernel=direct_kernel_case(encoded_report(rig_bad_nested))
+        wrong_role_kernel=direct_kernel_case(rig_valid_raw,role="BUILDER")
+        same_binding_kernel=direct_kernel_case(rig_valid_raw,invocation_id="3"*32,run_id="3"*32)
+        preseed_kernel=direct_kernel_case(rig_valid_raw,preseed=True)
+        hardlink_kernel=direct_kernel_case(rig_valid_raw,hardlink=True)
+        mutation_kernel=direct_kernel_case(exact_sized_report(MAX_RESULT_BYTES),mutate=True)
+        def accepted_kernel(case,raw,invocation="1"*32,run="2"*32):
+            info=case["canonical"]
+            if not (case["accepted"] and case["fd_closed"] and info is not None
+                    and not case["temps"] and case["staging_absent"]): return False
+            before,after,_canonical_raw,doc=info
+            expected_keys={"schema_version","invocation_id","run_id","role",
+                           "result_sha256","report"}
+            return (stat.S_ISREG(before.st_mode) and before.st_nlink==1
+                and (before.st_dev,before.st_ino,before.st_size)==
+                    (after.st_dev,after.st_ino,after.st_size)
+                and isinstance(doc,dict) and set(doc)==expected_keys
+                and doc["schema_version"]==1 and doc["invocation_id"]==invocation
+                and doc["run_id"]==run and doc["role"]=="TEST_AUTHOR"
+                and doc["result_sha256"]==hashlib.sha256(raw).hexdigest()
+                and doc["report"]==strict_json(raw.decode("utf-8"))
+                and all(size==before.st_size for size in case["visible"]))
+        invalid_kernel=[over_kernel,duplicate_kernel,nested_kernel,wrong_role_kernel,
+                        same_binding_kernel,preseed_kernel,hardlink_kernel,mutation_kernel]
+        kernel_direct_ok=(accepted_kernel(valid_kernel,rig_valid_raw)
+            and accepted_kernel(max_kernel,exact_sized_report(MAX_RESULT_BYTES))
+            and all(not case["accepted"] and case["fd_closed"]
+                    and (case["canonical"] is None or case["preseed"])
+                    and not case["temps"] and case["staging_absent"]
+                    for case in invalid_kernel))
+        kernel_direct_detail={"valid":valid_kernel,"max":max_kernel,
+            "invalid":[(case["accepted"],case["error"],case["fd_closed"],
+                        case["canonical"] is not None,case["temps"],case["staging_absent"])
+                       for case in invalid_kernel]}
     timeout_seam = getattr(module, "CODEX_RUN_TIMEOUT_SECONDS", None)
-    timeout_variant_ok = (timeout_seam == 86400 and consumer_architecture_ok
-                          and r25_static_mutants_ok)
-    # Owner-authorized admissibility variants replace only the frozen seam
-    # FunctionDef body.  The outer run_codex, authority, Popen topology and all
-    # other candidate bytes remain AST-identical.  They never credit the exact
-    # candidate's product verdict; they prove only that the gate admits each
-    # legitimate capability reader through a complete real-Popen run_codex.
-    reader_templates={
-      "pread":"raw = os.pread(sink_fd, MAX_RESULT_BYTES + 1, 0)",
-      "preadv":"buf = bytearray(MAX_RESULT_BYTES + 1)\nn = os.preadv(sink_fd, [buf], 0)\nraw = bytes(buf[:n])",
-      "readv":"os.lseek(sink_fd, 0, os.SEEK_SET)\nbuf = bytearray(MAX_RESULT_BYTES + 1)\nn = os.readv(sink_fd, [buf])\nraw = bytes(buf[:n])",
-      "fdopen":"with os.fdopen(os.dup(sink_fd), 'rb') as stream:\n    raw = stream.read(MAX_RESULT_BYTES + 1)",
-      "FileIO":"with io.FileIO(os.dup(sink_fd), 'rb', closefd=True) as stream:\n    raw = stream.read(MAX_RESULT_BYTES + 1)",
-      "mmap":"with mmap.mmap(sink_fd, 0, access=mmap.ACCESS_READ) as view:\n    raw = bytes(view[:MAX_RESULT_BYTES + 1])",
-      "buffer":"with io.BufferedReader(io.FileIO(os.dup(sink_fd), 'rb', closefd=True)) as stream:\n    raw = stream.read(MAX_RESULT_BYTES + 1)",
-      "raw":"with io.BufferedReader(io.FileIO(os.dup(sink_fd), 'rb', closefd=True)) as stream:\n    raw = stream.raw.read(MAX_RESULT_BYTES + 1)",
-      "helper":"def bounded(fd, limit):\n    return os.pread(fd, limit, 0)\nraw = bounded(sink_fd, MAX_RESULT_BYTES + 1)",
-    }
-    connected_reader_results={};variant_shape_ok=True
-    variant_source_admissible={}
-    def r17_variant(family,reader_body):
-        tree=copy.deepcopy(candidate_tree)
-        target=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
-                    and node.name=="_consume_private_result")
-        body=ast.parse(
-            "before = os.fstat(sink_fd)\n"+reader_body+"\n"
-            "after = os.fstat(sink_fd)\n"
-            "if len(raw) > MAX_RESULT_BYTES: raise Stop('private result oversized')\n"
-            "if (before.st_dev,before.st_ino,before.st_mode,before.st_size,before.st_mtime_ns,before.st_ctime_ns) != (after.st_dev,after.st_ino,after.st_mode,after.st_size,after.st_mtime_ns,after.st_ctime_ns): raise Stop('private result changed')\n"
-            "report = json.loads(raw.decode('utf-8', errors='strict'))\n"
-            "if report.get('role') != role: raise Stop('private result binding mismatch')\n"
-            "sink_path = Path(os.readlink('/dev/fd/' + str(sink_fd)))\n"
-            "os.replace(sink_path, canonical_destination)\n"
-            "return report\n").body
-        target.body=body;ast.fix_missing_locations(tree)
-        # Remove only the two consumer bodies before comparing complete trees.
-        baseline=copy.deepcopy(candidate_tree);candidate=copy.deepcopy(tree)
-        for subject in (baseline,candidate):
-            node=next(item for item in subject.body if isinstance(item,ast.FunctionDef)
-                      and item.name=="_consume_private_result")
-            node.body=[ast.Pass()]
-        if ast.dump(baseline,include_attributes=False)!=ast.dump(candidate,include_attributes=False):
-            raise RuntimeError("R17 reader variant escaped consumer body")
-        variant_source_admissible[family]=analyze_candidate_tree(tree)["verdict"]
-        path=work/f"r17-reader-{family}.py";path.write_text(ast.unparse(tree)+"\n",encoding="utf-8")
-        return path
-    if consumer_architecture_ok:
-        for family,template in reader_templates.items():
-            variant=r17_variant(family,template)
-            connected_reader_results[family]=r12_real_case("one",subject_source=variant)
-    required_reader_variants=set(reader_templates)
-    read_variants_actual_ok=(variant_shape_ok
-        and set(connected_reader_results)==required_reader_variants
-        and set(variant_source_admissible)==required_reader_variants
-        and all(variant_source_admissible.values())
-        and all(result[0]=="ADMITTED" and result[3] and result[4] is not None
-                and result[4][7] and result[5] and len(result[6])==1
-                and not result[7] for result in connected_reader_results.values()))
+    timeout_effect_ok = (timeout_seam == 86400)
     def r12_escape_case():
         fixture=r12_provider("escape",work/"r12-unused-release")
         host=fixture.parent/"codex-code-mode-host"
@@ -3689,12 +1779,10 @@ def run_codex(repo, role):
         and len(r12_once[2]) == 1 and r12_once[2][0][13]
         and r12_once[2][0][:6] == r12_once[2][0][6:12] and r12_once[3]
         and r12_once[4] is not None and r12_once[4][7]
-        and r12_once[4][6] == r12_once[2][0][12] and r12_once[5]
+        and r12_once[4][8] == r12_once[2][0][12] and r12_once[5]
         and len(r12_once[6]) == 1
-        and r12_once[6][0].get("dev")==r12_once[2][0][0]
-        and r12_once[6][0].get("ino")==r12_once[2][0][1]
-        and r12_once[6][0].get("read_size")==r12_once[2][0][3]
-        and r12_once[6][0].get("digest")==r12_once[2][0][12]
+        and r12_once[6][0].get("read_size")==r12_once[4][2]
+        and r12_once[6][0].get("digest")==r12_once[4][6]
         and r12_once[4][0]==r12_once[6][0].get("dev")
         and r12_once[4][1]==r12_once[6][0].get("ino") and not r12_once[7]
         and r12_two[0].startswith("REJECTED:") and len(r12_two[2]) == 2
@@ -3703,11 +1791,12 @@ def run_codex(repo, role):
         and r12_promote[3] and r12_promote[4] is None and r12_promote[5] and not r12_promote[6] and not r12_promote[7]
         and r12_mutate[0].startswith("REJECTED:") and r12_mutate[4] is None and r12_mutate[5] and not r12_mutate[6] and not r12_mutate[7]
         and r12_swap[0].startswith("REJECTED:") and r12_swap[4] is None and r12_swap[5] and not r12_swap[6] and not r12_swap[7]
-        and timeout_variant_ok and read_variants_actual_ok
+        and timeout_effect_ok
         and r12_escape[0] and r12_escape[1].startswith("REJECTED:")
         and r12_escape[2] and r12_escape[3])
     deterministic_result_ok = (
-        valid[0] and valid_schema and physical_topology_ok and staging_ok
+        kernel_structure_ok and kernel_integration_structure_ok and kernel_direct_ok
+        and valid[0] and valid_schema and physical_topology_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
         and r12_real_boundary_ok
@@ -3760,16 +1849,15 @@ def run_codex(repo, role):
         live_sink=Path(output_lines[0]);live_canonical=live_runs[0]/"result.json"
         fd=os.open(live_canonical,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0));before=os.fstat(fd)
         raw=b""
-        while len(raw)<=MAX_RESULT_BYTES:
-            chunk=os.read(fd,min(65536,MAX_RESULT_BYTES+1-len(raw)))
+        while len(raw)<=MAX_CANONICAL_BYTES:
+            chunk=os.read(fd,min(65536,MAX_CANONICAL_BYTES+1-len(raw)))
             if not chunk: break
             raw+=chunk
         after=os.fstat(fd);os.close(fd)
         document=strict_json(raw.decode("utf-8"))
         exact_owner_live_ok=(before.st_dev==after.st_dev and before.st_ino==after.st_ino
-            and before.st_size==after.st_size==len(raw) and len(raw)<=MAX_RESULT_BYTES
-            and complete_schema_valid(document,schema_document)
-            and document.get("role")=="TEST_AUTHOR"
+            and before.st_size==after.st_size==len(raw) and len(raw)<=MAX_CANONICAL_BYTES
+            and canonical_result_valid(document,schema_document)
             and len(live_transitions)==1
             and not live_object_events
             and Path(live_transitions[0].get("dst",""))==live_canonical
@@ -3788,19 +1876,10 @@ def run_codex(repo, role):
         exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
-    check("J_R44C_ANALYZER_DEEP_TOTALITY_COMPAT", r44b_totality_ok,
-          f"base_components={r44c_base['components']} base_trace={r44c_base['trace']} "
-          f"base_facts={r44c_base['facts']} mutant_components="
-          f"{ {key:value['components'] for key,value in r44e_results.items()} } "
-          f"deep={r44c_deep_ok} basic_mutants={r44c_mutants_ok} "
-          f"postconditions={r44e_postconditions_ok} extra={r45_extra_ok} "
-          f"post_detail={[(target,result['components'][target],result['trace']==r44c_base['trace']) for target,result in r44e_results.items()]} "
-          f"extra_detail={[(target,result['components'][target],result['trace']==r44c_base['trace']) for target,result in r45_extra_mutants]} "
-          f"alpha={alpha_ok,alpha_result['components'],alpha_result['facts']['allocation']} "
-          f"causal={causal_ok,causal_result['components'],causal_result['facts']['allocation']} "
-          f"trystar={r44c_trystar_ok}")
+    check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and kernel_oracle_rig_ok,
+          f"inventory={rig_inventory_base,rig_inventory_mutants} oracle={kernel_oracle_rig_ok}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical, physical_topology_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok} direct={kernel_direct_ok,kernel_direct_detail} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
