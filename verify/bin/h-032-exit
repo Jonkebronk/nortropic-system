@@ -537,7 +537,8 @@ if mode == 'output_then_fail': sys.exit(17)
                          "importlib","requests","git","__builtins__"}
         forbidden_attrs={"environ","getenv","system","popen","fork","forkpty","posix_spawn",
                          "execv","execve","spawnv","spawnve","__dict__","__globals__",
-                         "__getattribute__","__subclasses__","__mro__","listdir","scandir"}
+                         "__getattribute__","__subclasses__","__mro__","listdir","scandir",
+                         "putenv","unsetenv"}
         forbidden_alias_use=any(isinstance(node,ast.Name)
             and isinstance(node.ctx,ast.Load)
             and (module_aliases.get(node.id,"").split(".",1)[0] in forbidden_module_roots
@@ -553,6 +554,47 @@ if mode == 'output_then_fail': sys.exit(17)
             or (isinstance(node,ast.Attribute) and node.attr in forbidden_attrs)
             or isinstance(node,(ast.Global,ast.Nonlocal,ast.ClassDef))
             for node in ast.walk(tree))
+        # These are the expression surfaces Python evaluates while defining a
+        # module. Function bodies stay dormant, but defaults, annotations and
+        # decorators do not. Class bodies and comprehension expressions are
+        # reached recursively. Dynamic path effects are independently audited
+        # before exec; this inventory closes capability provenance and makes
+        # the evaluated surface explicit without interpreting control flow.
+        import_time_expressions=[]
+        class ImportTimeExpressions(ast.NodeVisitor):
+            def remember(self,node):
+                if node is not None: import_time_expressions.append(node);self.visit(node)
+            def visit_Module(self,node):
+                for statement in node.body: self.visit(statement)
+            def visit_FunctionDef(self,node):
+                for item in node.decorator_list: self.remember(item)
+                for item in (*node.args.defaults,*node.args.kw_defaults): self.remember(item)
+                for arg in (*node.args.posonlyargs,*node.args.args,*node.args.kwonlyargs):
+                    self.remember(arg.annotation)
+                self.remember(node.args.vararg.annotation if node.args.vararg else None)
+                self.remember(node.args.kwarg.annotation if node.args.kwarg else None)
+                self.remember(node.returns)
+            visit_AsyncFunctionDef=visit_FunctionDef
+            def visit_Lambda(self,node):
+                for item in (*node.args.defaults,*node.args.kw_defaults): self.remember(item)
+            def visit_ClassDef(self,node):
+                for item in node.decorator_list: self.remember(item)
+                for item in node.bases: self.remember(item)
+                for item in node.keywords: self.remember(item.value)
+                for statement in node.body: self.visit(statement)
+            def visit_Assign(self,node): self.remember(node.value)
+            def visit_AnnAssign(self,node):
+                self.remember(node.annotation);self.remember(node.value)
+            def visit_AugAssign(self,node): self.remember(node.value)
+            def visit_Expr(self,node): self.remember(node.value)
+        ImportTimeExpressions().visit(tree)
+        def forbidden_expression(node):
+            return any((isinstance(child,ast.Name) and child.id in forbidden_names)
+                or (isinstance(child,ast.Attribute) and child.attr in forbidden_attrs)
+                or (isinstance(child,(ast.Import,ast.ImportFrom,ast.Global,ast.Nonlocal)))
+                for child in ast.walk(node))
+        import_time_forbidden=any(forbidden_expression(node)
+                                  for node in import_time_expressions)
         def immutable_literal(node):
             return (isinstance(node,ast.Constant)
                 or (isinstance(node,ast.Tuple) and all(immutable_literal(item) for item in node.elts)))
@@ -587,12 +629,13 @@ if mode == 'output_then_fail': sys.exit(17)
             and isinstance(node.ctx,(ast.Store,ast.Del)) for node in ast.walk(tree))
         return (consumer_ok and export_ok and imports_ok and module_shape and max_ok
                 and not forbidden_use and not forbidden_alias_use and not forbidden_literals
-                and not hidden_identity and not attribute_write), {
+                and not hidden_identity and not attribute_write and not import_time_forbidden), {
             "consumer":consumer_ok,"export":export_ok,"imports":tuple(imports),
             "imports_ok":imports_ok,"module_shape":module_shape,"max":max_ok,
             "forbidden":forbidden_use,"forbidden_alias":forbidden_alias_use,
             "forbidden_literal":forbidden_literals,"hidden_identity":hidden_identity,
-            "attribute_write":attribute_write}
+            "attribute_write":attribute_write,"import_time_expressions":len(import_time_expressions),
+            "import_time_forbidden":import_time_forbidden}
 
     def integration_structure_inventory(tree):
         parents={child:parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
@@ -602,35 +645,38 @@ if mode == 'output_then_fail': sys.exit(17)
             and node.level==0 and node.module=="controller.result.consumer"
             and len(node.names)==1 and node.names[0].name=="consume_private_result"
             and node.names[0].asname is None]
-        reachable=set();pending=["run_codex"] if run is not None else []
-        while pending:
-            name=pending.pop()
-            if name in reachable or name not in definitions: continue
-            reachable.add(name)
-            for call in (n for n in ast.walk(definitions[name]) if isinstance(n,ast.Call)):
-                if isinstance(call.func,ast.Name) and call.func.id in definitions:
-                    pending.append(call.func.id)
+        reachable={"run_codex"} if run is not None else set()
         calls=[]
-        for owner in reachable:
-            for call in ast.walk(definitions[owner]):
-                if isinstance(call,ast.Call) and isinstance(call.func,ast.Name) \
-                        and call.func.id=="consume_private_result":
-                    calls.append((owner,call))
+        if run is not None:
+            calls=[("run_codex",call) for call in ast.walk(run)
+                if isinstance(call,ast.Call) and isinstance(call.func,ast.Name)
+                and call.func.id=="consume_private_result"]
         args_ok=(len(calls)==1 and len(calls[0][1].args)==5
             and not calls[0][1].keywords
             and all(isinstance(arg,ast.Name) for arg in calls[0][1].args)
             and len({arg.id for arg in calls[0][1].args})==5)
-        result_connected=False
+        result_connected=False;connection_mode="NONE"
         if len(calls)==1:
             call=calls[0][1];parent=parents.get(call)
-            if isinstance(parent,ast.Return): result_connected=True
+            valued_returns=[node for node in ast.walk(run)
+                            if isinstance(node,ast.Return) and node.value is not None]
+            if isinstance(parent,ast.Return):
+                result_connected=(valued_returns==[parent]);connection_mode="DIRECT_RETURN"
             elif isinstance(parent,(ast.Assign,ast.AnnAssign)):
                 targets=(parent.targets if isinstance(parent,ast.Assign) else [parent.target])
                 names={target.id for target in targets if isinstance(target,ast.Name)}
-                owner_tree=definitions[calls[0][0]]
-                result_connected=bool(names and any(isinstance(node,ast.Name)
-                    and isinstance(node.ctx,ast.Load) and node.id in names
-                    for node in ast.walk(owner_tree)))
+                if len(names)==1 and len(targets)==1:
+                    name=next(iter(names))
+                    stores=[node for node in ast.walk(run) if isinstance(node,ast.Name)
+                            and isinstance(node.ctx,(ast.Store,ast.Del)) and node.id==name]
+                    loads=[node for node in ast.walk(run) if isinstance(node,ast.Name)
+                           and isinstance(node.ctx,ast.Load) and node.id==name]
+                    exact_returns=[node for node in valued_returns
+                        if isinstance(node.value,ast.Name) and node.value.id==name]
+                    result_connected=(len(stores)==1 and len(loads)==1
+                        and len(exact_returns)==1 and valued_returns==exact_returns
+                        and parents.get(loads[0]) is exact_returns[0])
+                    if result_connected: connection_mode="SINGLE_ASSIGN_RETURN"
         all_consumer_calls=[node for node in ast.walk(tree) if isinstance(node,ast.Call)
             and isinstance(node.func,ast.Name) and node.func.id=="consume_private_result"]
         local_shadow=any(isinstance(node,(ast.FunctionDef,ast.AsyncFunctionDef))
@@ -640,7 +686,7 @@ if mode == 'output_then_fail': sys.exit(17)
         return ok,{"imports":len(imports),"reachable":tuple(sorted(reachable)),
                    "call_owners":tuple(owner for owner,_ in calls),"args":args_ok,
                    "result_connected":result_connected,"all_calls":len(all_consumer_calls),
-                   "local_shadow":local_shadow}
+                   "local_shadow":local_shadow,"connection_mode":connection_mode}
 
     # Unconditional rig-only structural sensitivity.  It proves only that the
     # narrow inventory itself rejects one-defect source shapes; it grants no
@@ -648,12 +694,16 @@ if mode == 'output_then_fail': sys.exit(17)
     kernel_inventory_fixture='''import hashlib
 import json
 import os
+from pathlib import Path
 import stat
 MAX_RESULT_BYTES = 4194304
 __all__ = ["consume_private_result"]
 def _bounded(fd):
     return os.pread(fd, MAX_RESULT_BYTES + 1, 0)
+def _captured_stat(path, op=os.stat):
+    return op(path)
 def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
+    _captured_stat(canonical_destination)
     return _bounded(sink_fd)
 '''
     rig_inventory_base=kernel_structure_inventory(
@@ -665,7 +715,8 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         ('sink_fd, canonical_destination, invocation_id, run_id, role',
          'sink_fd, canonical_destination, invocation_id, run_id, role, provider'),
         ('import stat','import subprocess'),
-        ('return _bounded(sink_fd)','return os.getenv("H032_MODE")')):
+        ('return _bounded(sink_fd)','return os.getenv("H032_MODE")'),
+        ('return _bounded(sink_fd)','return os.putenv("H032_MODE","1")')):
         mutant=kernel_inventory_fixture.replace(needle,replacement,1)
         rig_inventory_mutants.append(kernel_structure_inventory(ast.parse(mutant),mutant)[0])
     inventory_adversaries=(
@@ -697,32 +748,54 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
                 kernel_tree=ast.parse(kernel_text)
                 kernel_structure_ok,kernel_structure_detail=kernel_structure_inventory(
                     kernel_tree,kernel_text)
-                if kernel_structure_ok:
-                    kernel_spec=importlib.util.spec_from_file_location(
-                        "h032_result_kernel",result_kernel)
-                    if kernel_spec is not None and kernel_spec.loader is not None:
-                        kernel_module=importlib.util.module_from_spec(kernel_spec)
-                        kernel_spec.loader.exec_module(kernel_module)
             except Exception as exc:
                 kernel_structure_detail={"error":f"{type(exc).__name__}:{exc}"}
     source_tree=ast.parse(source.read_text(encoding="utf-8"))
     kernel_integration_structure_ok,kernel_integration_structure_detail=(
         integration_structure_inventory(source_tree))
     integration_fixture='''from controller.result.consumer import consume_private_result
-def finish(sink, canonical, invocation, run, role):
+def cleanup():
+    pass
+def run_codex(sink, canonical, invocation, run, role):
     accepted=consume_private_result(sink, canonical, invocation, run, role)
-    return accepted
-def run_codex(repo, role):
-    return finish(repo.sink, repo.canonical, repo.invocation, repo.run, role)
+    try:
+        return accepted
+    finally:
+        cleanup()
 '''
     integration_positive=integration_structure_inventory(ast.parse(integration_fixture))[0]
     integration_dead=integration_structure_inventory(ast.parse(integration_fixture.replace(
-        "return finish(repo.sink, repo.canonical, repo.invocation, repo.run, role)",
-        "return {'outcome':'READY'}")))[0]
+        "accepted=consume_private_result(sink, canonical, invocation, run, role)",
+        "accepted={'outcome':'READY'}")))[0]
     integration_constants=integration_structure_inventory(ast.parse(integration_fixture.replace(
         "consume_private_result(sink, canonical, invocation, run, role)",
         "consume_private_result(1, 2, 3, 4, 5)")))[0]
-    integration_rig_ok=integration_positive and not integration_dead and not integration_constants
+    integration_discard=integration_structure_inventory(ast.parse(integration_fixture.replace(
+        "try:\n        return accepted\n    finally:",
+        "accepted\n    try:\n        return {'outcome':'READY'}\n    finally:")))[0]
+    integration_rebind=integration_structure_inventory(ast.parse(integration_fixture.replace(
+        "try:\n        return accepted",
+        "accepted={'outcome':'READY'}\n    try:\n        return accepted")))[0]
+    integration_direct=integration_structure_inventory(ast.parse(integration_fixture.replace(
+        "accepted=consume_private_result(sink, canonical, invocation, run, role)\n    try:\n        return accepted\n    finally:\n        cleanup()",
+        "return consume_private_result(sink, canonical, invocation, run, role)")))[0]
+    sentinel=object()
+    integration_runtime_source=integration_fixture.replace(
+        "from controller.result.consumer import consume_private_result\n","")
+    integration_runtime_namespace={"consume_private_result":lambda *unused: sentinel}
+    exec(compile(integration_runtime_source,"<h032-r49-integration-rig>","exec"),integration_runtime_namespace)
+    integration_runtime_positive=(integration_runtime_namespace["run_codex"](
+        1,2,3,4,5) is sentinel)
+    discarded_runtime=integration_runtime_source.replace(
+        "try:\n        return accepted\n    finally:",
+        "accepted\n    try:\n        return {'outcome':'READY'}\n    finally:")
+    discarded_namespace={"consume_private_result":lambda *unused: sentinel}
+    exec(compile(discarded_runtime,"<h032-r49-discarded-rig>","exec"),discarded_namespace)
+    integration_runtime_discarded=(discarded_namespace["run_codex"](1,2,3,4,5) is sentinel)
+    integration_rig_ok=(integration_positive and integration_direct
+        and not integration_dead and not integration_constants and not integration_discard
+        and not integration_rebind and integration_runtime_positive
+        and not integration_runtime_discarded)
     # Fixture authority is judge-private.  It is injected only into the actual
     # provider child after production has finished constructing its launch
     # environment; imported production never reads these controls from its own
@@ -874,6 +947,7 @@ def run_codex(repo, role):
         return outcome[0], outcome[1], starts(repo) - before, int(cap_after != cap_before), residue
 
     integration_calls=[]
+    integration_sentinel={"r49_opaque":os.urandom(24).hex()}
     if kernel_structure_ok and kernel_integration_structure_ok \
             and hasattr(module,"consume_private_result"):
         actual_consumer=module.consume_private_result
@@ -884,8 +958,9 @@ def run_codex(repo, role):
                 "access":flags&os.O_ACCMODE,"cloexec":bool(fdflags&fcntl.FD_CLOEXEC),
                 "canonical":str(canonical_destination),"invocation":invocation_id,
                 "run":run_id,"role":role,"capture":capture_now}
-            returned=actual_consumer(sink_fd,canonical_destination,invocation_id,run_id,role)
-            record["returned"]=returned;integration_calls.append(record);return returned
+            accepted=actual_consumer(sink_fd,canonical_destination,invocation_id,run_id,role)
+            record["accepted"]=accepted;integration_calls.append(record)
+            return integration_sentinel
         module.consume_private_result=observed_consumer
 
     valid_repo = make_repo(str(provider))
@@ -897,7 +972,7 @@ def run_codex(repo, role):
     run_return=valid_observed.get("run_return")
     integration_dynamic_ok=False
     if len(integration_calls)==1:
-        call=integration_calls[0];call_cap=call.get("capture") or {};returned=call.get("returned")
+        call=integration_calls[0];call_cap=call.get("capture") or {}
         output_path=Path(call_cap.get("output_path","/private/tmp/h032-missing-connected-output"))
         canonical_path=Path(call_cap.get("canonical_result","/private/tmp/h032-missing-connected-canonical"))
         integration_dynamic_ok=(valid[0] and call.get("access")==os.O_RDONLY
@@ -909,10 +984,7 @@ def run_codex(repo, role):
             and all(char in "0123456789abcdef" for char in call["run"])
             and call.get("invocation")!=call.get("run")
             and call.get("canonical")==str(canonical_path)
-            and isinstance(returned,dict) and returned.get("role")=="TEST_AUTHOR"
-            and isinstance(returned.get("report"),dict)
-            and returned["report"].get("outcome")==getattr(run_return,"outcome",None)
-            and returned["report"].get("role")==getattr(run_return,"role",None)
+            and run_return is integration_sentinel
             and not output_path.exists() and canonical_path.is_file())
     argv0 = Path(cap.get("argv0", ""))
     host_snapshot = Path(cap.get("host_path", "/private/tmp/h032-missing-host-snapshot"))
@@ -1762,6 +1834,7 @@ def run_codex(repo, role):
 import hashlib
 import json
 import os
+from pathlib import Path
 import stat
 import tempfile
 MAX_RESULT_BYTES = 4194304
@@ -1795,6 +1868,12 @@ def _write_all(fd,data):
         count=os.write(fd,view)
         if count<=0: raise OSError("short publication write")
         view=view[count:]
+def _fstat(fd,op=os.fstat):
+    return op(fd)
+def _path_stat(path,op=os.stat):
+    return op(path)
+def _sync(fd,op=os.fsync):
+    return op(fd)
 def _unlink_retry(path):
     last=None
     for unused in range(2):
@@ -1807,19 +1886,19 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
     try:
         access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE
         fdflags=fcntl.fcntl(sink_fd,fcntl.F_GETFD)
-        before=os.fstat(sink_fd)
+        before=_fstat(sink_fd)
         if access!=os.O_RDONLY or not (fdflags&fcntl.FD_CLOEXEC): raise ValueError("unsafe sink fd")
         if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1: raise ValueError("unsafe sink object")
+        _path_stat(os.path.dirname(os.fspath(canonical_destination)))
         if os.path.lexists(canonical_destination): raise FileExistsError("canonical preseed")
         chunks=[];total=0;offset=0
         while total<=MAX_RESULT_BYTES:
             chunk=os.pread(sink_fd,min(65536,MAX_RESULT_BYTES+1-total),offset)
             if not chunk: break
             chunks.append(chunk);total+=len(chunk);offset+=len(chunk)
-        after=os.fstat(sink_fd)
-        fields=("st_dev","st_ino","st_mode","st_nlink","st_size","st_mtime_ns","st_ctime_ns")
+        after=_fstat(sink_fd)
         if total>MAX_RESULT_BYTES or total!=before.st_size: raise ValueError("result bound/short read")
-        if any(getattr(before,key)!=getattr(after,key) for key in fields): raise ValueError("result changed")
+        if (before.st_dev,before.st_ino,before.st_mode,before.st_nlink,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_mode,after.st_nlink,after.st_size,after.st_mtime_ns,after.st_ctime_ns): raise ValueError("result changed")
         raw=b"".join(chunks)
         report=json.loads(raw.decode("utf-8","strict"),object_pairs_hook=_pairs)
         schema=json.loads(SCHEMA_TEXT,object_pairs_hook=_pairs)
@@ -1832,7 +1911,7 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         parent=os.fspath(os.path.dirname(os.fspath(canonical_destination)))
         temp_fd,temp_name=tempfile.mkstemp(prefix=".result-",dir=parent)
         try:
-            _write_all(temp_fd,encoded);os.fsync(temp_fd)
+            _write_all(temp_fd,encoded);_sync(temp_fd)
         finally:
             os.close(temp_fd);temp_fd=-1
         os.replace(temp_name,canonical_destination);temp_name=None
@@ -1844,9 +1923,11 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
 ''' % schema_text
     reference_kernel=work/"r48-owner-reference-kernel.py"
     reference_kernel.write_text(reference_kernel_source,encoding="utf-8")
+    reference_kernel_inventory_ok=kernel_structure_inventory(
+        ast.parse(reference_kernel_source),reference_kernel_source)[0]
 
     effect_runner=work/"r48-kernel-effect-runner.py"
-    effect_runner.write_text(r'''import fcntl,hashlib,importlib.util,json,os,pathlib,socket,stat,sys,threading,time
+    effect_runner.write_text(r'''import builtins,fcntl,hashlib,json,os,pathlib,socket,stat,sys,tempfile,threading,time,types,typing
 module_path,arena,raw_path,mode=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),sys.argv[4]
 staging=arena/"staging";canonical_parent=arena/"canonical";sink=staging/"sink";canonical=canonical_parent/"result.json"
 staging.mkdir(mode=0o700);canonical_parent.mkdir(mode=0o700)
@@ -1868,12 +1949,15 @@ else:
 if sink_fd>=0 and mode=="no_cloexec": fcntl.fcntl(sink_fd,fcntl.F_SETFD,fcntl.fcntl(sink_fd,fcntl.F_GETFD)&~fcntl.FD_CLOEXEC)
 if mode=="preseed":
  canonical.write_bytes(b"preseed");st=canonical.stat();preseed_identity=(st.st_dev,st.st_ino,canonical.read_bytes().hex())
-spec=importlib.util.spec_from_file_location("r48_subject_kernel",module_path);mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
+module_source=module_path.read_bytes()
+mod=types.ModuleType("r49_subject_kernel");mod.__file__=str(module_path);mod.__package__=""
 sink_identity=None
 if sink_fd>=0:
  st=os.fstat(sink_fd);sink_identity=(st.st_dev,st.st_ino)
 accepted_digest=hashlib.sha256(raw).hexdigest()
 events=[];transitions=[];held=[];fsynced=set();call_active=[False];transition_done=[False]
+primitive_counts={name:0 for name in ("open","path_open","path_read_text","fsync","fstat","stat","lstat","access","readlink","getenv","putenv","unsetenv")}
+env_events=[];env_before=dict(os.environ);module_error="NONE"
 allowed_roots=(staging.resolve(),canonical_parent.resolve())
 def inside_allowed(value):
  try:
@@ -1882,29 +1966,61 @@ def inside_allowed(value):
   if not path.is_absolute(): return True
   return any(path==root or root in path.parents for root in allowed_roots) or str(path).startswith("/dev/fd/")
  except Exception: return False
+original_fstat=os.fstat
 def fd_inventory(identity,writable=None):
  found=[]
  try: numbers=sorted(int(name) for name in os.listdir("/dev/fd") if name.isdigit())
  except OSError: numbers=list(range(0,512))
  for number in numbers:
   try:
-   current=os.fstat(number)
+   current=original_fstat(number)
    if (current.st_dev,current.st_ino)!=identity: continue
    access=fcntl.fcntl(number,fcntl.F_GETFL)&os.O_ACCMODE
    if writable is None or ((access!=os.O_RDONLY)==writable): found.append((number,access))
   except OSError: pass
  return found
-original_fsync=os.fsync
+original_fsync=os.fsync;original_os_open=os.open;original_builtin_open=builtins.open
+original_getenv=os.getenv;original_putenv=os.putenv;original_unsetenv=os.unsetenv
+original_path_open=pathlib.Path.open;original_path_read_text=pathlib.Path.read_text
 def observed_fsync(fd):
- st=os.fstat(fd);fsynced.add((st.st_dev,st.st_ino));return original_fsync(fd)
+ primitive_counts["fsync"]+=1;st=original_fstat(fd);fsynced.add((st.st_dev,st.st_ino));return original_fsync(fd)
 os.fsync=observed_fsync
+def observed_fstat(fd):
+ primitive_counts["fstat"]+=1;return original_fstat(fd)
+os.fstat=observed_fstat
+def observed_os_open(path,flags,*args,**kwargs):
+ primitive_counts["open"]+=1;return original_os_open(path,flags,*args,**kwargs)
+os.open=observed_os_open
+def observed_builtin_open(*args,**kwargs):
+ primitive_counts["open"]+=1;return original_builtin_open(*args,**kwargs)
+builtins.open=observed_builtin_open
+def observed_path_open(self,*args,**kwargs):
+ primitive_counts["path_open"]+=1;return original_path_open(self,*args,**kwargs)
+pathlib.Path.open=observed_path_open
+def observed_path_read_text(self,*args,**kwargs):
+ primitive_counts["path_read_text"]+=1;return original_path_read_text(self,*args,**kwargs)
+pathlib.Path.read_text=observed_path_read_text
 original_path_ops={name:getattr(os,name) for name in ("stat","lstat","access","readlink")}
 def observed_path_op(name):
  def invoke(path,*args,**kwargs):
+  primitive_counts[name]+=1
   if call_active[0]: events.append((name,str(path),0,inside_allowed(path)))
   return original_path_ops[name](path,*args,**kwargs)
  return invoke
 for path_op in original_path_ops: setattr(os,path_op,observed_path_op(path_op))
+def observed_getenv(key,*args):
+ primitive_counts["getenv"]+=1
+ if call_active[0]: env_events.append(("getenv",str(key)))
+ return original_getenv(key,*args)
+def observed_putenv(key,value):
+ primitive_counts["putenv"]+=1
+ if call_active[0]: env_events.append(("putenv",str(key)))
+ return original_putenv(key,value)
+def observed_unsetenv(key):
+ primitive_counts["unsetenv"]+=1
+ if call_active[0]: env_events.append(("unsetenv",str(key)))
+ return original_unsetenv(key)
+os.getenv=observed_getenv;os.putenv=observed_putenv;os.unsetenv=observed_unsetenv
 def audit(event,args):
  if not call_active[0]: return
  if event=="open" and args:
@@ -1926,7 +2042,14 @@ def audit(event,args):
    transitions.append({"absent":absent,"dev":before.st_dev,"ino":before.st_ino,"size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),"stable":(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns),"writers":writers,"fsynced":identity in fsynced})
    held.append(fd);transition_done[0]=True
   elif transition_done[0] and (src==canonical or dst==canonical): events.append(("post_rename",str(src),str(dst),False))
+ elif event in {"os.putenv","os.unsetenv"}:
+  env_events.append((event,str(args[0]) if args else ""))
 sys.addaudithook(audit)
+call_active[0]=True
+try:
+ exec(compile(module_source,str(module_path),"exec"),mod.__dict__)
+except Exception as exc:
+ module_error=type(exc).__name__+":"+str(exc)
 visible=[];stop=threading.Event()
 def observe():
  while not stop.is_set():
@@ -1945,17 +2068,19 @@ if mode=="mutation" and sink_fd>=0:
   finally: os.close(fd)
  mutator=threading.Thread(target=mutate,daemon=True);mutator.start();time.sleep(.003)
 else: stop_mutation=None
-original_replace=mod.os.replace;original_unlink=mod.os.unlink;cleanup_failures=[0]
+module_os=getattr(mod,"os",os)
+original_replace=module_os.replace;original_unlink=module_os.unlink;cleanup_failures=[0]
 if mode in {"cleanup_transient","cleanup_persistent"}:
  def fail_replace(src,dst): raise OSError("injected publication failure")
  def fail_unlink(path,*args,**kwargs):
   if mode=="cleanup_persistent" or cleanup_failures[0]==0:
    cleanup_failures[0]+=1;raise OSError("injected cleanup failure")
   return original_unlink(path,*args,**kwargs)
- mod.os.replace=fail_replace;mod.os.unlink=fail_unlink
+ module_os.replace=fail_replace;module_os.unlink=fail_unlink
 accepted=False;returned=None;error="NONE";call_active[0]=True
 second_rejected=None
 try:
+ if module_error!="NONE": raise RuntimeError(module_error)
  if sink_fd<0: raise ValueError("nofollow sink open rejected")
  invocation=("3"*32 if mode=="equal_binding" else "z"*32 if mode=="bad_invocation" else "1"*32)
  run=("3"*32 if mode=="equal_binding" else "2"*32)
@@ -1966,8 +2091,12 @@ try:
   except Exception: second_rejected=True
 except Exception as exc: error=type(exc).__name__+":"+str(exc)
 finally:
- call_active[0]=False;mod.os.replace=original_replace;mod.os.unlink=original_unlink
+ call_active[0]=False;module_os.replace=original_replace;module_os.unlink=original_unlink
  for path_op,original_path_op in original_path_ops.items(): setattr(os,path_op,original_path_op)
+ os.fsync=original_fsync;os.fstat=original_fstat;os.open=original_os_open
+ os.getenv=original_getenv;os.putenv=original_putenv;os.unsetenv=original_unsetenv
+ builtins.open=original_builtin_open;pathlib.Path.open=original_path_open
+ pathlib.Path.read_text=original_path_read_text
  if stop_mutation is not None: stop_mutation.set();mutator.join(timeout=1)
  stop.set();observer.join(timeout=1)
 fd_aliases=fd_inventory(sink_identity) if sink_identity else []
@@ -1989,9 +2118,10 @@ if canonical.is_file() and not canonical.is_symlink():
 temps=[str(path) for path in canonical_parent.iterdir() if path.name!="result.json"]
 outside=[event for event in events if event[-1] is False and event[0] not in {"post_write","post_remove","post_rename"}]
 post_events=[event for event in events if event[0] in {"post_write","post_remove","post_rename"}]
+env_changed=(dict(os.environ)!=env_before)
 transition_ok=(len(transitions)==1 and canonical_info is not None and transitions[0]["absent"] and transitions[0]["stable"] and transitions[0]["fsynced"] and not transitions[0]["writers"] and (transitions[0]["dev"],transitions[0]["ino"],transitions[0]["digest"])==(canonical_info.get("dev"),canonical_info.get("ino"),canonical_info.get("digest")))
 visibility_ok=(not visible or (canonical_info is not None and all(item==canonical_info.get("digest") for item in visible)))
-print(json.dumps({"accepted":accepted,"error":error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected},separators=(",",":"),sort_keys=True))
+print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed},separators=(",",":"),sort_keys=True))
 for fd in held:
  try: os.close(fd)
  except OSError: pass
@@ -2020,6 +2150,7 @@ for fd in held:
             and case.get("fd_aliases")==[] and case.get("transition_ok") is True
             and case.get("visibility_ok") is True and not case.get("temps")
             and not case.get("outside") and not case.get("post_events")
+            and not case.get("env_events") and case.get("env_changed") is False
             and case.get("trap_unchanged") is True
             and canonical.get("keys")==expected_binding_keys
             and canonical.get("schema_version_type")=="int"
@@ -2036,6 +2167,7 @@ for fd in held:
         return (case.get("rc")==0 and case.get("accepted") is False
             and case.get("fd_aliases")==[] and not case.get("temps")
             and not case.get("outside") and case.get("trap_unchanged") is True
+            and not case.get("env_events") and case.get("env_changed") is False
             and (canonical is None or preseed_ok))
 
     reference_cases={
@@ -2074,6 +2206,43 @@ for fd in held:
         and reference_cases["cleanup_persistent"].get("cleanup_failures",0)>=2
         and bool(reference_cases["cleanup_persistent"].get("temps")))
 
+    # Import and captured-reference sensitivity uses the same child and exact
+    # public call. The subject is executed only after the judge has installed
+    # delegating wrappers, so defaults capture observed genuine primitives.
+    import_probe_source=reference_kernel_source.replace(
+        '__all__ = ["consume_private_result"]',
+        '__all__ = ["consume_private_result"]\ndef _import_probe(value=Path(__file__).with_suffix("."+"trap").read_text()):\n    return value',1)
+    import_probe=work/"r49-import-path-read-mutant.py"
+    import_probe.write_text(import_probe_source,encoding="utf-8")
+    import_probe.with_suffix(".trap").write_text("IMPORT_TRAP",encoding="utf-8")
+    import_probe_case=fresh_kernel_effect(import_probe,rig_valid_raw)
+    captured_stat_source=reference_kernel_source.replace(
+        '_path_stat(os.path.dirname(os.fspath(canonical_destination)))',
+        '_path_stat(Path(__file__).with_suffix("."+"trap"))',1)
+    captured_stat=work/"r49-captured-stat-mutant.py"
+    captured_stat.write_text(captured_stat_source,encoding="utf-8")
+    captured_stat.with_suffix(".trap").write_text("STAT_TRAP",encoding="utf-8")
+    captured_stat_case=fresh_kernel_effect(captured_stat,rig_valid_raw)
+    env_source=reference_kernel_source.replace(
+        '        return envelope',
+        '        os.putenv("H032_R49_MUTATION","1")\n        return envelope',1)
+    env_mutant=work/"r49-environment-mutant.py"
+    env_mutant.write_text(env_source,encoding="utf-8")
+    env_case=fresh_kernel_effect(env_mutant,rig_valid_raw)
+    unsynced_source=reference_kernel_source.replace('_sync(temp_fd)','None',1)
+    unsynced_mutant=work/"r49-unsynced-mutant.py"
+    unsynced_mutant.write_text(unsynced_source,encoding="utf-8")
+    unsynced_case=fresh_kernel_effect(unsynced_mutant,rig_valid_raw)
+    captured_primitive_rig_ok=(
+        fresh_success(reference_cases["valid"],rig_valid_raw)
+        and reference_cases["valid"].get("primitive_counts",{}).get("fsync",0)>=1
+        and reference_cases["valid"].get("primitive_counts",{}).get("stat",0)>=1
+        and import_probe_case.get("accepted") is True and bool(import_probe_case.get("outside"))
+        and captured_stat_case.get("accepted") is True and bool(captured_stat_case.get("outside"))
+        and env_case.get("accepted") is True and bool(env_case.get("env_events"))
+        and unsynced_case.get("accepted") is True
+        and unsynced_case.get("transition_ok") is False)
+
     leak_mutants={}
     original_def="def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):"
     safe_def="def _safe_consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):"
@@ -2095,8 +2264,8 @@ for fd in held:
     # The reference closes temp_fd before this source point, so construct a
     # connected mutant that duplicates it immediately before that close.
     atomic_mutant_source=reference_kernel_source.replace(
-        "            _write_all(temp_fd,encoded);os.fsync(temp_fd)",
-        "            _write_all(temp_fd,encoded);os.fsync(temp_fd);retained_writer=os.dup(temp_fd)",1).replace(
+        "            _write_all(temp_fd,encoded);_sync(temp_fd)",
+        "            _write_all(temp_fd,encoded);_sync(temp_fd);retained_writer=os.dup(temp_fd)",1).replace(
         "        os.replace(temp_name,canonical_destination);temp_name=None",
         "        os.replace(temp_name,canonical_destination);temp_name=None\n        first=os.pread(retained_writer,1,0);os.pwrite(retained_writer,b'x' if first!=b'x' else b'y',0);os.pwrite(retained_writer,first,0);os.close(retained_writer)",1)
     atomic_mutant=work/"r48-retained-publication-writer-mutant.py"
@@ -2114,11 +2283,11 @@ for fd in held:
     bool_version_case=fresh_kernel_effect(bool_version_mutant,rig_valid_raw)
     bool_version_caught=(bool_version_case.get("accepted") is True
         and not fresh_success(bool_version_case,rig_valid_raw))
-    reference_effect_rig_ok=(reference_basic_ok and leak_mutants_ok
-                             and atomic_mutant_caught and bool_version_caught)
+    reference_effect_rig_ok=(reference_kernel_inventory_ok and reference_basic_ok and leak_mutants_ok
+        and atomic_mutant_caught and bool_version_caught and captured_primitive_rig_ok)
 
     product_fresh_cases={};product_fresh_ok=False
-    if kernel_structure_ok and kernel_module is not None:
+    if kernel_structure_ok:
         product_fresh_cases={
             "valid":fresh_kernel_effect(result_kernel,rig_valid_raw),
             "max":fresh_kernel_effect(result_kernel,exact_sized_report(MAX_RESULT_BYTES)),
@@ -2150,7 +2319,7 @@ for fd in held:
                 "directory","fifo","socket","symlink","mutation","wrong_role",
                 "equal_binding","bad_invocation","cleanup_transient")))
 
-    kernel_direct_detail={};kernel_direct_ok=False
+    kernel_direct_detail={"fresh_child_authoritative":True};kernel_direct_ok=product_fresh_ok
     kernel_case_counter=[0]
     def direct_kernel_case(raw, *, invocation_id="1"*32, run_id="2"*32,
                            role="TEST_AUTHOR", preseed=False, hardlink=False,
@@ -2412,7 +2581,7 @@ for fd in held:
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok} integration={integration_positive,integration_dead,integration_constants} oracle={kernel_oracle_rig_ok} reference_basic={reference_basic_ok} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok} captured={captured_primitive_rig_ok,reference_cases['valid'].get('primitive_counts'),bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok')} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
