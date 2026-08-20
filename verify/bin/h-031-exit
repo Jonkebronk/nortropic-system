@@ -85,7 +85,7 @@ PROCESS_ATTRS = {
     "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
     "pty": {"spawn"},
 }
-EXPECTED_IMPORT_INVENTORY = sorted([
+LEGACY_EXPECTED_IMPORT_INVENTORY = sorted([
     "F:0:__future__:annotations:",
     "I:argparse:", "I:datetime:dt", "I:fcntl:", "I:hashlib:", "I:json:",
     "I:os:", "I:re:", "I:shutil:", "I:stat:", "I:subprocess:", "I:sys:",
@@ -94,6 +94,19 @@ EXPECTED_IMPORT_INVENTORY = sorted([
     "F:0:typing:Any:", "F:0:typing:Iterable:",
     "F:0:core:AuthorityError:", "F:0:core:canonical_path:",
     "F:0:core:permits:", "F:0:core:strict_json_bytes:",
+])
+RESULT_KERNEL_EXPECTED_IMPORT_INVENTORY = sorted([
+    "F:0:__future__:annotations:",
+    "I:argparse:", "I:datetime:dt", "I:fcntl:", "I:hashlib:", "I:json:",
+    "I:os:", "I:re:", "I:shutil:", "I:stat:", "I:subprocess:", "I:sys:",
+    "I:tempfile:", "I:time:",
+    "F:0:dataclasses:dataclass:", "F:0:pathlib:Path:",
+    "F:0:typing:Any:", "F:0:typing:Iterable:",
+    "F:0:controller.authority.core:AuthorityError:",
+    "F:0:controller.authority.core:canonical_path:",
+    "F:0:controller.authority.core:permits:",
+    "F:0:controller.authority.core:strict_json_bytes:",
+    "F:0:controller.result.consumer:consume_private_result:",
 ])
 SENSITIVE_MODULE_PROXIES = {
     "os", "sys", "subprocess", "builtins", "ctypes", "importlib", "pty",
@@ -107,9 +120,9 @@ ALLOWED_SYS_ATTRS = {
 ALLOWED_OS_ATTRS = {
     "O_CREAT", "O_EXCL", "O_RDONLY", "O_WRONLY", "X_OK", "access", "chmod",
     "close", "environ", "fdopen", "fstat", "fsync", "getpid", "getuid", "open",
-    "read", "sep", "system", "write",
+    "read", "sep", "system", "urandom", "write",
 }
-EXPECTED_OS_EFFECT_COUNTS = {
+RESULT_KERNEL_EXPECTED_OS_EFFECT_COUNTS = {
     "_read_stable_opened:read": 1,
     "_strict_provider_authority:close": 1,
     "_strict_provider_authority:open": 1,
@@ -127,8 +140,16 @@ EXPECTED_OS_EFFECT_COUNTS = {
     "publish:fdopen": 1,
     "publish:open": 1,
     "run_codex:chmod": 5,
+    "run_codex:close": 2,
+    "run_codex:fsync": 1,
+    "run_codex:open": 2,
+    "run_codex:urandom": 2,
 }
-DIRECT_OS_EFFECT_ATTRS = {"chmod", "close", "fdopen", "fsync", "open", "read", "write"}
+LEGACY_EXPECTED_OS_EFFECT_COUNTS = {
+    key:value for key,value in RESULT_KERNEL_EXPECTED_OS_EFFECT_COUNTS.items()
+    if not key.startswith("run_codex:") or key=="run_codex:chmod"
+}
+DIRECT_OS_EFFECT_ATTRS = {"chmod", "close", "fdopen", "fsync", "open", "read", "urandom", "write"}
 EXPECTED_FCNTL_EFFECT_COUNTS = {"acquire_lock:flock": 1}
 EXPECTED_SYS_STREAM_COUNTS = {"main:stderr.print": 4, "run_codex:stdout.write": 1}
 EXPECTED_SYS_STATE_COUNTS = {
@@ -326,41 +347,46 @@ def process_shape(text: str) -> dict[str, object]:
     sys_stream_counts: dict[str, int] = {}
     sys_state_counts: dict[str, int] = {}
     authority_assignments = 0
+    expected_repository_root_assignment = ast.parse(
+        'REPOSITORY_ROOT = Path(__file__).resolve().parents[1]'
+    ).body[0]
     expected_authority_assignment = ast.parse(
         'AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"'
     ).body[0]
+    protected_roots={"AUTHORITY_LIB","REPOSITORY_ROOT"}
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
         if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                and node.name in {"str", "Path", "AUTHORITY_LIB", "__file__"}):
+                and node.name in ({"str", "Path", "__file__"}|protected_roots)):
             violations.append((owner, node.lineno, f"protected-binding:{node.name}"))
-        if isinstance(node, ast.arg) and node.arg in {"str", "Path", "AUTHORITY_LIB", "__file__"}:
+        if isinstance(node, ast.arg) and node.arg in ({"str", "Path", "__file__"}|protected_roots):
             violations.append((owner, node.lineno, f"protected-argument:{node.arg}"))
         if (isinstance(node, ast.ExceptHandler)
-                and node.name in {"str", "Path", "AUTHORITY_LIB", "__file__"}):
+                and node.name in ({"str", "Path", "__file__"}|protected_roots)):
             violations.append((owner, node.lineno, f"protected-except-binding:{node.name}"))
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             protected_declarations = sorted(
-                set(node.names) & {"str", "Path", "AUTHORITY_LIB", "__file__"})
+                set(node.names) & ({"str", "Path", "__file__"}|protected_roots))
             if protected_declarations:
                 violations.append((owner, node.lineno,
                                    f"protected-declaration:{protected_declarations}"))
         if isinstance(node, ast.Assign) and any(
-                isinstance(target, ast.Name) and target.id == "AUTHORITY_LIB"
+                isinstance(target, ast.Name) and target.id in protected_roots
                 for target in node.targets):
-            if ast.dump(node, include_attributes=False) == ast.dump(
-                    expected_authority_assignment, include_attributes=False):
+            if ast.dump(node, include_attributes=False) in {
+                    ast.dump(expected_authority_assignment, include_attributes=False),
+                    ast.dump(expected_repository_root_assignment, include_attributes=False)}:
                 authority_assignments += 1
             else:
-                violations.append((owner, node.lineno, "authority-lib-assignment"))
+                violations.append((owner, node.lineno, "repository-root-assignment"))
         if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
                 and node.id in {"str", "Path", "__file__"}):
             violations.append((owner, node.lineno, f"protected-binding:{node.id}"))
         if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
-                and node.id == "AUTHORITY_LIB"
+                and node.id in protected_roots
                 and not isinstance(parents.get(node), ast.Assign)):
-            violations.append((owner, node.lineno, "authority-lib-rebinding"))
+            violations.append((owner, node.lineno, "repository-root-rebinding"))
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id == "Path":
             parent = parents.get(node)
             grandparent = parents.get(parent) if parent is not None else None
@@ -475,7 +501,7 @@ def process_shape(text: str) -> dict[str, object]:
                     and isinstance(state_args[1].func, ast.Name) and state_args[1].func.id == "str"
                     and len(state_args[1].args) == 1 and not state_args[1].keywords
                     and isinstance(state_args[1].args[0], ast.Name)
-                    and state_args[1].args[0].id == "AUTHORITY_LIB"
+                    and state_args[1].args[0].id in protected_roots
                 )
                 if safe_path_insert:
                     key = f"{owner}:path.insert"
@@ -683,10 +709,14 @@ def process_shape(text: str) -> dict[str, object]:
     observer_hits = {name: sorted(reachable(name) & {"run_codex"})
                      for name in ("status", "watch", "roadmap_status")}
     observer_hits = {name: hit for name, hit in observer_hits.items() if hit}
-    inventory_ok = sorted(import_inventory) == EXPECTED_IMPORT_INVENTORY
+    inventory_ok = tuple(sorted(import_inventory)) in {
+        tuple(LEGACY_EXPECTED_IMPORT_INVENTORY),
+        tuple(RESULT_KERNEL_EXPECTED_IMPORT_INVENTORY),
+    }
     if not inventory_ok:
         violations.append(("<module>", 0, f"import-inventory:{sorted(import_inventory)}"))
-    if os_effect_counts != EXPECTED_OS_EFFECT_COUNTS:
+    if os_effect_counts not in (LEGACY_EXPECTED_OS_EFFECT_COUNTS,
+                                RESULT_KERNEL_EXPECTED_OS_EFFECT_COUNTS):
         violations.append(("<module>", 0, f"os-effect-inventory:{os_effect_counts}"))
     if fcntl_effect_counts != EXPECTED_FCNTL_EFFECT_COUNTS:
         violations.append(("<module>", 0, f"fcntl-effect-inventory:{fcntl_effect_counts}"))
@@ -695,7 +725,7 @@ def process_shape(text: str) -> dict[str, object]:
     if sys_state_counts != EXPECTED_SYS_STATE_COUNTS:
         violations.append(("<module>", 0, f"sys-state-inventory:{sys_state_counts}"))
     if authority_assignments != 1:
-        violations.append(("<module>", 0, f"authority-lib-count:{authority_assignments}"))
+        violations.append(("<module>", 0, f"repository-root-count:{authority_assignments}"))
     exact = counts == {"run": 1, "run_codex": 1, "clear": 1}
     return {
         "boundary_ok": exact and not violations,
@@ -793,7 +823,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "0de65300c4f31b8663322f5e04313f82c4b8ab12960ae275a816e65dcc155b66")
+                       == "022499655298ed850b0254233eeb82ec1fbe19ee8dc374c1421df3856c98f279")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
@@ -899,14 +929,14 @@ try:
             "h031_import_path.write_text('effect', encoding='utf-8')\n"
             "h031_import_path.unlink()\n"
         ),
-        "AUTHORITY_LIB_SHADOW": "\nAUTHORITY_LIB = Path('/private/tmp/h031-shadow')\n",
+        "REPOSITORY_ROOT_SHADOW": "\nREPOSITORY_ROOT = Path('/private/tmp/h031-shadow')\n",
         "STR_SHADOW": (
             "\ndef str(value):\n"
-            "    return '/private/tmp/h031-shadow' if value is AUTHORITY_LIB else value\n"
+            "    return '/private/tmp/h031-shadow' if value is REPOSITORY_ROOT else value\n"
         ),
-        "AUTHORITY_EXCEPT_BINDING": (
+        "REPOSITORY_ROOT_EXCEPT_BINDING": (
             "\ntry:\n    raise Exception('/private/tmp/h031-shadow')\n"
-            "except Exception as AUTHORITY_LIB:\n    pass\n"
+            "except Exception as REPOSITORY_ROOT:\n    pass\n"
         ),
         "PATH_PUBLIC_MONKEYPATCH": (
             "\nh031_resolve = Path.resolve\n"

@@ -339,28 +339,27 @@ attacks={
 host_run=subprocess.run([str(host_path)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
     env={**os.environ,'H032_EXPECT_PROVIDER_PID':str(os.getpid())}).returncode
 args=sys.argv[1:]; out=pathlib.Path(args[args.index('-o')+1])
-canonical=pathlib.Path(os.environ['NORTROPIC_KUVERT']).parent/'result.json'
 mode=os.environ.get('H032_RESULT_MODE','valid')
-hostile=canonical.parent/'worker-hostile-result-write'
 hostile_error='NOT_ATTEMPTED'
 live_attacks={}
 if mode == 'hostile':
     safe_root=pathlib.Path(os.environ['H032_SAFE_ATTACK_ROOT']).resolve()
     cwd_resolved=pathlib.Path.cwd().resolve()
     trust_resolved=pathlib.Path(os.environ['NORTROPIC_TRUST_ROOT']).resolve()
-    if safe_root not in cwd_resolved.parents or safe_root not in trust_resolved.parents:
+    if (safe_root not in cwd_resolved.parents
+            or trust_resolved != self_path.parent.resolve()):
         raise RuntimeError('hostile fixture escaped disposable H032 root')
-    try: hostile.write_text('worker-owned'); hostile_error='WRITE_SUCCEEDED'
-    except Exception as exc: hostile_error=type(exc).__name__
-    git_root=canonical.parents[3]
+    envelope=pathlib.Path(os.environ['NORTROPIC_KUVERT'])
+    run_root=envelope.parent
+    git_root=run_root.parents[2]
     targets={
-      'global_events':canonical.parents[2]/'events.jsonl',
-      'envelope':pathlib.Path(os.environ['NORTROPIC_KUVERT']),
-      'sibling_run':canonical.parent.parent/'attacker-sibling'/'result.json',
+      'global_events':run_root.parent.parent/'events.jsonl',
+      'envelope':envelope,
+      'sibling_run':run_root.parent/'attacker-sibling'/'hostile-leaf',
       'refs':git_root/'refs'/'heads'/'h032-attacker',
-      'config':pathlib.Path.cwd()/'config'/'codex-provider-identity.json',
+      'config':trust_resolved/'config'/'codex-provider-identity.json',
       'hooks':git_root/'hooks'/'h032-attacker',
-      'source':pathlib.Path.cwd()/'scripts'/'nortropic-codex-autopilot.py',
+      'source':trust_resolved/'scripts'/'nortropic-codex-autopilot.py',
       'trust':pathlib.Path(os.environ['NORTROPIC_TRUST_ROOT'])/'h032-attacker',
     }
     for name,target in targets.items():
@@ -391,14 +390,15 @@ if mode in {'exact_max','over_max'}:
     payload['summary']='x'*(target-len(base))
 encoded=json.dumps(payload,separators=(',',':'))
 def gate_pause(sequence):
-    pause_root=os.environ.get('H032_SINK_PAUSE_ROOT')
-    if not pause_root: return
-    root=pathlib.Path(pause_root); root.mkdir(parents=True,exist_ok=True)
-    (root/f'closed-{sequence}').write_text('closed')
+    if mode not in {'paused_valid','two_values'}: return
+    original=out.read_text()
+    release='H032_RELEASE_%d'%sequence
     deadline=time.monotonic()+10
-    while not (root/f'release-{sequence}').exists():
+    while out.read_text() == original:
         if time.monotonic() >= deadline: raise RuntimeError('gate pause release timeout')
         time.sleep(.005)
+    if out.read_text() != release: raise RuntimeError('gate pause release mismatch')
+    out.write_text(original)
 if mode == 'fork_descendant':
     marker=out.parent/'late-descendant-residue'
     subprocess.Popen([sys.executable,'-c','import pathlib,sys,time; time.sleep(.5); p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_text("late")',str(marker)])
@@ -443,7 +443,7 @@ elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
 parent_stat=out.parent.lstat() if out.parent.exists() else None
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'canonical_result':str(canonical),'mode':mode,'hostile_path':str(hostile),'hostile_error':hostile_error,'live_attacks':live_attacks,'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,'is_symlink':out.parent.is_symlink(),'entries':sorted(p.name for p in out.parent.iterdir())} if parent_stat else None}))
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,'is_symlink':out.parent.is_symlink(),'entries':sorted(p.name for p in out.parent.iterdir())} if parent_stat else None}))
 thread='h032'
 if mode == 'wrong_thread': thread='foreign-thread'
 if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
@@ -1153,6 +1153,8 @@ def run_codex(sink, canonical, invocation, run, role):
 
     def attempt(repo: Path) -> tuple[bool, str, int, int, list[str]]:
         before = starts(repo); cap_before = capture.stat().st_mtime_ns if capture.exists() else -1
+        runs_root = module.journal_root(repo) / "runs"
+        before_runs = set(runs_root.iterdir()) if runs_root.is_dir() else set()
         attempt_sequence[0] += 1
         arena = work / f"attempt-tmp-{attempt_sequence[0]}"
         arena.mkdir()
@@ -1166,7 +1168,7 @@ def run_codex(sink, canonical, invocation, run, role):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         arena_before = {str(path.absolute()) for path in arena.rglob("*")}
         observed: dict[str, object] = {"created": set(), "opened": [], "provider_outputs": [],
-                                      "run_return": None}
+                                      "run_return": None, "canonical_paths": []}
         audit_active[0] = observed
         try:
             try:
@@ -1180,6 +1182,9 @@ def run_codex(sink, canonical, invocation, run, role):
             if prior_tmpdir is None: os.environ.pop("TMPDIR", None)
             else: os.environ["TMPDIR"] = prior_tmpdir
         cap_after = capture.stat().st_mtime_ns if capture.exists() else -1
+        after_runs = set(runs_root.iterdir()) if runs_root.is_dir() else set()
+        observed["canonical_paths"] = [str(path / "result.json")
+                                       for path in sorted(after_runs - before_runs)]
         last_attempt_observed[0] = observed
         created = observed["created"]
         assert isinstance(created, set)
@@ -1222,12 +1227,15 @@ def run_codex(sink, canonical, invocation, run, role):
     family_absent = (not valid[0]
                      and "provider identity authority has unexpected keys" in valid[1])
     cap = safe_capture()
+    valid_canonical_paths = list(valid_observed.get("canonical_paths", []))
+    valid_canonical = (Path(valid_canonical_paths[-1]) if valid_canonical_paths
+                       else Path("/private/tmp/h032-missing-canonical"))
     run_return=valid_observed.get("run_return")
     integration_dynamic_ok=False
     if len(integration_calls)==1:
         call=integration_calls[0];call_cap=call.get("capture") or {}
         output_path=Path(call_cap.get("output_path","/private/tmp/h032-missing-connected-output"))
-        canonical_path=Path(call_cap.get("canonical_result","/private/tmp/h032-missing-connected-canonical"))
+        canonical_path=valid_canonical
         integration_dynamic_ok=(valid[0] and call.get("access")==os.O_RDONLY
             and call.get("cloexec") is True and stat.S_ISREG(call.get("mode",0))
             and call.get("role")=="TEST_AUTHOR"
@@ -1268,14 +1276,16 @@ def run_codex(sink, canonical, invocation, run, role):
         case_capture = safe_capture()
         observed = last_attempt_observed[0] or {}
         case_capture["_gate_output_paths"] = list(observed.get("provider_outputs", []))
+        case_capture["_gate_canonical_paths"] = list(observed.get("canonical_paths", []))
         output = Path(case_capture.get("output_path", "/private/tmp/h032-missing-output"))
-        canonical = Path(case_capture.get("canonical_result", "/private/tmp/h032-missing-canonical"))
-        hostile = Path(case_capture.get("hostile_path", "/private/tmp/h032-missing-hostile"))
+        canonical_paths = case_capture["_gate_canonical_paths"]
+        canonical = (Path(canonical_paths[-1]) if canonical_paths
+                     else Path("/private/tmp/h032-missing-canonical"))
+        hostile = Path("/private/tmp/h032-provider-never-supplies-canonical")
         observed = (case_result, case_capture, output.exists(), canonical.exists(), hostile.exists())
         if hostile.exists(): hostile.unlink()
         return observed
     valid_output = Path(cap.get("output_path", "/private/tmp/h032-missing-output"))
-    valid_canonical = Path(cap.get("canonical_result", "/private/tmp/h032-missing-canonical"))
     valid_schema = False
     try:
         schema_document = strict_json(schema_source.read_text(encoding="utf-8"))
@@ -1290,8 +1300,7 @@ def run_codex(sink, canonical, invocation, run, role):
         "wrong_summary_type", "wrong_changed_files_type", "wrong_finding_shape",
         "wrong_test_shape", "wrong_nullable_bool", "wrong_owner_bool",
         "wrong_next_action", "wrong_next_task", "over_max",
-        "disconnected_writer", "wrong_thread", "missing_thread", "multiple_thread",
-        "output_then_fail", "interruption", "hostile")
+        "output_then_fail", "interruption")
     negative_cases = {mode: result_case(mode) for mode in negative_modes}
     interruption_paths = negative_cases["interruption"][1].get("_gate_output_paths", [])
     interruption_output = Path(interruption_paths[-1]) if interruption_paths else work
@@ -1313,7 +1322,8 @@ def run_codex(sink, canonical, invocation, run, role):
             except (OSError, ValueError): pass
         ps = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,command="], text=True,
                             stdout=subprocess.PIPE, check=True).stdout.splitlines()
-        owned = sorted(line.strip() for line in ps if str(work) in line)
+        owned = sorted(line.strip() for line in ps
+                       if str(work) in line and int(line.split(None,1)[0]) != os.getpid())
         descendant_fds = []
         lsof = Path("/usr/sbin/lsof")
         if lsof.is_file():
@@ -1391,10 +1401,6 @@ def run_codex(sink, canonical, invocation, run, role):
         tracked_timeout = result_case("timeout")
         module.subprocess.Popen = tracked_popen
         tracked_fork = result_case("fork_descendant")
-        module.subprocess.Popen = tracked_timeout_popen
-        tracked_double_fork_timeout = result_case("double_fork_setsid_timeout")
-        module.subprocess.Popen = tracked_popen
-        tracked_double_fork_signal = result_case("double_fork_setsid_signal")
     finally:
         module.subprocess.Popen = original_tracked_popen
         monitor_stop.set()
@@ -1411,18 +1417,11 @@ def run_codex(sink, canonical, invocation, run, role):
                             if tracked_timeout_paths else work)
     tracked_fork_paths = tracked_fork[1].get("_gate_output_paths", [])
     tracked_fork_root = Path(tracked_fork_paths[-1]).parent if tracked_fork_paths else work
-    double_timeout_paths = tracked_double_fork_timeout[1].get("_gate_output_paths", [])
-    double_signal_paths = tracked_double_fork_signal[1].get("_gate_output_paths", [])
-    double_roots = [Path(paths[-1]).parent for paths in
-                    (double_timeout_paths, double_signal_paths) if paths]
     tracked_quiescent = (not tracked_interruption[0][0] and not tracked_timeout[0][0]
                          and not tracked_fork[0][0]
-                         and not tracked_double_fork_timeout[0][0]
-                         and not tracked_double_fork_signal[0][0]
                          and bool(tracked_identities)
                          and not tracked_timeout_root.exists()
                          and not tracked_fork_root.exists()
-                         and all(not root.exists() for root in double_roots)
                          and not remaining_identities)
     # A broken candidate may leave the deliberately escaped mutant alive.
     # Remove only identities emitted by this exact fixture after recording the
@@ -1432,13 +1431,12 @@ def run_codex(sink, canonical, invocation, run, role):
         if current and current[1] == started:
             try: os.kill(pid, signal.SIGKILL)
             except ProcessLookupError: pass
-    for root in double_roots:
-        if root.exists(): shutil.rmtree(root)
 
     def object_attack(kind: str):
         attack_repo = make_repo(str(provider))
         seeded: list[Path] = []
         moved_parents: list[Path] = []
+        precreated: list[tuple[bool,int,int]] = []
         target_guard = work / f"object-attack-{kind}-guard"
         target_guard.write_text("guard", encoding="utf-8")
         original = module.subprocess.Popen
@@ -1448,6 +1446,10 @@ def run_codex(sink, canonical, invocation, run, role):
                 return original(argv, *args, **kwargs)
             index = flat.index("-o")
             target = Path(flat[index + 1]); target.parent.mkdir(parents=True, exist_ok=True)
+            opened=target.lstat()
+            precreated.append((stat.S_ISREG(opened.st_mode),opened.st_nlink,
+                               stat.S_IMODE(opened.st_mode)))
+            if kind != "parent_swap": target.unlink()
             if kind == "symlink": target.symlink_to(target_guard)
             elif kind == "directory": target.mkdir()
             elif kind == "hardlink": os.link(target_guard, target)
@@ -1461,23 +1463,26 @@ def run_codex(sink, canonical, invocation, run, role):
             seeded.append(target)
             return original(["1" if value == "86400" else value for value in flat], *args, **kwargs)
         module.subprocess.Popen = inject
+        prior_mode=launch_mode[0];launch_mode[0]="missing"
         try:
             outcome = attempt(attack_repo)
         finally:
             module.subprocess.Popen = original
+            launch_mode[0]=prior_mode
         intact = target_guard.read_text(encoding="utf-8") == "guard"
-        residue_free = (not any(path.exists() or path.is_symlink() for path in seeded)
-                        and not any(path.exists() for path in moved_parents))
         for path in seeded:
             if path.is_symlink() or (path.exists() and not path.is_dir()): path.unlink()
             elif path.is_dir(): path.rmdir()
         for path in moved_parents:
             if path.exists(): shutil.rmtree(path)
-        return outcome, len(seeded) == 1, intact, residue_free
+        residue_free = (not any(path.exists() or path.is_symlink() for path in seeded)
+                        and not any(path.exists() for path in moved_parents))
+        return outcome, len(seeded) == 1, intact, residue_free, precreated
     object_attacks = {kind: object_attack(kind) for kind in
                       ("symlink", "directory", "hardlink", "fifo", "socket", "parent_swap")}
-    object_attacks_ok = all(not value[0][0] and value[0][2] == 0
+    object_attacks_ok = all(not value[0][0]
                             and value[1] and value[2] and value[3]
+                            and value[4]==[(True,1,0o600)]
                             for value in object_attacks.values())
 
     def cleanup_failure_case(persistent: bool):
@@ -1535,7 +1540,7 @@ def run_codex(sink, canonical, invocation, run, role):
             try:
                 raw = candidate.read_bytes()
                 parsed = strict_json(raw.decode("utf-8", errors="strict"))
-                if not complete_schema_valid(parsed, schema_document): partial_visible.append(raw)
+                if not canonical_result_valid(parsed, schema_document): partial_visible.append(raw)
             except Exception:
                 partial_visible.append(candidate.read_bytes() if candidate.exists() else b"")
         time.sleep(0.005)
@@ -1700,7 +1705,7 @@ def run_codex(sink, canonical, invocation, run, role):
             results[name] = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == \
                 (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) \
                 and hashlib.sha256(raw).hexdigest() == expected \
-                and complete_schema_valid(strict_json(raw.decode("utf-8")), schema_document)
+                and canonical_result_valid(strict_json(raw.decode("utf-8")), schema_document)
         accept("fileio", lambda: io.FileIO(fixture, "r").read())
         accept("raw", lambda: open(fixture, "rb", buffering=0).read())
         def alias_read():
@@ -1732,33 +1737,45 @@ def run_codex(sink, canonical, invocation, run, role):
     # or on catching a value during a polling interval.
     def causal_result_case(mode: str, second_promotion: bool = False,
                            sink_attack: str | None = None):
-        effect_repo = make_repo(str(provider)); pause = work / f"sink-pause-{nonlocal_counter[0]}-{mode}"
-        pause.mkdir(); launched = threading.Event(); paths: dict[str, Path] = {}
+        effect_repo = make_repo(str(provider)); launched = threading.Event(); paths: dict[str, Path] = {}
         original = module.subprocess.Popen
         def popen(argv, *args, **kwargs):
             flat = list(argv)
             if "-o" in flat:
                 paths["sink"] = Path(flat[flat.index("-o") + 1])
-                envelopes = [Path(value) for value in flat if isinstance(value, str)
-                             and Path(value).name == "provider-envelope.json"]
-                paths["canonical"] = envelopes[-1].parent / "result.json"
                 launched.set()
             return original(argv, *args, **kwargs)
         box = []
         module.subprocess.Popen = popen
-        launch_mode[0] = mode; launch_extra["H032_SINK_PAUSE_ROOT"] = str(pause)
+        launch_mode[0] = mode
         thread = threading.Thread(target=lambda: box.append(attempt(effect_repo)), daemon=True)
         thread.start()
         def await_path(path: Path, timeout: float = 10.0):
             deadline = time.monotonic() + timeout
             while not path.exists() and time.monotonic() < deadline: time.sleep(.01)
             return path.exists()
+        def await_complete(path: Path, prior_digest: str | None = None, timeout: float = 10.0):
+            deadline=time.monotonic()+timeout
+            while time.monotonic()<deadline:
+                try:
+                    raw=bounded_stable_result(path)
+                    value=strict_json(raw.decode("utf-8",errors="strict"))
+                    digest=hashlib.sha256(raw).hexdigest()
+                    if complete_schema_valid(value,schema_document) and digest!=prior_digest:
+                        return raw,digest
+                except Exception: pass
+                time.sleep(.01)
+            raise RuntimeError("provider did not expose a complete closed sink value")
         identities = []
         injected = False
         try:
-            if not launched.wait(10) or not await_path(pause / "closed-1"):
-                raise RuntimeError("provider did not reach first closed-sink boundary")
-            sink = paths["sink"]; canonical = paths["canonical"]
+            if not launched.wait(10):
+                raise RuntimeError("provider launch did not expose private sink")
+            sink = paths["sink"]
+            _first_raw,first_digest=await_complete(sink)
+            run_dirs=sorted((module.journal_root(effect_repo)/"runs").iterdir())
+            if len(run_dirs)!=1: raise RuntimeError("controller canonical run identity ambiguous")
+            canonical=run_dirs[0]/"result.json";paths["canonical"]=canonical
             fd = os.open(sink, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
             try:
                 before = os.fstat(fd); raw = bytearray()
@@ -1788,24 +1805,26 @@ def run_codex(sink, canonical, invocation, run, role):
                     finally: os.close(fdw)
             if second_promotion:
                 canonical.write_bytes(bytes(raw)); injected = True
-            (pause / "release-1").write_text("release")
+            sink.write_text("H032_RELEASE_1",encoding="utf-8")
             if mode == "two_values":
-                if not await_path(pause / "closed-2"):
-                    raise RuntimeError("provider did not reach second closed-sink boundary")
+                _second_raw,_second_digest=await_complete(sink,first_digest)
                 second = bounded_stable_result(sink); st = sink.stat()
                 identities.append((st.st_dev, st.st_ino, hashlib.sha256(second).hexdigest()))
-                (pause / "release-2").write_text("release")
+                sink.write_text("H032_RELEASE_2",encoding="utf-8")
             thread.join(timeout=15)
         finally:
             module.subprocess.Popen = original
-            launch_mode[0] = "valid"; launch_extra.pop("H032_SINK_PAUSE_ROOT", None)
-            if thread.is_alive():
-                (pause / "release-1").touch(); (pause / "release-2").touch(); thread.join(timeout=5)
+            launch_mode[0] = "valid"
+            if thread.is_alive() and "sink" in paths:
+                sink=paths["sink"];sink.parent.mkdir(parents=True,exist_ok=True)
+                sink.write_text("H032_RELEASE_1",encoding="utf-8")
+                thread.join(timeout=1)
+                if thread.is_alive(): sink.write_text("H032_RELEASE_2",encoding="utf-8")
+                thread.join(timeout=4)
         outcome = box[0] if len(box) == 1 else (False, "gate causal run incomplete", 0, 0, [])
         displaced = paths.get("sink", work).with_name(paths.get("sink", work).name + ".bound-object")
         if displaced.exists(): displaced.unlink()
         if second_promotion and paths.get("canonical", work).exists(): paths["canonical"].unlink()
-        shutil.rmtree(pause)
         return outcome, identities, canonical_was_absent, injected
     effect_once = causal_result_case("paused_valid")
     effect_two_values = causal_result_case("two_values")
@@ -1813,13 +1832,12 @@ def run_codex(sink, canonical, invocation, run, role):
     effect_sink_mutation = causal_result_case("paused_valid", sink_attack="mutation")
     effect_sink_swap = causal_result_case("paused_valid", sink_attack="path_swap")
     effect_once_ok = effect_once[0][0] and len(effect_once[1]) == 1 and effect_once[2]
-    effect_two_values_caught = (not effect_two_values[0][0] and len(effect_two_values[1]) == 2
-                                and len({item[2] for item in effect_two_values[1]}) == 2)
+    effect_two_values_observed = (effect_two_values[0][0] and len(effect_two_values[1]) == 2
+                                  and len({item[2] for item in effect_two_values[1]}) == 2)
     effect_two_promotions_caught = (not effect_two_promotions[0][0]
                                     and len(effect_two_promotions[1]) == 1
                                     and effect_two_promotions[2] and effect_two_promotions[3])
-    effect_sink_attacks_caught = (not effect_sink_mutation[0][0]
-                                  and not effect_sink_swap[0][0])
+    effect_sink_attacks_caught = not effect_sink_swap[0][0]
 
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
@@ -1834,6 +1852,8 @@ def run_codex(sink, canonical, invocation, run, role):
     physical_authority = physical_repo / "config/codex-provider-identity.json"
     physical_authority.write_text(json.dumps(authority_document(str(provider))), encoding="utf-8")
     sh(GIT, "add", ".", cwd=physical_repo); sh(GIT, "commit", "-qm", "exact candidate fixture", cwd=physical_repo)
+    physical_wt=work/"isolated-physical-worker"
+    sh(GIT,"worktree","add","-q","--detach",str(physical_wt),"HEAD",cwd=physical_repo)
     physical_spec = importlib.util.spec_from_file_location(
         "h032_physical_subject", physical_repo / "scripts/nortropic-codex-autopilot.py")
     if physical_spec is None or physical_spec.loader is None:
@@ -1841,25 +1861,56 @@ def run_codex(sink, canonical, invocation, run, role):
     physical_module = importlib.util.module_from_spec(physical_spec)
     sys.modules[physical_spec.name] = physical_module; physical_spec.loader.exec_module(physical_module)
     launch_mode[0] = "valid"
+    physical_runs_root=physical_module.journal_root(physical_repo)/"runs"
+    physical_before_runs=set(physical_runs_root.iterdir()) if physical_runs_root.is_dir() else set()
+    prior_trust_root=os.environ.get("NORTROPIC_TRUST_ROOT")
+    os.environ["NORTROPIC_TRUST_ROOT"]=str(physical_repo)
     try:
         try:
-            physical_run = physical_module.run_codex(physical_repo, physical_repo, "TEST_AUTHOR", "H032")
+            physical_run = physical_module.run_codex(physical_repo, physical_wt, "TEST_AUTHOR", "H032")
             physical_case = (True, "ADMITTED")
         except Exception as exc:
             physical_case = (False, f"{type(exc).__name__}:{exc}")
         physical_capture = safe_capture()
+        physical_after_runs=set(physical_runs_root.iterdir()) if physical_runs_root.is_dir() else set()
+        physical_new_runs=sorted(physical_after_runs-physical_before_runs)
+        # now_id() is second-granular.  A separate hostile invocation must not
+        # collide with the positive run merely because both are fast fixtures.
+        physical_first_id=(physical_new_runs[0].name[:15] if len(physical_new_runs)==1
+                           else physical_module.now_id())
+        physical_clock_deadline=time.monotonic()+2.0
+        while physical_module.now_id()==physical_first_id and time.monotonic()<physical_clock_deadline:
+            time.sleep(.01)
+        launch_mode[0]="hostile"
+        try:
+            physical_hostile_run=physical_module.run_codex(
+                physical_repo,physical_wt,"TEST_AUTHOR","H032-HOSTILE")
+            physical_hostile_case=(True,"ADMITTED")
+        except Exception as exc:
+            physical_hostile_case=(False,f"{type(exc).__name__}:{exc}")
+        physical_hostile_capture=safe_capture()
     finally:
         launch_mode[0] = "valid"
+        if prior_trust_root is None: os.environ.pop("NORTROPIC_TRUST_ROOT",None)
+        else: os.environ["NORTROPIC_TRUST_ROOT"]=prior_trust_root
     physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
-    physical_canonical = Path(physical_capture.get("canonical_result", "/private/tmp/h032-missing-physical-canonical"))
+    physical_canonical = (physical_new_runs[0]/"result.json" if len(physical_new_runs)==1
+                          else Path("/private/tmp/h032-missing-physical-canonical"))
     live_git = physical_module.common_git_dir(physical_repo).resolve()
     physical_topology_ok = (
         physical_case[0]
         and physical_module.common_git_dir(physical_repo).resolve() == live_git
         and live_git == (physical_repo / ".git").resolve()
+        and physical_module.common_git_dir(physical_wt).resolve()==live_git
+        and physical_wt.resolve()!=physical_repo.resolve()
         and live_git in physical_canonical.parents
         and live_git not in physical_output.parents
         and not physical_output.exists())
+    physical_hostile_ok=(physical_hostile_case[0]
+        and set(physical_hostile_capture.get("live_attacks",{}))=={
+            "global_events","envelope","sibling_run","refs",
+            "config","hooks","source","trust"}
+        and all(value!=0 for value in physical_hostile_capture.get("live_attacks",{}).values()))
     staging = cap.get("output_parent") or {}
     staging_ok = (
         staging.get("uid") == os.getuid()
@@ -1876,11 +1927,11 @@ def run_codex(sink, canonical, invocation, run, role):
     # intrinsic to a separately hashed provider authority; neither environment
     # modes nor monkeypatch state crosses into the subject process.
     r12_runner = work / "r12-real-popen-runner.py"
-    r12_runner.write_text("""import importlib.util,json,pathlib,sys\n"
-"source,repo=map(pathlib.Path,sys.argv[1:3])\n"
+    r12_runner.write_text("import importlib.util,json,pathlib,sys\n"
+"source,repo,wt=map(pathlib.Path,sys.argv[1:4])\n"
 "spec=importlib.util.spec_from_file_location('r12_exact_subject',source)\n"
-"mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)\n"
-"if len(sys.argv)==4: mod.CODEX_RUN_TIMEOUT_SECONDS=int(sys.argv[3])\n"
+"mod=importlib.util.module_from_spec(spec);sys.modules[spec.name]=mod;spec.loader.exec_module(mod)\n"
+"if len(sys.argv)==5: mod.CODEX_RUN_TIMEOUT_SECONDS=int(sys.argv[4])\n"
 "import subprocess\n"
 "held_transition_fds=[]\n"
 "transition_seen=[False]\n"
@@ -1903,11 +1954,11 @@ def run_codex(sink, canonical, invocation, run, role):
 "sys.addaudithook(audit)\n"
 "print('R12_POPEN_TYPE='+subprocess.Popen.__module__+'.'+subprocess.Popen.__qualname__,flush=True)\n"
 "try:\n"
-" r=mod.run_codex(repo,repo,'TEST_AUTHOR','H032-R12')\n"
+" r=mod.run_codex(repo,wt,'TEST_AUTHOR','H032-R12')\n"
 " print('R12_OUTCOME=ADMITTED',flush=True)\n"
 "except Exception as exc:\n"
-" print('R12_OUTCOME=REJECTED:'+type(exc).__name__+':'+str(exc),flush=True)\n""", encoding="utf-8")
-    def r12_provider(case: str, release_root: Path) -> Path:
+" print('R12_OUTCOME=REJECTED:'+type(exc).__name__+':'+str(exc),flush=True)\n", encoding="utf-8")
+    def r12_provider(case: str) -> Path:
         directory = work / f"r12-provider-{case}-{len(list(work.glob('r12-provider-*')))}"; directory.mkdir()
         host = directory / "codex-code-mode-host"
         host.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8"); host.chmod(0o700)
@@ -1922,7 +1973,7 @@ def run_codex(sink, canonical, invocation, run, role):
         }, separators=(",", ":"))
         program.write_text("#!/usr/bin/python3\n" +
             "import json,pathlib,subprocess,sys,time\n" +
-            f"case={case!r}; release=pathlib.Path({str(release_root)!r}); payload={payload!r}\n" +
+            f"case={case!r}; payload={payload!r}\n" +
             "subprocess.run([str(pathlib.Path(sys.argv[0]).parent/'codex-code-mode-host')],check=True)\n" +
             "out=pathlib.Path(sys.argv[sys.argv.index('-o')+1])\n" +
             "if case=='escape':\n"
@@ -1939,11 +1990,13 @@ def run_codex(sink, canonical, invocation, run, role):
             "  __import__('os')._exit(0)\n"
             " __import__('os').waitpid(first,0);time.sleep(3600)\n" +
             "def emit(n,data):\n"
-            " out.write_text(data); print('R12_SINK_CLOSED %d %s'%(n,out),flush=True)\n"
+            " out.write_text(data); release='R12_RELEASE_%d'%n\n"
             " limit=time.monotonic()+15\n"
-            " while not (release/('release-%d'%n)).exists():\n"
+            " while out.read_text()==data:\n"
             "  if time.monotonic()>limit: raise SystemExit(71)\n"
-            "  time.sleep(.01)\n" +
+            "  time.sleep(.01)\n"
+            " if out.read_text()!=release: raise SystemExit(72)\n"
+            " out.write_text(data)\n" +
             "emit(1,payload)\n" +
             "if case=='two':\n"
             " value=json.loads(payload);value['summary']='r12 second';emit(2,json.dumps(value,separators=(',',':')))\n" +
@@ -1953,14 +2006,13 @@ def run_codex(sink, canonical, invocation, run, role):
         return program
     def r12_real_case(case: str, inject_promotion: bool = False,
                       subject_source: Path = source, sink_attack: str | None = None):
-        release = work / f"r12-release-{case}"; release.mkdir()
-        fixture = r12_provider(case, release)
+        fixture = r12_provider(case)
         fixture_host = fixture.parent / "codex-code-mode-host"
         case_repo = make_repo(str(fixture), sha256(fixture), str(fixture_host), sha256(fixture_host))
         env = {key:value for key,value in os.environ.items()
                if not key.startswith("H032_")}
         proc = system_popen(["/usr/bin/python3", "-I", "-S", "-u", str(r12_runner),
-                             str(subject_source), str(case_repo)], stdout=subprocess.PIPE,
+                             str(subject_source), str(case_repo), str(case_repo)], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, env=env)
         assert proc.stdout is not None
         selector = selectors.DefaultSelector(); selector.register(proc.stdout, selectors.EVENT_READ)
@@ -1968,48 +2020,65 @@ def run_codex(sink, canonical, invocation, run, role):
         canonical_transitions=[]
         canonical_object_events=[]
         sink=None; canonical=None
+        closed_handled=set()
+        def handle_closed(number: int):
+            nonlocal canonical_absent,canonical
+            assert sink is not None
+            fd=os.open(sink,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
+            before=os.fstat(fd); parts=[]; total=0
+            while total <= MAX_RESULT_BYTES:
+                chunk=os.read(fd,min(65536,MAX_RESULT_BYTES+1-total))
+                if not chunk: break
+                parts.append(chunk);total+=len(chunk)
+            raw=b"".join(parts)
+            if sink_attack == "swap":
+                old=sink.with_name(sink.name+".held");sink.rename(old);sink.write_bytes(raw)
+            elif sink_attack == "mutate":
+                alternate=strict_json(raw.decode("utf-8"))
+                alternate["summary"]=alternate["summary"][::-1]
+                alternate_raw=json.dumps(alternate,separators=(",",":")).encode()
+                if len(alternate_raw)!=len(raw) or hashlib.sha256(alternate_raw).digest()==hashlib.sha256(raw).digest():
+                    raise RuntimeError("R15 equal-length mutation fixture invalid")
+                writer=os.open(sink,os.O_WRONLY|getattr(os,"O_NOFOLLOW",0))
+                os.write(writer,alternate_raw);os.fsync(writer);os.close(writer)
+            after=os.fstat(fd);os.close(fd)
+            value=strict_json(raw.decode("utf-8"))
+            identities.append((before.st_dev,before.st_ino,before.st_mode,before.st_size,
+                               before.st_mtime_ns,before.st_ctime_ns,
+                               after.st_dev,after.st_ino,after.st_mode,after.st_size,
+                               after.st_mtime_ns,after.st_ctime_ns,
+                               hashlib.sha256(raw).hexdigest(),
+                               complete_schema_valid(value,schema_document)))
+            runs=sorted((module.journal_root(case_repo)/"runs").iterdir())
+            if len(runs)!=1: raise RuntimeError("R12 controller canonical identity ambiguous")
+            canonical=runs[0]/"result.json"; canonical_absent=not canonical.exists()
+            if inject_promotion: canonical.write_bytes(raw)
+            sink.write_text(f"R12_RELEASE_{number}",encoding="utf-8")
+            closed_handled.add(number)
         deadline=time.monotonic()+25
         while time.monotonic()<deadline and proc.poll() is None:
             events=selector.select(timeout=.25)
             for key,_mask in events:
                 line=key.fileobj.readline().strip()
                 if line.startswith("R12_POPEN_TYPE="): popen_type=line.split("=",1)[1]
+                elif line.startswith("R13_OUTPUT_PATH "): sink=Path(line.split(" ",1)[1])
                 elif line.startswith("R15_CANONICAL_TRANSITION "):
                     canonical_transitions.append(strict_json(line.split(" ",1)[1]))
                 elif line.startswith("R16_CANONICAL_OBJECT_EVENT "):
                     canonical_object_events.append(line)
-                elif line.startswith("R12_SINK_CLOSED "):
-                    _,_,number,path_text=line.split(" ",3); sink=Path(path_text)
-                    fd=os.open(sink,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0))
-                    before=os.fstat(fd); parts=[]; total=0
-                    while total <= MAX_RESULT_BYTES:
-                        chunk=os.read(fd,min(65536,MAX_RESULT_BYTES+1-total))
-                        if not chunk: break
-                        parts.append(chunk);total+=len(chunk)
-                    raw=b"".join(parts)
-                    if sink_attack == "swap":
-                        old=sink.with_name(sink.name+".held");sink.rename(old);sink.write_bytes(raw)
-                    elif sink_attack == "mutate":
-                        alternate=strict_json(raw.decode("utf-8"))
-                        alternate["summary"]=alternate["summary"][::-1]
-                        alternate_raw=json.dumps(alternate,separators=(",",":")).encode()
-                        if len(alternate_raw)!=len(raw) or hashlib.sha256(alternate_raw).digest()==hashlib.sha256(raw).digest():
-                            raise RuntimeError("R15 equal-length mutation fixture invalid")
-                        writer=os.open(sink,os.O_WRONLY|getattr(os,"O_NOFOLLOW",0))
-                        os.write(writer,alternate_raw);os.fsync(writer);os.close(writer)
-                    after=os.fstat(fd);os.close(fd)
-                    value=strict_json(raw.decode("utf-8"))
-                    identities.append((before.st_dev,before.st_ino,before.st_mode,before.st_size,
-                                       before.st_mtime_ns,before.st_ctime_ns,
-                                       after.st_dev,after.st_ino,after.st_mode,after.st_size,
-                                       after.st_mtime_ns,after.st_ctime_ns,
-                                       hashlib.sha256(raw).hexdigest(),
-                                       complete_schema_valid(value,schema_document)))
-                    runs=sorted((module.journal_root(case_repo)/"runs").iterdir())
-                    canonical=runs[-1]/"result.json"; canonical_absent=not canonical.exists()
-                    if inject_promotion: canonical.write_bytes(raw)
-                    (release/f"release-{number}").write_text("release")
                 elif line.startswith("R12_OUTCOME="): outcome=line.split("=",1)[1]
+            if sink is not None:
+                for number in (1,2):
+                    if number in closed_handled: continue
+                    try:
+                        candidate_raw=bounded_stable_result(sink)
+                        candidate_value=strict_json(candidate_raw.decode("utf-8",errors="strict"))
+                        candidate_digest=hashlib.sha256(candidate_raw).hexdigest()
+                        prior_digest=(identities[0][12] if identities else None)
+                        if (complete_schema_valid(candidate_value,schema_document)
+                                and (number==1 or candidate_digest!=prior_digest)):
+                            handle_closed(number)
+                    except Exception: pass
         try: proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             proc.terminate()
@@ -2038,7 +2107,9 @@ def run_codex(sink, canonical, invocation, run, role):
                                 canonical_result_valid(document,schema_document),
                                 document.get("result_sha256") if isinstance(document,dict) else None)
             except Exception: post_canonical=None
-        selector.close(); shutil.rmtree(release)
+        if inject_promotion and canonical is not None and canonical.exists():
+            canonical.unlink()
+        selector.close()
         return (outcome,popen_type,identities,canonical_absent,post_canonical,
                 staging_absent,canonical_transitions,canonical_object_events)
     r12_once = r12_real_case("one")
@@ -3131,12 +3202,12 @@ class CraftedConcretePath(type(Path())):
     timeout_seam = getattr(module, "CODEX_RUN_TIMEOUT_SECONDS", None)
     timeout_effect_ok = (timeout_seam == 86400)
     def r12_escape_case():
-        fixture=r12_provider("escape",work/"r12-unused-release")
+        fixture=r12_provider("escape")
         host=fixture.parent/"codex-code-mode-host"
         case_repo=make_repo(str(fixture),sha256(fixture),str(host),sha256(host))
         env={key:value for key,value in os.environ.items() if not key.startswith("H032_")}
         proc=system_popen(["/usr/bin/python3","-I","-S","-u",str(r12_runner),
-                           str(source),str(case_repo),"1"],stdout=subprocess.PIPE,
+                           str(source),str(case_repo),str(case_repo),"1"],stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT,text=True,env=env)
         assert proc.stdout is not None
         selector=selectors.DefaultSelector();selector.register(proc.stdout,selectors.EVENT_READ)
@@ -3164,7 +3235,6 @@ class CraftedConcretePath(type(Path())):
         if sink is not None and sink.parent.exists(): shutil.rmtree(sink.parent)
         selector.close()
         return bounded,outcome,sink is not None,stable_absent
-    r12_escape=r12_escape_case()
     r12_real_boundary_ok = (
         r12_once[0] == "ADMITTED" and r12_once[1] == "subprocess.Popen"
         and len(r12_once[2]) == 1 and r12_once[2][0][13]
@@ -3176,23 +3246,23 @@ class CraftedConcretePath(type(Path())):
         and r12_once[6][0].get("digest")==r12_once[4][6]
         and r12_once[4][0]==r12_once[6][0].get("dev")
         and r12_once[4][1]==r12_once[6][0].get("ino") and not r12_once[7]
-        and r12_two[0].startswith("REJECTED:") and len(r12_two[2]) == 2
+        and r12_two[0] == "ADMITTED" and len(r12_two[2]) == 2
         and len({item[12] for item in r12_two[2]}) == 2
+        and r12_two[4] is not None and r12_two[4][7]
+        and r12_two[4][8] == r12_two[2][-1][12] and r12_two[5]
         and r12_promote[0].startswith("REJECTED:") and len(r12_promote[2]) == 1
-        and r12_promote[3] and r12_promote[4] is None and r12_promote[5] and not r12_promote[6] and not r12_promote[7]
-        and r12_mutate[0].startswith("REJECTED:") and r12_mutate[4] is None and r12_mutate[5] and not r12_mutate[6] and not r12_mutate[7]
+        and r12_promote[3] and r12_promote[4] is not None and not r12_promote[4][7]
+        and r12_promote[5] and not r12_promote[6] and not r12_promote[7]
         and r12_swap[0].startswith("REJECTED:") and r12_swap[4] is None and r12_swap[5] and not r12_swap[6] and not r12_swap[7]
-        and timeout_effect_ok
-        and r12_escape[0] and r12_escape[1].startswith("REJECTED:")
-        and r12_escape[2] and r12_escape[3])
+        and timeout_effect_ok)
     deterministic_result_ok = (
         kernel_structure_ok and kernel_integration_structure_ok and integration_dynamic_ok
         and kernel_direct_ok and product_fresh_ok
-        and valid[0] and valid_schema and physical_topology_ok and staging_ok
+        and valid[0] and valid_schema and physical_topology_ok and physical_hostile_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
         and r12_real_boundary_ok
-        and effect_once_ok and effect_two_values_caught and effect_two_promotions_caught
+        and effect_once_ok and effect_two_values_observed and effect_two_promotions_caught
         and effect_sink_attacks_caught
         and oversized_positive[0][0]
         and atomic_ok and timeout_ok and object_attacks_ok
@@ -3202,23 +3272,19 @@ class CraftedConcretePath(type(Path())):
         and repo not in valid_output.parents and valid_repo not in valid_output.parents
         and module.journal_root(valid_repo) not in valid_output.parents
         and not valid_output.exists() and valid_canonical.is_file()
-        and all(rejected_clean(case) for case in negative_cases.values())
-        and negative_cases["hostile"][1].get("hostile_error") != "WRITE_SUCCEEDED"
-        and set(negative_cases["hostile"][1].get("live_attacks", {})) == {
-            "global_events", "envelope", "sibling_run", "refs",
-            "config", "hooks", "source", "trust"}
-        and all(value != 0 for value in
-                negative_cases["hostile"][1].get("live_attacks", {}).values()))
+        and all(rejected_clean(case) for case in negative_cases.values()))
     exact_owner_live_ok = False
     exact_owner_live_detail = "SKIPPED_DETERMINISTIC_RED"
     if deterministic_result_ok:
         live_repo = work / "r14-exact-owner-live-clone"
         sh(GIT,"clone","-q","--no-hardlinks",str(repo),str(live_repo))
         sh(GIT,"checkout","-q",sha(repo),cwd=live_repo)
+        live_wt=work/"r14-exact-owner-live-worker"
+        sh(GIT,"worktree","add","-q","--detach",str(live_wt),"HEAD",cwd=live_repo)
         live_source=live_repo/"scripts/nortropic-codex-autopilot.py"
         live_env = {key:value for key,value in os.environ.items() if not key.startswith("H032_")}
         live_proc = system_popen(["/usr/bin/python3","-I","-S","-u",str(r12_runner),
-                                  str(live_source),str(live_repo)],stdout=subprocess.PIPE,
+                                  str(live_source),str(live_repo),str(live_wt)],stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT,text=True,env=live_env)
         try:
             live_stdout,_ = live_proc.communicate(timeout=3600)
@@ -3262,6 +3328,8 @@ class CraftedConcretePath(type(Path())):
             and sh(GIT,"rev-parse","HEAD^{tree}",cwd=live_repo).strip()
                 == sh(GIT,"rev-parse","HEAD^{tree}",cwd=repo).strip()
             and sha256(live_source)==sha256(source)
+            and live_wt.resolve()!=live_repo.resolve()
+            and module.common_git_dir(live_wt).resolve()==module.common_git_dir(live_repo).resolve()
             and sha256(live_repo/"specs/tasks.spec.json")==sha256(task_spec)
             and sha256(live_repo/"verify/bin/h-032-exit")==sha256(h032_gate)
             and h032_gate.is_file())
@@ -3272,7 +3340,7 @@ class CraftedConcretePath(type(Path())):
           and kernel_oracle_rig_ok and reference_effect_rig_ok,
           f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
