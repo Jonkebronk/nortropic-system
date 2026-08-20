@@ -1610,3 +1610,27 @@ new authority helper, no path claim and no production change.
 H031 is rebound to the finalized H032 gate bytes. Result schema, same-opened kernel,
 publication/cleanup, process containment, provider/host authority, G20 and the rule
 that the real provider phase runs only after deterministic green remain unchanged.
+
+### 2026-08-20 — H032/H031 R68 environment-closed live HEAD identity
+
+R67 removed the undefined helper but its Git subprocess still inherited the caller's
+complete environment and merged stderr into stdout. An inherited `GIT_DIR` can select
+another repository's HEAD even when cwd names the candidate worktree; `GIT_TRACE=1`
+adds diagnostics to the same captured stream. An absolute Git pathname alone therefore
+did not bind the candidate identity.
+
+R68 gives every gate-owned Git subprocess a newly constructed allowlist environment.
+Caller Git directory, worktree, index, object, alternate-object, configuration, trace
+and other `GIT_*` controls are absent; the gate supplies only its exact locale, temp,
+PATH, HOME and disabled system/global configuration values. HEAD observation first
+requires `--show-toplevel` to resolve to the exact requested worktree, then accepts
+`--verify HEAD` only as one newline-terminated lowercase 40-hex line with empty stderr.
+The same primitive binds candidate prestate, the isolated live clone and evidence.
+
+An unconditional decoy-repository control demonstrates that the inherited R67 shape
+selects the decoy SHA and that inherited tracing emits stderr. Connected hostile
+GIT_DIR/GIT_WORK_TREE, common-dir/index/object/alternate-object, config and trace inputs
+must all still return the candidate SHA through the closed primitive; malformed,
+multiline, uppercase/nonhex or stderr-bearing output rejects, while unrelated caller
+environment remains harmless. H031 binds the finalized H032 digest. No production,
+provider, result, G20 or live-call gating behavior changes.

@@ -89,6 +89,16 @@ EXPECTED_PROVIDER_SHA256 = "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e274
 EXPECTED_CODE_MODE_HOST_PATH = EXPECTED_PROVIDER_PATH.with_name("codex-code-mode-host")
 EXPECTED_CODE_MODE_HOST_SHA256 = "a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d"
 GIT = "/usr/bin/git"
+GIT_CLOSED_ENV = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/var/empty",
+    "TMPDIR": "/private/tmp",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0",
+}
 
 def check(key: str, ok: bool, detail: str) -> None:
     checks.append((key, ok, detail))
@@ -223,14 +233,124 @@ def authority_shape(raw: str) -> tuple[bool, str]:
 def sh(*argv: str, cwd: Path | None = None) -> str:
     if not argv or argv[0] != GIT:
         raise RuntimeError("judge helper permits only exact system Git")
-    p = subprocess.run(argv, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.run(argv, cwd=cwd, env=dict(GIT_CLOSED_ENV), text=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if p.returncode:
-        raise RuntimeError(f"rc={p.returncode}: {' '.join(argv)}\n{p.stdout}")
+        raise RuntimeError(
+            f"rc={p.returncode}: {' '.join(argv)}\nstdout={p.stdout}\nstderr={p.stderr}")
     return p.stdout
 
-repo_head = sh(GIT, "rev-parse", "HEAD", cwd=repo).strip()
+def strict_git_commit_output(stdout: str, stderr: str) -> str:
+    line = stdout[:-1] if stdout.endswith("\n") else ""
+    if (stderr or stdout != line + "\n" or len(line) != 40
+            or any(char not in "0123456789abcdef" for char in line)):
+        raise RuntimeError("Git commit output is not one exact lowercase SHA-1 line")
+    return line
+
+def strict_git_root_output(stdout: str, stderr: str) -> Path:
+    line = stdout[:-1] if stdout.endswith("\n") else ""
+    if stderr or stdout != line + "\n" or not line or not Path(line).is_absolute():
+        raise RuntimeError("Git worktree output is not one exact absolute line")
+    return Path(line)
+
+def git_repository_head(cwd: Path) -> str:
+    root = subprocess.run(
+        [GIT, "rev-parse", "--show-toplevel"], cwd=cwd,
+        env=dict(GIT_CLOSED_ENV), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if root.returncode:
+        raise RuntimeError(f"Git worktree identity failed: {root.stderr}")
+    observed_root = strict_git_root_output(root.stdout, root.stderr)
+    if observed_root.resolve() != cwd.resolve():
+        raise RuntimeError("Git worktree identity does not match requested repository")
+    head = subprocess.run(
+        [GIT, "rev-parse", "--verify", "HEAD"], cwd=cwd,
+        env=dict(GIT_CLOSED_ENV), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if head.returncode:
+        raise RuntimeError(f"Git HEAD identity failed: {head.stderr}")
+    return strict_git_commit_output(head.stdout, head.stderr)
+
+repo_head = git_repository_head(repo)
 
 try:
+    git_decoy = work / "r68-git-environment-decoy"
+    git_decoy.mkdir()
+    sh(GIT, "init", "-q", cwd=git_decoy)
+    sh(GIT, "config", "user.name", "h032-r68", cwd=git_decoy)
+    sh(GIT, "config", "user.email", "h032-r68@nortropic.invalid", cwd=git_decoy)
+    (git_decoy / "decoy").write_text("not the candidate\n", encoding="utf-8")
+    sh(GIT, "add", ".", cwd=git_decoy)
+    sh(GIT, "commit", "-qm", "decoy", cwd=git_decoy)
+    decoy_head = git_repository_head(git_decoy)
+    inherited_dir_env = dict(GIT_CLOSED_ENV, GIT_DIR=str(git_decoy / ".git"))
+    inherited_dir_probe = subprocess.run(
+        [GIT, "rev-parse", "--verify", "HEAD"], cwd=repo, env=inherited_dir_env,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    inherited_trace_env = dict(GIT_CLOSED_ENV, GIT_TRACE="1")
+    inherited_trace_probe = subprocess.run(
+        [GIT, "rev-parse", "--verify", "HEAD"], cwd=repo, env=inherited_trace_env,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    ambient_git_results = {}
+    ambient_cases = {
+        "git_dir": {"GIT_DIR": str(git_decoy / ".git")},
+        "git_work_tree": {
+            "GIT_DIR": str(git_decoy / ".git"),
+            "GIT_WORK_TREE": str(git_decoy),
+        },
+        "git_trace": {"GIT_TRACE": "1", "GIT_TRACE_SETUP": "1"},
+        "git_storage_controls": {
+            "GIT_COMMON_DIR": str(git_decoy / ".git"),
+            "GIT_INDEX_FILE": str(git_decoy / ".git/index"),
+            "GIT_OBJECT_DIRECTORY": str(git_decoy / ".git/objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_decoy / ".git/objects"),
+        },
+        "git_config": {
+            "GIT_CONFIG_SYSTEM": str(git_decoy / "hostile-system-config"),
+            "GIT_CONFIG_GLOBAL": str(git_decoy / "hostile-global-config"),
+            "GIT_CONFIG_NOSYSTEM": "0",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.worktree",
+            "GIT_CONFIG_VALUE_0": str(git_decoy),
+        },
+        "unrelated": {"H032_R68_UNRELATED": "preserved-only-outside-git"},
+    }
+    for case_name, changes in ambient_cases.items():
+        prior = {key: os.environ.get(key) for key in changes}
+        try:
+            os.environ.update(changes)
+            ambient_git_results[case_name] = git_repository_head(repo)
+        finally:
+            for key, value in prior.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+    malformed_git_outputs_reject = True
+    for bad_stdout, bad_stderr in (
+        (repo_head, ""),
+        (repo_head + "\nextra\n", ""),
+        (repo_head.upper() + "\n", ""),
+        (repo_head + "\n", "trace: hostile inherited diagnostic\n"),
+        ("g" * 40 + "\n", ""),
+    ):
+        try:
+            strict_git_commit_output(bad_stdout, bad_stderr)
+            malformed_git_outputs_reject = False
+        except RuntimeError:
+            pass
+    check("J_ENVIRONMENT_CLOSED_CANDIDATE_HEAD",
+          decoy_head != repo_head
+          and inherited_dir_probe.returncode == 0
+          and inherited_dir_probe.stdout == decoy_head + "\n"
+          and inherited_trace_probe.returncode == 0
+          and bool(inherited_trace_probe.stderr)
+          and strict_git_commit_output(repo_head + "\n", "") == repo_head
+          and malformed_git_outputs_reject
+          and set(ambient_git_results) == set(ambient_cases)
+          and all(value == repo_head for value in ambient_git_results.values()),
+          f"candidate={repo_head} decoy={decoy_head} inherited_dir={inherited_dir_probe.stdout.strip()} trace_stderr={bool(inherited_trace_probe.stderr)} ambient={ambient_git_results} malformed_reject={malformed_git_outputs_reject}")
+
     # Current-authority lifecycle. Historical h-032 candidates are design
     # evidence only; this exact row must follow the published h-033 chain.
     spec_document = strict_json(task_spec.read_text(encoding="utf-8"))
@@ -4630,7 +4750,7 @@ class CraftedConcretePath(type(Path())):
             and live_transitions[0].get("ino")==before.st_ino
             and not live_sink.exists() and not live_sink.parent.exists()
             and sha256(apath)==digest and sha256(host_path)==host_digest
-            and sh(GIT,"rev-parse","HEAD",cwd=live_repo).strip()==repo_head
+            and git_repository_head(live_repo)==repo_head
             and sh(GIT,"rev-parse","HEAD^{tree}",cwd=live_repo).strip()
                 == sh(GIT,"rev-parse","HEAD^{tree}",cwd=repo).strip()
             and sha256(live_source)==sha256(source)
@@ -4643,7 +4763,7 @@ class CraftedConcretePath(type(Path())):
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     print("R60_BOUND_EVIDENCE=" + json.dumps({
-        "candidate_sha": sh(GIT, "rev-parse", "HEAD", cwd=repo).strip(),
+        "candidate_sha": git_repository_head(repo),
         "journal_parser_rig_ok": journal_parser_rig_ok,
         "journal_faults": r58_journal_fault_summary,
         "journal_faults_ok": journal_faults_ok,
@@ -5435,7 +5555,7 @@ class CraftedConcretePath(type(Path())):
     launcher = source.parents[1] / "controller/launch/cli"
     task_spec = source.parents[1] / "specs/tasks.spec.json"
     gate_path = source.parents[1] / "verify/bin/h-032-exit"
-    candidate_sha = sh(GIT, "rev-parse", "HEAD", cwd=source.parents[1]).strip()
+    candidate_sha = git_repository_head(source.parents[1])
     binding = {"schema_version": 1, "task": "h-032", "candidate_sha": candidate_sha,
                "task_spec_sha256": sha256(task_spec), "h032_gate_sha256": sha256(gate_path),
                "g20_probe_identity": "controller/launch/cli:" + sha256(launcher)}
