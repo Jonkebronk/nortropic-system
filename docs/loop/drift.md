@@ -1334,3 +1334,24 @@ R55 also closes the cleanup accounting gap. Every provider-started negative path
 R55 covered complete residue after a provider had started but could not represent a correct rejection with zero provider processes. R56 separates actual provider-process creation from the controller's journal event and injects four connected failures into the real `run_codex` lifecycle: after the private staging root but before its sink, during creation/open of that sink, after the retained read-only sink capability but before Popen, and at a Popen exception before delegation. Each requires the canonical and exact staging parent absent, the complete attempt residue and created private-root inventory empty, no live descriptor alias for the observed sink object, and zero actual provider starts. Provider-started cases retain their exact one-start/one-output requirement.
 
 The unconditional rig now admits a clean zero-start failure and rejects otherwise identical false-start, helper-residue, private-root and fd-alias mutants. The injected observations are retained before the judge removes only exact gate-owned diagnostic residue. Existing valid execution and bounded transient cleanup recovery remain positive anchors. No cleanup API is prescribed, production is unchanged, and H032 stays RED only for the missing structured-result kernel/integration; the live provider phase remains skipped.
+
+### 2026-08-20 — H032 R57 effect-neutral setup lifecycle
+
+Independent R56 review showed that the four setup controls still depended on when
+`_provider_snapshot` happened and whether `AGENT_START` had already been journaled. R57
+removes both dependencies. A valid connected run inventories every private allocation and
+identifies the result root only because it is the parent of the actual `-o` sink. Later
+faults target that root and sink by path plus dev/inode/access-mode effects; provider-family
+allocation order and journal chronology are not verdict inputs. Zero or one journal start
+record is accepted when its actual route fields are correct, while provider process starts
+remain an independent effect.
+
+The matrix now faults the first and second observed root-validation operations, the
+pre-create/open boundary, a returned writable create descriptor during fsync and close,
+the next setup step, the retained read-only descriptor's fstat, and the Popen boundary
+before delegation. The judge never precloses the product descriptor. Every case records
+`injected=true`, zero provider starts, exact result-root identity, empty complete attempt
+residue, absent staging/helper roots and zero remaining sink fd aliases. Metamorphic root
+allocation and journal schedules prove that reordering remains admissible. This changes no
+production or H017/G20 authority and keeps the absent structured-result implementation as
+the sole actual-product RED.

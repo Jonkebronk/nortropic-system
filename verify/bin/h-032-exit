@@ -1097,16 +1097,20 @@ def run_codex(sink, canonical, invocation, run, role):
         return f"{original_now_id()}-{run_seq[0]:04d}"
     module.now_id = fixture_now_id
 
-    def starts(repo: Path) -> int:
+    def agent_start_records(repo: Path) -> list[dict[str, object]]:
         p = module.journal_root(repo) / "events.jsonl"
-        if not p.exists(): return 0
-        count = 0
+        if not p.exists(): return []
+        records: list[dict[str, object]] = []
         for line in p.read_text(encoding="utf-8", errors="strict").splitlines():
             if not line.strip(): continue
             try: value = strict_json(line)
             except Exception: continue
-            count += isinstance(value, dict) and value.get("event") == "AGENT_START"
-        return count
+            if isinstance(value, dict) and value.get("event") == "AGENT_START":
+                records.append(value)
+        return records
+
+    def starts(repo: Path) -> int:
+        return len(agent_start_records(repo))
 
     def safe_capture() -> dict[str, object]:
         try:
@@ -1202,7 +1206,8 @@ def run_codex(sink, canonical, invocation, run, role):
     sys.addaudithook(audit_inventory)
 
     def attempt(repo: Path) -> tuple[bool, str, int, int, list[str]]:
-        before = starts(repo); cap_before = capture.stat().st_mtime_ns if capture.exists() else -1
+        before_records = agent_start_records(repo); before = len(before_records)
+        cap_before = capture.stat().st_mtime_ns if capture.exists() else -1
         process_starts_before = provider_process_starts[0]
         runs_root = module.journal_root(repo) / "runs"
         before_runs = set(runs_root.iterdir()) if runs_root.is_dir() else set()
@@ -1221,6 +1226,7 @@ def run_codex(sink, canonical, invocation, run, role):
         observed: dict[str, object] = {"created": set(), "opened": [], "provider_outputs": [],
                                       "sink_identities": [], "sink_fd_aliases": [],
                                       "provider_process_starts": 0,
+                                      "journal_start_records": [],
                                       "private_paths": [], "private_paths_present": [],
                                       "run_return": None, "canonical_paths": [],
                                       "runs_root": runs_root,
@@ -1264,6 +1270,7 @@ def run_codex(sink, canonical, invocation, run, role):
                                                if path.exists() or path.is_symlink()]
         observed["provider_process_starts"] = (
             provider_process_starts[0] - process_starts_before)
+        observed["journal_start_records"] = agent_start_records(repo)[len(before_records):]
         sink_identities = observed["sink_identities"]
         assert isinstance(sink_identities, list)
         aliases: list[tuple[int, int, int]] = []
@@ -1374,6 +1381,8 @@ def run_codex(sink, canonical, invocation, run, role):
             observed.get("private_paths_present", []))
         case_capture["_gate_sink_identities"] = list(observed.get("sink_identities", []))
         case_capture["_gate_sink_fd_aliases"] = list(observed.get("sink_fd_aliases", []))
+        case_capture["_gate_journal_start_records"] = list(
+            observed.get("journal_start_records", []))
         output = Path(case_capture.get("output_path", "/private/tmp/h032-missing-output"))
         canonical_paths = case_capture["_gate_canonical_paths"]
         canonical = (Path(canonical_paths[-1]) if canonical_paths
@@ -1388,7 +1397,18 @@ def run_codex(sink, canonical, invocation, run, role):
                        expected_journal_starts: tuple[int, ...] = (1,)) -> bool:
         result, case_capture, output_exists, canonical_exists, hostile_exists = case
         output_paths = [Path(value) for value in case_capture.get("_gate_output_paths", [])]
+        journal_records = case_capture.get("_gate_journal_start_records", [])
+        journal_ok = (isinstance(journal_records, list)
+            and len(journal_records) == result[2]
+            and all(isinstance(record, dict)
+                    and record.get("event") == "AGENT_START"
+                    and record.get("role") == "TEST_AUTHOR"
+                    and record.get("model") == "gpt-5.6-sol"
+                    and record.get("reasoning_effort") == "max"
+                    and record.get("model_routing_source") == "AUTOPILOT_ROLE_POLICY"
+                    for record in journal_records))
         return (not result[0] and result[2] in expected_journal_starts
+                and journal_ok
                 and case_capture.get("_gate_provider_process_starts") == expected_process_starts
                 and not result[4]
                 and len(output_paths) == expected_output_paths
@@ -1664,169 +1684,282 @@ def run_codex(sink, canonical, invocation, run, role):
         and "cleanup" in persistent_cleanup[0][1].lower()
         and not persistent_cleanup[2] and not persistent_cleanup[3])
 
-    def setup_spawn_fault_case(stage: str):
-        """Inject one connected pre-provider failure into the actual run_codex path."""
-        case_repo = make_repo(str(provider))
-        if capture.exists():
-            capture.unlink()
-        original_snapshot = module._provider_snapshot
+    def result_root_ordinal_discovery():
+        """Identify result staging by its observed -o child, never by snapshot order."""
+        allocations: list[Path] = []; output_paths: list[Path] = []
         original_mkdtemp = module.tempfile.mkdtemp
-        original_open = module.os.open
-        original_journal = module.journal
         original_popen = module.subprocess.Popen
-        snapshot_ready = [False]; roots: list[Path] = []; retained = [False]
-        injected = [False]
+        def observe_mkdtemp(*args, **kwargs):
+            value = Path(original_mkdtemp(*args, **kwargs)); allocations.append(value)
+            return str(value)
+        def observe_popen(argv, *args, **kwargs):
+            flat = list(argv)
+            if "-o" in flat: output_paths.append(Path(flat[flat.index("-o") + 1]))
+            return original_popen(argv, *args, **kwargs)
+        module.tempfile.mkdtemp = observe_mkdtemp
+        module.subprocess.Popen = observe_popen
+        try:
+            outcome = attempt(make_repo(str(provider)))
+        finally:
+            module.tempfile.mkdtemp = original_mkdtemp
+            module.subprocess.Popen = original_popen
+        matches = [(index, root) for index, root in enumerate(allocations, 1)
+                   if len(output_paths) == 1 and output_paths[0].parent == root]
+        return outcome, allocations, output_paths, matches
 
-        def record_sink(path: Path, *, output_path: bool) -> None:
+    def setup_spawn_fault_case(stage: str, result_root_ordinal: int):
+        """Inject one failure by result-root/sink/fd effects, independent of chronology."""
+        case_repo = make_repo(str(provider))
+        if capture.exists(): capture.unlink()
+        original_mkdtemp = module.tempfile.mkdtemp
+        original_open = module.os.open; original_fsync = module.os.fsync
+        original_fstat = module.os.fstat; original_close = module.os.close
+        original_popen = module.subprocess.Popen
+        path_type = type(Path()); path_busy = [False]
+        path_originals = {name: getattr(path_type, name) for name in
+                          ("lstat", "stat", "resolve", "is_symlink", "iterdir")}
+        allocations: list[Path] = []; target_root: list[Path] = []
+        root_operations = [0]; injected = [False]
+        create_fd = [-1]; create_identity: list[tuple[int, int]] = []
+        boundary_aliases: list[tuple[int, int, int, int]] = []
+
+        def path_value(value) -> Path | None:
+            return Path(value) if type(value) is str or type(value) is path_type else None
+
+        def record_sink(path: Path, *, output_path: bool) -> tuple[int, int] | None:
             active = audit_active[0]
-            if not isinstance(active, dict):
-                return
+            if not isinstance(active, dict): return None
             if output_path:
-                outputs = active["provider_outputs"]
-                assert isinstance(outputs, list)
-                if str(path) not in outputs:
-                    outputs.append(str(path))
-            try:
-                opened = path.lstat()
-            except OSError:
-                return
-            identities = active["sink_identities"]
-            assert isinstance(identities, list)
+                outputs = active["provider_outputs"]; assert isinstance(outputs, list)
+                if str(path) not in outputs: outputs.append(str(path))
+            try: opened = path_originals["lstat"](path)
+            except OSError: return None
+            identities = active["sink_identities"]; assert isinstance(identities, list)
             identity = (opened.st_dev, opened.st_ino)
-            if identity not in identities:
-                identities.append(identity)
+            if identity not in identities: identities.append(identity)
+            return identity
 
-        def snapshot_then_arm(*args, **kwargs):
-            value = original_snapshot(*args, **kwargs)
-            snapshot_ready[0] = True
-            return value
+        def root_effect(path: Path, operation: str) -> None:
+            if not target_root or path != target_root[0] or injected[0]: return
+            root_operations[0] += 1
+            expected = {"root_validation_1": 1, "root_validation_2": 2}.get(stage)
+            if expected == root_operations[0]:
+                injected[0] = True
+                raise OSError(f"H032 injected result-root validation {expected}:{operation}")
 
-        def allocate_then_maybe_fail(*args, **kwargs):
-            value = Path(original_mkdtemp(*args, **kwargs))
-            if snapshot_ready[0] and not roots:
-                roots.append(value)
+        def observe_mkdtemp(*args, **kwargs):
+            value = Path(original_mkdtemp(*args, **kwargs)); allocations.append(value)
+            if len(allocations) == result_root_ordinal: target_root.append(value)
             return str(value)
 
-        def open_then_maybe_fail(path, flags, *args, **kwargs):
-            candidate = Path(path) if isinstance(path, (str, bytes, os.PathLike)) else None
-            if (stage == "after_root_before_sink" and roots and candidate is not None
-                    and candidate.parent == roots[-1] and flags & os.O_CREAT
-                    and not injected[0]):
+        def wrap_path(name):
+            original = path_originals[name]
+            def wrapped(self, *args, **kwargs):
+                if not path_busy[0]:
+                    root_effect(self, f"Path.{name}")
+                    path_busy[0] = True
+                    try: return original(self, *args, **kwargs)
+                    finally: path_busy[0] = False
+                return original(self, *args, **kwargs)
+            return wrapped
+
+        def observe_open(path, flags, *args, **kwargs):
+            candidate = path_value(path)
+            is_child = bool(target_root and candidate is not None
+                            and candidate.parent == target_root[0])
+            if is_child and flags & os.O_CREAT:
+                if stage in {"before_sink_create", "sink_open_raises"}:
+                    injected[0] = True
+                    raise OSError(f"H032 injected {stage}")
+            if target_root and candidate == target_root[0]:
+                root_effect(candidate, "os.open(root)")
+            if is_child and (flags & os.O_ACCMODE) == os.O_RDONLY \
+                    and stage == "after_create_close_before_retained":
                 injected[0] = True
-                raise OSError("H032 injected after staging-root allocation before sink")
+                raise OSError("H032 injected after writable create close")
             fd = original_open(path, flags, *args, **kwargs)
-            if roots and candidate is not None and candidate.parent == roots[-1]:
-                if flags & os.O_CREAT:
-                    record_sink(candidate, output_path=True)
-                    if stage == "during_sink_open":
-                        # A genuine failing open returns no descriptor.  The
-                        # judge closes its successful setup probe before
-                        # injecting the equivalent error into the caller.
-                        os.close(fd); injected[0] = True
-                        raise OSError("H032 injected during sink creation")
-                elif (flags & os.O_ACCMODE) == os.O_RDONLY:
-                    retained[0] = True
-                    record_sink(candidate, output_path=True)
+            if is_child and flags & os.O_CREAT:
+                create_fd[0] = fd
+                opened = original_fstat(fd); create_identity[:] = [(opened.st_dev, opened.st_ino)]
+                record_sink(candidate, output_path=True)
+            elif is_child and (flags & os.O_ACCMODE) == os.O_RDONLY:
+                record_sink(candidate, output_path=True)
             return fd
 
-        def journal_then_maybe_fail(repo, event, **fields):
-            if stage == "after_retained_fd_before_popen" and event == "AGENT_START" \
-                    and retained[0] and not injected[0]:
+        def observe_fsync(fd):
+            if stage == "create_fd_fsync" and fd == create_fd[0] and not injected[0]:
                 injected[0] = True
-                raise OSError("H032 injected after retained sink fd before Popen")
-            return original_journal(repo, event, **fields)
+                raise OSError("H032 injected while product owns writable create fd")
+            return original_fsync(fd)
 
-        def popen_raises_before_delegate(argv, *args, **kwargs):
-            flat = list(argv)
-            if stage == "popen_before_delegate" and "-o" in flat and not injected[0]:
-                record_sink(Path(flat[flat.index("-o") + 1]), output_path=True)
+        def observe_close(fd):
+            if stage == "create_fd_close" and fd == create_fd[0] and not injected[0]:
+                # The close is product-invoked and real; the injected failure is
+                # after that syscall, never a judge pre-close of the returned fd.
+                result = original_close(fd); injected[0] = True
+                raise OSError("H032 injected after product close of writable create fd")
+            return original_close(fd)
+
+        def observe_fstat(fd):
+            opened = original_fstat(fd)
+            if (stage == "retained_fd_fstat" and create_identity
+                    and (opened.st_dev, opened.st_ino) == create_identity[0]
+                    and (fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE) == os.O_RDONLY
+                    and not injected[0]):
                 injected[0] = True
-                raise OSError("H032 injected Popen failure before provider start")
+                raise OSError("H032 injected retained sink fstat")
+            return opened
+
+        def observe_popen(argv, *args, **kwargs):
+            flat = list(argv)
+            if "-o" in flat and stage in {
+                    "after_retained_fd_before_popen", "popen_before_delegate"}:
+                sink = Path(flat[flat.index("-o") + 1]); identity = record_sink(sink, output_path=True)
+                if identity is not None:
+                    for fd_path in Path("/dev/fd").iterdir():
+                        try:
+                            fd = int(fd_path.name); opened = original_fstat(fd)
+                            access = fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+                        except (OSError, ValueError): continue
+                        if (opened.st_dev, opened.st_ino) == identity:
+                            boundary_aliases.append((fd, opened.st_dev, opened.st_ino, access))
+                if any(item[3] == os.O_RDONLY for item in boundary_aliases):
+                    injected[0] = True
+                    raise OSError(f"H032 injected {stage} with retained sink capability")
             return original_popen(argv, *args, **kwargs)
 
-        module._provider_snapshot = snapshot_then_arm
-        module.tempfile.mkdtemp = allocate_then_maybe_fail
-        module.os.open = open_then_maybe_fail
-        module.journal = journal_then_maybe_fail
-        module.subprocess.Popen = popen_raises_before_delegate
+        module.tempfile.mkdtemp = observe_mkdtemp
+        module.os.open = observe_open; module.os.fsync = observe_fsync
+        module.os.fstat = observe_fstat; module.os.close = observe_close
+        module.subprocess.Popen = observe_popen
+        for name in path_originals: setattr(path_type, name, wrap_path(name))
         try:
             outcome = attempt(case_repo)
         finally:
-            module._provider_snapshot = original_snapshot
             module.tempfile.mkdtemp = original_mkdtemp
-            module.os.open = original_open
-            module.journal = original_journal
+            module.os.open = original_open; module.os.fsync = original_fsync
+            module.os.fstat = original_fstat; module.os.close = original_close
             module.subprocess.Popen = original_popen
+            for name, original in path_originals.items(): setattr(path_type, name, original)
         observed = last_attempt_observed[0] or {}
         case_capture = safe_capture()
-        case_capture["_gate_output_paths"] = list(observed.get("provider_outputs", []))
-        case_capture["_gate_canonical_paths"] = list(observed.get("canonical_paths", []))
+        for key in ("provider_outputs", "canonical_paths", "private_paths",
+                    "private_paths_present", "sink_identities", "sink_fd_aliases",
+                    "journal_start_records"):
+            case_capture["_gate_" + key.replace("provider_outputs", "output_paths")] = list(
+                observed.get(key, []))
         case_capture["_gate_provider_process_starts"] = observed.get(
             "provider_process_starts", -1)
-        case_capture["_gate_private_paths"] = list(observed.get("private_paths", []))
-        case_capture["_gate_private_paths_present"] = list(
-            observed.get("private_paths_present", []))
-        case_capture["_gate_sink_identities"] = list(observed.get("sink_identities", []))
-        case_capture["_gate_sink_fd_aliases"] = list(observed.get("sink_fd_aliases", []))
+        case_capture["_gate_boundary_sink_aliases"] = list(boundary_aliases)
+        case_capture["_gate_create_fd_returned"] = create_fd[0] >= 0
         output_paths = [Path(value) for value in case_capture["_gate_output_paths"]]
         canonical_paths = [Path(value) for value in case_capture["_gate_canonical_paths"]]
         case = (outcome, case_capture,
                 any(path.exists() or path.is_symlink() for path in output_paths),
-                any(path.exists() or path.is_symlink() for path in canonical_paths),
-                False)
-        # Retain every pre-cleanup observation in the returned case, then remove
-        # only exact gate-owned private children so a deliberately leaky mutant
-        # cannot leave the owner gate dirty.
+                any(path.exists() or path.is_symlink() for path in canonical_paths), False)
         arena = observed.get("arena")
         if isinstance(arena, Path):
             top_roots = {path for path in map(Path, observed.get("private_paths", []))
                          if path.parent == arena}
             for path in sorted(top_roots, key=lambda item: len(item.parts), reverse=True):
-                if path.is_symlink() or (path.exists() and not path.is_dir()):
-                    path.unlink()
-                elif path.is_dir():
-                    path.chmod(0o700); shutil.rmtree(path)
-        return case, injected[0], [str(path) for path in roots]
+                if path.is_symlink() or (path.exists() and not path.is_dir()): path.unlink()
+                elif path.is_dir(): path.chmod(0o700); shutil.rmtree(path)
+        return case, injected[0], [str(path) for path in target_root], root_operations[0]
 
-    setup_spawn_faults = {}
-    setup_spawn_faults_ok = False
+    discovery = (False, [], [], [])
+    setup_spawn_faults = {}; setup_spawn_faults_ok = False
     if kernel_structure_ok and kernel_integration_structure_ok \
             and hasattr(module, "consume_private_result"):
-        for stage in ("after_root_before_sink", "during_sink_open",
-                      "after_retained_fd_before_popen", "popen_before_delegate"):
-            setup_spawn_faults[stage] = setup_spawn_fault_case(stage)
-        setup_spawn_faults_ok = all(
-            injected and roots
-            and rejected_clean(
-                case, expected_process_starts=0,
-                expected_output_paths=(0 if stage == "after_root_before_sink" else 1),
-                expected_journal_starts=((1,) if stage == "popen_before_delegate" else (0,)))
-            for stage, (case, injected, roots) in setup_spawn_faults.items())
+        discovery = result_root_ordinal_discovery()
+        discovery_ok = (discovery[0][0] and not discovery[0][4]
+                        and len(discovery[2]) == 1 and len(discovery[3]) == 1)
+        if discovery_ok:
+            result_root_ordinal = discovery[3][0][0]
+            stages = ("root_validation_1", "root_validation_2", "before_sink_create",
+                      "sink_open_raises", "create_fd_fsync", "create_fd_close",
+                      "after_create_close_before_retained", "retained_fd_fstat",
+                      "after_retained_fd_before_popen", "popen_before_delegate")
+            for stage in stages:
+                setup_spawn_faults[stage] = setup_spawn_fault_case(stage, result_root_ordinal)
+            precreate = {"root_validation_1", "root_validation_2",
+                         "before_sink_create", "sink_open_raises"}
+            create_owned = {"create_fd_fsync", "create_fd_close",
+                            "after_create_close_before_retained", "retained_fd_fstat"}
+            process_boundary = {"after_retained_fd_before_popen", "popen_before_delegate"}
+            setup_spawn_faults_ok = all(
+                injected and roots
+                and rejected_clean(case, expected_process_starts=0,
+                                   expected_output_paths=(0 if stage in precreate else 1),
+                                   expected_journal_starts=(0, 1))
+                and (stage not in create_owned
+                     or case[1].get("_gate_create_fd_returned") is True)
+                and (stage not in process_boundary
+                     or any(item[3] == os.O_RDONLY for item in
+                            case[1].get("_gate_boundary_sink_aliases", [])))
+                for stage, (case, injected, roots, _ops) in setup_spawn_faults.items())
 
-    r56_zero_capture = {
-        "_gate_output_paths": [], "_gate_provider_process_starts": 0,
-        "_gate_private_paths": [str(work / "r56-absent-private-root")],
-        "_gate_private_paths_present": [], "_gate_sink_identities": [],
-        "_gate_sink_fd_aliases": []}
-    r56_zero_clean = ((False, "REJECTED", 0, 0, []), r56_zero_capture,
-                      False, False, False)
-    r56_zero_start_oracle_positive = rejected_clean(
-        r56_zero_clean, expected_process_starts=0, expected_output_paths=0,
-        expected_journal_starts=(0,))
-    r56_zero_start_mutants = []
-    for mutation in ("process", "residue", "private", "fd"):
-        result = (False, "REJECTED", 0, 0,
-                  [str(work / "r56-residue")] if mutation == "residue" else [])
-        mutant_capture = dict(r56_zero_capture)
-        if mutation == "process": mutant_capture["_gate_provider_process_starts"] = 1
-        if mutation == "private": mutant_capture["_gate_private_paths_present"] = [
-            str(work / "r56-private")]
-        if mutation == "fd": mutant_capture["_gate_sink_fd_aliases"] = [(91, 1, 2)]
-        mutant = (result, mutant_capture, False, False, False)
-        r56_zero_start_mutants.append(not rejected_clean(
-            mutant, expected_process_starts=0, expected_output_paths=0,
-            expected_journal_starts=(0,)))
-    r56_setup_oracle_ok = r56_zero_start_oracle_positive and all(r56_zero_start_mutants)
+    def synthetic_start_record() -> dict[str, object]:
+        return {"event":"AGENT_START", "role":"TEST_AUTHOR", "model":"gpt-5.6-sol",
+                "reasoning_effort":"max", "model_routing_source":"AUTOPILOT_ROLE_POLICY"}
+    def zero_start_case(journal_count: int, **changes):
+        capture_value = {"_gate_output_paths": [], "_gate_provider_process_starts": 0,
+            "_gate_private_paths": [str(work / "r57-absent-private-root")],
+            "_gate_private_paths_present": [], "_gate_sink_identities": [],
+            "_gate_sink_fd_aliases": [], "_gate_journal_start_records":
+                ([synthetic_start_record()] if journal_count else [])}
+        capture_value.update(changes)
+        result = (False, "REJECTED", journal_count, 0,
+                  [str(work / "r57-residue")] if changes.get("residue") else [])
+        return result, capture_value, False, False, False
+    r57_journal_order_positive = all(rejected_clean(
+        zero_start_case(count), expected_process_starts=0, expected_output_paths=0,
+        expected_journal_starts=(0, 1)) for count in (0, 1))
+    r57_zero_start_mutants = [
+        not rejected_clean(zero_start_case(0, _gate_provider_process_starts=1),
+            expected_process_starts=0, expected_output_paths=0, expected_journal_starts=(0,1)),
+        not rejected_clean(zero_start_case(0, residue=True),
+            expected_process_starts=0, expected_output_paths=0, expected_journal_starts=(0,1)),
+        not rejected_clean(zero_start_case(0, _gate_private_paths_present=[str(work/"r57-private")]),
+            expected_process_starts=0, expected_output_paths=0, expected_journal_starts=(0,1)),
+        not rejected_clean(zero_start_case(0, _gate_sink_fd_aliases=[(91,1,2)]),
+            expected_process_starts=0, expected_output_paths=0, expected_journal_starts=(0,1)),
+        not rejected_clean(zero_start_case(1, _gate_journal_start_records=[{"event":"AGENT_START"}]),
+            expected_process_starts=0, expected_output_paths=0, expected_journal_starts=(0,1)),
+    ]
+    def result_root_matches(allocations: list[Path], output: Path) -> list[int]:
+        return [index for index, root in enumerate(allocations, 1)
+                if output.parent == root]
+    result_root_a=work/"r57-order-a";result_root_b=work/"r57-order-b"
+    output_a=result_root_a/"opaque";output_b=result_root_b/"opaque"
+    provider_family_a=work/"r57-provider-family-a"
+    provider_family_b=work/"r57-provider-family-b"
+    root_order_a=[provider_family_a,result_root_a]
+    root_order_b=[result_root_b,provider_family_b]
+    r57_root_order_positive = (
+        result_root_matches(root_order_a,output_a) == [2]
+        and result_root_matches(root_order_b,output_b) == [1])
+    r57_wrong_root_mutant_caught = (
+        result_root_matches(root_order_a, provider_family_a / "opaque") == [1]
+        and result_root_matches(root_order_a, work / "outside" / "opaque") == [])
+    r56_zero_start_oracle_positive = r57_journal_order_positive
+    r56_zero_start_mutants = r57_zero_start_mutants
+    r56_setup_oracle_ok = (r57_journal_order_positive and r57_root_order_positive
+                           and r57_wrong_root_mutant_caught
+                           and all(r57_zero_start_mutants))
+    r57_setup_effect_summary = {
+        stage: {
+            "injected": injected, "root_bound": bool(roots), "root_ops": operations,
+            "journal": case[0][2],
+            "starts": case[1].get("_gate_provider_process_starts"),
+            "outputs": len(case[1].get("_gate_output_paths", [])),
+            "residue": case[0][4],
+            "private_present": case[1].get("_gate_private_paths_present"),
+            "aliases_after": case[1].get("_gate_sink_fd_aliases"),
+            "boundary_aliases": case[1].get("_gate_boundary_sink_aliases"),
+            "create_fd_returned": case[1].get("_gate_create_fd_returned"),
+        }
+        for stage, (case, injected, roots, operations) in setup_spawn_faults.items()
+    }
 
     oversized_positive = result_case("exact_max")
 
@@ -2245,7 +2378,8 @@ def run_codex(sink, canonical, invocation, run, role):
                    "_gate_provider_process_starts": 1,
                    "_gate_private_paths": [str(r55_private_parent)],
                    "_gate_private_paths_present": [],
-                   "_gate_sink_identities": [], "_gate_sink_fd_aliases": []}
+                   "_gate_sink_identities": [], "_gate_sink_fd_aliases": [],
+                   "_gate_journal_start_records": [synthetic_start_record()]}
     r55_clean_rejection = ((False, "REJECTED", 1, 0, []), r55_capture,
                            False, False, False)
     r55_parent_only_rejection = ((False, "REJECTED", 1, 0,
@@ -3738,7 +3872,7 @@ class CraftedConcretePath(type(Path())):
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok
           and r55_complete_residue_oracle_ok and r56_setup_oracle_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants} bool_version={bool_version_caught}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive} setup_effects={r57_setup_effect_summary} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={setup_spawn_faults,setup_spawn_faults_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
