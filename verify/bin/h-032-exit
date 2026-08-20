@@ -530,60 +530,155 @@ if mode == 'output_then_fail': sys.exit(17)
         }
         forbidden_module_roots={"subprocess","socket","urllib","http","importlib","requests",
                                 "git","ctypes","multiprocessing","asyncio"}
-        imports=[];imports_ok=True;module_aliases={};capability_aliases={}
-        for node in ast.walk(tree):
-            if isinstance(node,ast.Import):
+        callable_module_members={
+            "hashlib":{("sha256",)},"json":{("loads",),("dumps",)},
+            "stat":{("S_ISREG",)},"tempfile":{("mkstemp",)},
+            "pathlib":{("Path",)},"fcntl":{("fcntl",)},
+            "os":{("open",),("close",),("read",),("pread",),("readv",),("preadv",),
+                  ("write",),("pwrite",),("lseek",),("fstat",),("stat",),("lstat",),
+                  ("access",),("readlink",),("fsync",),("unlink",),("remove",),
+                  ("replace",),("rename",),("fspath",),("path","dirname"),
+                  ("path","abspath"),("path","realpath"),("path","lexists")},
+        }
+        # This is a lexical binding inventory, not a Python control-flow
+        # interpreter.  It distinguishes an actual import capability from a
+        # same-spelled parameter/local/comprehension binding and rejects any
+        # scope that rebinds an imported capability.
+        imports=[];imports_ok=True;scope_parent={tree:None};scope_bindings={tree:{}}
+        node_scope={}
+        def bind(scope,name,kind,value=None):
+            scope_bindings.setdefault(scope,{}).setdefault(name,set()).add((kind,value))
+        def bind_arguments(scope,args):
+            for arg in (*args.posonlyargs,*args.args,*args.kwonlyargs): bind(scope,arg.arg,"local")
+            if args.vararg is not None: bind(scope,args.vararg.arg,"local")
+            if args.kwarg is not None: bind(scope,args.kwarg.arg,"local")
+        class LexicalBindings(ast.NodeVisitor):
+            def __init__(self): self.scope=tree
+            def visit(self,node):
+                node_scope.setdefault(node,self.scope)
+                return super().visit(node)
+            def visit_Name(self,node):
+                if isinstance(node.ctx,(ast.Store,ast.Del)): bind(self.scope,node.id,"local")
+            def visit_ExceptHandler(self,node):
+                if node.type is not None: self.visit(node.type)
+                if isinstance(node.name,str): bind(self.scope,node.name,"local")
+                for statement in node.body: self.visit(statement)
+            def generic_visit(self,node):
+                # Pattern-capture names are strings rather than Name(Store)
+                # nodes on runtimes that support structural matching.
+                node_name=type(node).__name__
+                if node_name in {"MatchAs","MatchStar"} and isinstance(getattr(node,"name",None),str):
+                    bind(self.scope,node.name,"local")
+                if node_name=="MatchMapping" and isinstance(getattr(node,"rest",None),str):
+                    bind(self.scope,node.rest,"local")
+                return super().generic_visit(node)
+            def visit_Import(self,node):
+                nonlocal_imports=[]
                 for alias in node.names:
-                    imports.append((alias.name,alias.asname))
+                    nonlocal_imports.append((alias.name,alias.asname))
                     root=alias.name.split(".",1)[0]
-                    bound=alias.asname or root
-                    module_aliases[bound]=alias.name
-                    imports_ok &= (alias.asname is None and alias.name in allowed_modules
-                                   and root not in forbidden_module_roots)
-            elif isinstance(node,ast.ImportFrom):
+                    permitted=(alias.asname is None and alias.name in allowed_modules
+                               and root not in forbidden_module_roots)
+                    nonlocal imports_ok
+                    imports_ok &= permitted
+                    bind(self.scope,alias.asname or root,"module",alias.name)
+                imports.extend(nonlocal_imports)
+            def visit_ImportFrom(self,node):
+                nonlocal imports_ok
                 imports.append((node.module or "",tuple((a.name,a.asname) for a in node.names)))
-                imports_ok &= (node.level==0 and node.module in allowed_from
-                               and all(alias.name in allowed_from.get(node.module,set())
-                                       and alias.name!="*" and alias.asname is None
-                                       for alias in node.names))
+                permitted=(node.level==0 and node.module in allowed_from
+                           and all(alias.name in allowed_from.get(node.module,set())
+                                   and alias.name!="*" and alias.asname is None
+                                   for alias in node.names))
+                imports_ok &= permitted
                 for alias in node.names:
-                    capability_aliases[alias.asname or alias.name]=f"{node.module}.{alias.name}"
+                    bind(self.scope,alias.asname or alias.name,"member",
+                         f"{node.module}.{alias.name}")
+            def visit_FunctionDef(self,node):
+                bind(self.scope,node.name,"local")
+                for item in node.decorator_list: self.visit(item)
+                for item in (*node.args.defaults,*node.args.kw_defaults):
+                    if item is not None: self.visit(item)
+                for arg in (*node.args.posonlyargs,*node.args.args,*node.args.kwonlyargs):
+                    if arg.annotation is not None: self.visit(arg.annotation)
+                if node.args.vararg and node.args.vararg.annotation: self.visit(node.args.vararg.annotation)
+                if node.args.kwarg and node.args.kwarg.annotation: self.visit(node.args.kwarg.annotation)
+                if node.returns is not None: self.visit(node.returns)
+                outer=self.scope;scope_parent[node]=outer;scope_bindings[node]={};self.scope=node
+                bind_arguments(node,node.args)
+                for statement in node.body: self.visit(statement)
+                self.scope=outer
+            visit_AsyncFunctionDef=visit_FunctionDef
+            def visit_Lambda(self,node):
+                for item in (*node.args.defaults,*node.args.kw_defaults):
+                    if item is not None: self.visit(item)
+                outer=self.scope;scope_parent[node]=outer;scope_bindings[node]={};self.scope=node
+                bind_arguments(node,node.args);self.visit(node.body);self.scope=outer
+            def visit_ClassDef(self,node):
+                bind(self.scope,node.name,"local")
+                for item in node.decorator_list: self.visit(item)
+                for item in node.bases: self.visit(item)
+                for item in node.keywords: self.visit(item.value)
+                outer=self.scope;scope_parent[node]=outer;scope_bindings[node]={};self.scope=node
+                for statement in node.body: self.visit(statement)
+                self.scope=outer
+            def visit_comprehension_scope(self,node,value_nodes):
+                outer=self.scope
+                if node.generators: self.visit(node.generators[0].iter)
+                scope_parent[node]=outer;scope_bindings[node]={};self.scope=node
+                for index,generator in enumerate(node.generators):
+                    if index: self.visit(generator.iter)
+                    self.visit(generator.target)
+                    for condition in generator.ifs: self.visit(condition)
+                for value in value_nodes: self.visit(value)
+                self.scope=outer
+            def visit_ListComp(self,node): self.visit_comprehension_scope(node,(node.elt,))
+            visit_SetComp=visit_ListComp
+            visit_GeneratorExp=visit_ListComp
+            def visit_DictComp(self,node): self.visit_comprehension_scope(node,(node.key,node.value))
+        LexicalBindings().visit(tree)
+        def resolve_binding(node):
+            scope=node_scope.get(node,tree)
+            while scope is not None:
+                records=scope_bindings.get(scope,{}).get(node.id,set())
+                if records:
+                    return next(iter(records)) if len(records)==1 else ("ambiguous",None)
+                scope=scope_parent.get(scope)
+            return ("unbound",None)
         forbidden_names={"eval","exec","compile","__import__","globals","locals","vars",
                          "getattr","setattr","delattr","subprocess","socket","urllib","http",
                          "importlib","requests","git","__builtins__"}
-        forbidden_attrs={"environ","getenv","system","popen","fork","forkpty","posix_spawn",
-                         "execv","execve","spawnv","spawnve","__dict__","__globals__",
-                         "__getattribute__","__subclasses__","__mro__","listdir","scandir",
-                         "walk","putenv","unsetenv","environb","getenvb","sys","modules",
-                         "socket","socketpair","connect","connect_ex","getaddrinfo",
-                         "gethostbyname","gethostbyaddr","create_connection"}
+        forbidden_attrs={"__dict__","__globals__","__getattribute__","__subclasses__","__mro__"}
         parents={child:parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-        module_capability_ok=True;module_uses=[]
+        module_capability_ok=True;module_uses=[];ambiguous_capability=False
         for node in ast.walk(tree):
-            if not (isinstance(node,ast.Name) and isinstance(node.ctx,ast.Load)
-                    and node.id in module_aliases): continue
+            if not (isinstance(node,ast.Name) and isinstance(node.ctx,ast.Load)): continue
+            kind,module_name=resolve_binding(node)
+            if kind=="ambiguous":
+                ambiguous_capability=True
+                continue
+            if kind!="module": continue
             current=node;parts=[]
             while isinstance(parents.get(current),ast.Attribute) \
                     and parents[current].value is current:
                 current=parents[current];parts.append(current.attr)
             chain=tuple(parts)
-            module_name=module_aliases[node.id]
-            permitted=chain in allowed_module_members.get(module_name,set())
+            permitted=(chain in allowed_module_members.get(module_name,set())
+                       and (chain not in callable_module_members.get(module_name,set())
+                            or (isinstance(parents.get(current),ast.Call)
+                                and parents[current].func is current)))
             module_uses.append((module_name,chain,permitted))
             module_capability_ok &= permitted
         imported_member_ok=True
         for node in ast.walk(tree):
-            if not (isinstance(node,ast.Name) and isinstance(node.ctx,ast.Load)
-                    and node.id in capability_aliases): continue
-            parent=parents.get(node);capability=capability_aliases[node.id]
+            if not (isinstance(node,ast.Name) and isinstance(node.ctx,ast.Load)): continue
+            kind,capability=resolve_binding(node)
+            if kind!="member": continue
+            parent=parents.get(node)
             permitted=(capability=="pathlib.Path" and isinstance(parent,ast.Call)
                        and parent.func is node)
             imported_member_ok &= permitted
-        forbidden_alias_use=any(isinstance(node,ast.Name)
-            and isinstance(node.ctx,ast.Load)
-            and (module_aliases.get(node.id,"").split(".",1)[0] in forbidden_module_roots
-                 or capability_aliases.get(node.id,"").split(".",1)[0] in forbidden_module_roots)
-            for node in ast.walk(tree))
+        forbidden_alias_use=ambiguous_capability
         forbidden_literals=any(isinstance(node,ast.Constant) and isinstance(node.value,str)
             and any(token in node.value.casefold() for token in (
                 "codex-provider-identity","/config/","\\config\\","provider-identity",
@@ -677,7 +772,8 @@ if mode == 'output_then_fail': sys.exit(17)
             "forbidden_literal":forbidden_literals,"hidden_identity":hidden_identity,
             "attribute_write":attribute_write,"import_time_expressions":len(import_time_expressions),
             "import_time_forbidden":import_time_forbidden,"module_capability":module_capability_ok,
-            "imported_member":imported_member_ok,"module_uses":tuple(module_uses)}
+            "imported_member":imported_member_ok,"ambiguous_capability":ambiguous_capability,
+            "module_uses":tuple(module_uses)}
 
     def integration_structure_inventory(tree):
         parents={child:parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
@@ -742,8 +838,8 @@ MAX_RESULT_BYTES = 4194304
 __all__ = ["consume_private_result"]
 def _bounded(fd):
     return os.pread(fd, MAX_RESULT_BYTES + 1, 0)
-def _captured_stat(path, op=os.stat):
-    return op(path)
+def _captured_stat(path):
+    return os.stat(path)
 def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id, role):
     _captured_stat(canonical_destination)
     return _bounded(sink_fd)
@@ -799,6 +895,56 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
     )
     module_proxy_results=[kernel_structure_inventory(ast.parse(text),text)[0]
                           for text in module_proxy_sources]
+    r51_capture_sources=(
+        kernel_inventory_fixture.replace("from pathlib import Path","import pathlib").replace(
+            "def _bounded(fd):","def _path_default(value, factory=pathlib.Path):\n    return factory(value)\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _stat_default(value, operation=os.stat):\n    return operation(value)\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "@hashlib.sha256\ndef _decorated(value):\n    return value\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "operation=os.stat\n    return _bounded(sink_fd)"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "operations=[json.loads]\n    return _bounded(sink_fd)"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return (os.fstat, _bounded(sink_fd))"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return (lambda operation: _bounded(sink_fd))(os.fstat)"),
+    )
+    r51_capture_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                         for text in r51_capture_sources]
+    r51_shadow_sources=(
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _shadow_parameter(os):\n    return os\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _shadow_local():\n    json=1\n    return json\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _shadow_comprehension(values):\n    return [pathlib for pathlib in values]\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _shadow_exception():\n    try:\n        raise ValueError()\n    except Exception as os:\n        return os\ndef _bounded(fd):"),
+    )
+    r51_shadow_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                        for text in r51_shadow_sources]
+    r51_alias_escape_sources=(
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _module_escape():\n    return os\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _container_escape():\n    return {'module': json}\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _rebound():\n    os=1\n    import os\n    return os.stat('.')\ndef _bounded(fd):"),
+    )
+    r51_alias_escape_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                              for text in r51_alias_escape_sources]
+    r51_path_deferred_sources=(
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "Path(canonical_destination).chmod(0o600)\n    return _bounded(sink_fd)"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "target=Path(canonical_destination)\n    target.mkdir(exist_ok=True)\n    return _bounded(sink_fd)"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "Path(canonical_destination).symlink_to('target')\n    return _bounded(sink_fd)"),
+    )
+    r51_path_deferred_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                               for text in r51_path_deferred_sources]
     fcntl_positive=kernel_inventory_fixture.replace("import stat","import stat\nimport fcntl").replace(
         "return _bounded(sink_fd)",
         "flags=fcntl.fcntl(sink_fd,fcntl.F_GETFL)\n    fdflags=fcntl.fcntl(sink_fd,fcntl.F_GETFD)\n    return (_bounded(sink_fd),flags,fdflags)")
@@ -806,7 +952,9 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
     kernel_inventory_rig_ok=(rig_inventory_base[0] and not any(rig_inventory_mutants)
         and not any(inventory_adversary_results) and fcntl_inventory_ok
         and reviewer_inventory_results==[False,False,False,True]
-        and not any(module_proxy_results))
+        and not any(module_proxy_results) and not any(r51_capture_results)
+        and all(r51_shadow_results) and not any(r51_alias_escape_results)
+        and all(r51_path_deferred_results))
 
     kernel_structure_ok=False;kernel_structure_detail={"absent":True}
     kernel_module=None
@@ -1938,12 +2086,12 @@ def _write_all(fd,data):
         count=os.write(fd,view)
         if count<=0: raise OSError("short publication write")
         view=view[count:]
-def _fstat(fd,op=os.fstat):
-    return op(fd)
-def _path_stat(path,op=os.stat):
-    return op(path)
-def _sync(fd,op=os.fsync):
-    return op(fd)
+def _fstat(fd):
+    return os.fstat(fd)
+def _path_stat(path):
+    return os.stat(path)
+def _sync(fd):
+    return os.fsync(fd)
 def _unlink_retry(path):
     last=None
     for unused in range(2):
@@ -2026,19 +2174,59 @@ if sink_fd>=0:
  st=os.fstat(sink_fd);sink_identity=(st.st_dev,st.st_ino)
 accepted_digest=hashlib.sha256(raw).hexdigest()
 events=[];transitions=[];held=[];fsynced=set();call_active=[False];transition_done=[False]
-primitive_counts={name:0 for name in ("open","fsync","fstat","stat","lstat","access","readlink","listdir","scandir","walk","environ","environb","getenv","getenvb","putenv","unsetenv","path_open","path_iterdir","path_glob","path_rglob","path_read_text","path_read_bytes","path_stat","path_lstat","path_readlink","path_resolve")}
+primitive_counts={name:0 for name in ("open","fsync","fstat","stat","lstat","access","readlink","listdir","scandir","walk","chmod","fchmod","mkdir","makedirs","symlink","link","unlink","remove","rmdir","environ","environb","getenv","getenvb","putenv","unsetenv","path_open","path_iterdir","path_glob","path_rglob","path_read_text","path_read_bytes","path_stat","path_lstat","path_readlink","path_resolve","path_chmod","path_mkdir","path_symlink_to","path_hardlink_to","path_link_to","path_unlink","path_rmdir","path_rename","path_replace","path_touch")}
 env_events=[];security_events=[];original_environ=os.environ;original_environb=getattr(os,"environb",None)
 env_before=dict(original_environ);envb_before=dict(original_environb or {});module_error="NONE"
 allowed_roots=(staging.resolve(),canonical_parent.resolve())
+inside_state=threading.local()
 def inside_allowed(value):
+ if getattr(inside_state,"active",False): return True
+ inside_state.active=True
  try:
-  if isinstance(value,int): return True
-  path=pathlib.Path(os.path.abspath(os.fspath(value)))
+  if isinstance(value,int):
+   try:
+    raw=fcntl.fcntl(value,50,b"\0"*1024)
+    resolved=raw.split(b"\0",1)[0].decode("utf-8","strict")
+   except Exception: resolved=os.path.realpath(f"/dev/fd/{value}")
+   path=pathlib.Path(resolved)
+  else: path=pathlib.Path(os.path.realpath(os.path.abspath(os.fspath(value))))
   if not path.is_absolute(): return True
   return (any(path==root or root in path.parents for root in allowed_roots)
           or str(path)=="/dev/fd" or str(path).startswith("/dev/fd/"))
  except Exception: return False
+ finally: inside_state.active=False
+def strict_member(value):
+ previous=getattr(inside_state,"active",False);inside_state.active=True
+ try:
+  if isinstance(value,int):
+   try:
+    raw=fcntl.fcntl(value,50,b"\0"*1024)
+    value=raw.split(b"\0",1)[0].decode("utf-8","strict")
+   except Exception: value=os.path.realpath(f"/dev/fd/{value}")
+  path=pathlib.Path(os.path.realpath(os.path.abspath(os.fspath(value))))
+  return any(root in path.parents for root in allowed_roots)
+ except Exception: return False
+ finally: inside_state.active=previous
 original_fstat=os.fstat
+original_lstat=os.lstat
+def safe_existing(value):
+ try:
+  current=original_fstat(value) if isinstance(value,int) else original_lstat(value)
+  return stat.S_ISREG(current.st_mode) or stat.S_ISDIR(current.st_mode)
+ except OSError: return False
+def secure_mode(value,directory=False):
+ return isinstance(value,int) and value>=0 and not (value&0o077)
+def mutation_allowed(name,args):
+ if not args: return False
+ if name in {"symlink","link"}: return False
+ target=args[0]
+ if not strict_member(target): return False
+ if name in {"chmod","fchmod"}:
+  return len(args)>1 and secure_mode(args[1]) and safe_existing(target)
+ if name in {"mkdir","makedirs"}:
+  return secure_mode(args[1] if len(args)>1 else 0o777,True)
+ if name in {"unlink","remove","rmdir"}: return safe_existing(target)
+ return False
 def fd_inventory(identity,writable=None):
  found=[]
  try: numbers=sorted(int(name) for name in os.listdir("/dev/fd") if name.isdigit())
@@ -2054,8 +2242,10 @@ def fd_inventory(identity,writable=None):
 original_fsync=os.fsync;original_os_open=os.open;original_builtin_open=builtins.open
 original_getenv=os.getenv;original_getenvb=getattr(os,"getenvb",None)
 original_putenv=os.putenv;original_unsetenv=os.unsetenv
-path_method_names=("open","iterdir","glob","rglob","read_text","read_bytes","stat","lstat","readlink","resolve")
+path_method_names=tuple(name for name in ("open","iterdir","glob","rglob","read_text","read_bytes","stat","lstat","readlink","resolve","chmod","mkdir","symlink_to","hardlink_to","link_to","unlink","rmdir","rename","replace","touch") if hasattr(pathlib.Path,name))
 original_path_methods={name:getattr(pathlib.Path,name) for name in path_method_names}
+mutation_os_names=("chmod","fchmod","mkdir","makedirs","symlink","link","unlink","remove","rmdir")
+original_mutation_ops={name:getattr(os,name) for name in mutation_os_names}
 def observed_fsync(fd):
  primitive_counts["fsync"]+=1;st=original_fstat(fd);fsynced.add((st.st_dev,st.st_ino));return original_fsync(fd)
 os.fsync=observed_fsync
@@ -2063,15 +2253,35 @@ def observed_fstat(fd):
  primitive_counts["fstat"]+=1;return original_fstat(fd)
 os.fstat=observed_fstat
 def observed_os_open(path,flags,*args,**kwargs):
- primitive_counts["open"]+=1;return original_os_open(path,flags,*args,**kwargs)
+ primitive_counts["open"]+=1
+ mode=(args[0] if args else kwargs.get("mode",0o777))
+ allowed=inside_allowed(path)
+ if flags&os.O_CREAT: allowed=allowed and strict_member(path) and secure_mode(mode)
+ if call_active[0]: events.append(("os.open",str(path),flags,allowed))
+ return original_os_open(path,flags,*args,**kwargs)
 os.open=observed_os_open
 def observed_builtin_open(*args,**kwargs):
- primitive_counts["open"]+=1;return original_builtin_open(*args,**kwargs)
+ primitive_counts["open"]+=1
+ path=args[0] if args else kwargs.get("file","");mode=args[1] if len(args)>1 else kwargs.get("mode","r")
+ writing=any(token in str(mode) for token in "wax+")
+ if call_active[0]: events.append(("builtins.open",str(path),str(mode),inside_allowed(path) and not writing))
+ return original_builtin_open(*args,**kwargs)
 builtins.open=observed_builtin_open
 def observed_path_method(name):
  def invoke(self,*args,**kwargs):
   primitive_counts["path_"+name]+=1
-  if call_active[0]: events.append(("path."+name,str(self),0,inside_allowed(self)))
+  allowed=inside_allowed(self)
+  if name=="open":
+   mode=args[0] if args else kwargs.get("mode","r")
+   allowed=allowed and not any(token in str(mode) for token in "wax+")
+  if name=="chmod": allowed=mutation_allowed("chmod",(self,args[0] if args else kwargs.get("mode")))
+  if name=="mkdir": allowed=mutation_allowed("mkdir",(self,args[0] if args else kwargs.get("mode",0o777)))
+  if name in {"unlink","rmdir"}: allowed=mutation_allowed(name,(self,))
+  if name in {"rename","replace"}:
+   allowed=strict_member(self) and bool(args) and strict_member(args[0])
+  if name=="touch": allowed=strict_member(self) and secure_mode(args[0] if args else kwargs.get("mode",0o666))
+  if name in {"symlink_to","hardlink_to","link_to"}: allowed=False
+  if call_active[0]: events.append(("path."+name,str(self),str(args[0]) if args else "",allowed))
   return original_path_methods[name](self,*args,**kwargs)
  return invoke
 for path_method in path_method_names: setattr(pathlib.Path,path_method,observed_path_method(path_method))
@@ -2091,6 +2301,15 @@ def observed_dir_op(name):
   return original_dir_ops[name](path,*args,**kwargs)
  return invoke
 for dir_op in original_dir_ops: setattr(os,dir_op,observed_dir_op(dir_op))
+def observed_mutation(name):
+ def invoke(*args,**kwargs):
+  primitive_counts[name]+=1
+  target=(args[1] if name in {"symlink","link"} and len(args)>1 else args[0] if args else "")
+  allowed=mutation_allowed(name,args)
+  if call_active[0]: events.append(("os."+name,str(target),repr(args[:2]),allowed))
+  return original_mutation_ops[name](*args,**kwargs)
+ return invoke
+for mutation_op in mutation_os_names: setattr(os,mutation_op,observed_mutation(mutation_op))
 class ObservedEnviron:
  def __init__(self,backing,name): self.backing=backing;self.name=name
  def note(self,kind,key=""):
@@ -2137,7 +2356,7 @@ def audit(event,args):
   events.append((event,str(args[0]),0,inside_allowed(args[0])))
   if transition_done[0] and pathlib.Path(str(args[0]))==canonical: events.append(("post_remove",str(args[0]),0,False))
  elif event=="os.rename" and len(args)>=2:
-  src,dst=pathlib.Path(str(args[0])),pathlib.Path(str(args[1]));events.append((event,str(src),str(dst),inside_allowed(src) and inside_allowed(dst)))
+  src,dst=pathlib.Path(str(args[0])),pathlib.Path(str(args[1]));events.append((event,str(src),str(dst),strict_member(src) and strict_member(dst)))
   if dst==canonical:
    absent=not canonical.exists();fd=os.open(src,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0));before=os.fstat(fd);data=b""
    while len(data)<=5*1024*1024:
@@ -2152,6 +2371,10 @@ def audit(event,args):
   env_events.append((event,str(args[0]) if args else ""))
  elif event in {"os.listdir","os.scandir"} and args:
   events.append((event,str(args[0]),0,inside_allowed(args[0])))
+ elif event in {"os.chmod","os.mkdir","os.rmdir","os.remove","os.unlink"} and args:
+  events.append((event,str(args[0]),repr(args[1:3]),mutation_allowed(event.split(".",1)[1],args)))
+ elif event in {"os.symlink","os.link"} and len(args)>=2:
+  events.append((event,str(args[1]),repr(args[:2]),False))
  elif event=="subprocess.Popen" or event=="os.system" or event.startswith("os.exec") \
         or event.startswith("os.posix_spawn") or event.startswith("socket."):
   security_events.append((event,repr(args)[:240]))
@@ -2205,6 +2428,7 @@ finally:
  call_active[0]=False;module_os.replace=original_replace;module_os.unlink=original_unlink
  for path_op,original_path_op in original_path_ops.items(): setattr(os,path_op,original_path_op)
  for dir_op,original_dir_op in original_dir_ops.items(): setattr(os,dir_op,original_dir_op)
+ for mutation_op,original_mutation_op in original_mutation_ops.items(): setattr(os,mutation_op,original_mutation_op)
  os.fsync=original_fsync;os.fstat=original_fstat;os.open=original_os_open
  os.getenv=original_getenv;os.putenv=original_putenv;os.unsetenv=original_unsetenv
  if original_getenvb is not None: os.getenvb=original_getenvb
@@ -2333,7 +2557,17 @@ for fd in held:
     import_probe.write_text(import_probe_source,encoding="utf-8")
     import_probe.with_suffix(".trap").write_text("IMPORT_TRAP",encoding="utf-8")
     import_probe_case=fresh_kernel_effect(import_probe,rig_valid_raw)
-    captured_stat_source=reference_kernel_source.replace(
+    captured_reference_source=reference_kernel_source.replace(
+        'def _fstat(fd):\n    return os.fstat(fd)',
+        'def _fstat(fd,op=os.fstat):\n    return op(fd)',1).replace(
+        'def _path_stat(path):\n    return os.stat(path)',
+        'def _path_stat(path,op=os.stat):\n    return op(path)',1).replace(
+        'def _sync(fd):\n    return os.fsync(fd)',
+        'def _sync(fd,op=os.fsync):\n    return op(fd)',1)
+    captured_reference=work/"r51-captured-genuine-positive.py"
+    captured_reference.write_text(captured_reference_source,encoding="utf-8")
+    captured_reference_case=fresh_kernel_effect(captured_reference,rig_valid_raw)
+    captured_stat_source=captured_reference_source.replace(
         '_path_stat(os.path.dirname(os.fspath(canonical_destination)))',
         '_path_stat(Path(__file__).with_suffix("."+"trap"))',1)
     captured_stat=work/"r49-captured-stat-mutant.py"
@@ -2366,6 +2600,79 @@ for fd in held:
     getenvb_mutant=work/"r50-getenvb-mutant.py"
     getenvb_mutant.write_text(getenvb_source,encoding="utf-8")
     getenvb_case=fresh_kernel_effect(getenvb_mutant,rig_valid_raw)
+    r51_mutation_specs=[
+        ("os_chmod","os.chmod(__file__,0o600)",None),
+        ("os_fchmod","outside_fd=os.open(__file__,os.O_RDONLY);os.fchmod(outside_fd,0o600);os.close(outside_fd)",None),
+        ("os_mkdir","os.mkdir(str(Path(__file__).with_suffix('.outside')),0o700)",None),
+        ("os_makedirs","os.makedirs(str(Path(__file__).with_suffix('.outside')/'nested'),mode=0o700)",None),
+        ("os_symlink","os.symlink(__file__,str(Path(__file__).with_suffix('.outside')))",None),
+        ("os_link","os.link(__file__,str(Path(__file__).with_suffix('.outside')))",None),
+        ("os_unlink","os.unlink(str(Path(__file__).with_suffix('.victim')))","file"),
+        ("os_remove","os.remove(str(Path(__file__).with_suffix('.victim')))","file"),
+        ("os_rmdir","os.rmdir(str(Path(__file__).with_suffix('.victim')))","dir"),
+        ("path_chmod","Path(__file__).chmod(0o600)",None),
+        ("path_mkdir","Path(__file__).with_suffix('.outside').mkdir(mode=0o700)",None),
+        ("path_symlink_to","Path(__file__).with_suffix('.outside').symlink_to(__file__)",None),
+        ("path_hardlink_to","Path(__file__).with_suffix('.outside').hardlink_to(__file__)",None),
+        ("path_link_to","Path(__file__).link_to(Path(__file__).with_suffix('.outside'))",None),
+        ("path_unlink","Path(__file__).with_suffix('.victim').unlink()","file"),
+        ("path_rmdir","Path(__file__).with_suffix('.victim').rmdir()","dir"),
+        ("path_rename","Path(__file__).with_suffix('.victim').rename(Path(__file__).with_suffix('.outside'))","file"),
+        ("path_replace","Path(__file__).with_suffix('.victim').replace(Path(__file__).with_suffix('.outside'))","file"),
+        ("path_touch","Path(__file__).with_suffix('.outside').touch(mode=0o600,exist_ok=False)",None),
+    ]
+    if not hasattr(Path,"hardlink_to"):
+        r51_mutation_specs=[item for item in r51_mutation_specs if item[0]!="path_hardlink_to"]
+    r51_mutation_cases={}
+    for mutation_name,mutation_line,setup in r51_mutation_specs:
+        mutation_source=reference_kernel_source.replace(
+            '        return envelope',f'        {mutation_line}\n        return envelope',1)
+        mutation_path=work/f"r51-{mutation_name}-mutant.py"
+        mutation_path.write_text(mutation_source,encoding="utf-8")
+        victim=mutation_path.with_suffix(".victim")
+        outside=mutation_path.with_suffix(".outside")
+        if setup=="file": victim.write_text("VICTIM",encoding="utf-8")
+        elif setup=="dir": victim.mkdir(mode=0o700)
+        r51_mutation_cases[mutation_name]=fresh_kernel_effect(mutation_path,rig_valid_raw)
+        for artifact in (victim,outside):
+            if artifact.is_symlink() or artifact.is_file(): artifact.unlink()
+            elif artifact.is_dir(): shutil.rmtree(artifact)
+    r51_outside_mutations_caught=all(
+        case.get("accepted") is True and bool(case.get("outside"))
+        and not fresh_success(case,rig_valid_raw)
+        for case in r51_mutation_cases.values())
+    r51_inroot_source=reference_kernel_source.replace(
+        '        return envelope','''        private_parent=Path(os.path.dirname(os.fspath(canonical_destination)))
+        private_dir=private_parent/".r51-secure"
+        private_dir.mkdir(mode=0o700)
+        first=private_dir/"first";second=private_dir/"second"
+        private_fd=os.open(first,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600)
+        os.write(private_fd,b"R51");os.fsync(private_fd);os.close(private_fd)
+        first.rename(second);second.chmod(0o600);second.unlink();private_dir.rmdir()
+        return envelope''',1)
+    r51_inroot=work/"r51-inroot-secure-positive.py"
+    r51_inroot.write_text(r51_inroot_source,encoding="utf-8")
+    r51_inroot_case=fresh_kernel_effect(r51_inroot,rig_valid_raw)
+    r51_inroot_positive=(fresh_success(r51_inroot_case,rig_valid_raw)
+        and r51_inroot_case.get("primitive_counts",{}).get("path_mkdir",0)>=1
+        and r51_inroot_case.get("primitive_counts",{}).get("path_rename",0)>=1
+        and r51_inroot_case.get("primitive_counts",{}).get("path_unlink",0)>=1
+        and r51_inroot_case.get("primitive_counts",{}).get("path_rmdir",0)>=1)
+    r51_object_rule_lines=(
+        'private=Path(os.path.dirname(os.fspath(canonical_destination)))/".r51-wide";private.mkdir(mode=0o777);private.rmdir()',
+        'Path(os.path.dirname(os.fspath(canonical_destination))).chmod(0o700)',
+        'private=Path(os.path.dirname(os.fspath(canonical_destination)))/".r51-link";private.symlink_to(canonical_destination);private.unlink()',
+    )
+    r51_object_rule_cases=[]
+    for index,line in enumerate(r51_object_rule_lines):
+        object_source=reference_kernel_source.replace(
+            '        return envelope',f'        {line}\n        return envelope',1)
+        object_path=work/f"r51-inroot-object-mutant-{index}.py"
+        object_path.write_text(object_source,encoding="utf-8")
+        r51_object_rule_cases.append(fresh_kernel_effect(object_path,rig_valid_raw))
+    r51_object_rules_caught=all(case.get("accepted") is True
+        and bool(case.get("outside")) and not fresh_success(case,rig_valid_raw)
+        for case in r51_object_rule_cases)
     env_source=reference_kernel_source.replace(
         '        return envelope',
         '        os.putenv("H032_R49_MUTATION","1")\n        return envelope',1)
@@ -2380,6 +2687,10 @@ for fd in held:
         fresh_success(reference_cases["valid"],rig_valid_raw)
         and reference_cases["valid"].get("primitive_counts",{}).get("fsync",0)>=1
         and reference_cases["valid"].get("primitive_counts",{}).get("stat",0)>=1
+        and fresh_success(captured_reference_case,rig_valid_raw)
+        and captured_reference_case.get("primitive_counts",{}).get("fstat",0)>=1
+        and captured_reference_case.get("primitive_counts",{}).get("stat",0)>=1
+        and captured_reference_case.get("primitive_counts",{}).get("fsync",0)>=1
         and import_probe_case.get("accepted") is True and bool(import_probe_case.get("outside"))
         and captured_stat_case.get("accepted") is True and bool(captured_stat_case.get("outside"))
         and fresh_success(path_positive_case,rig_valid_raw)
@@ -2388,6 +2699,7 @@ for fd in held:
         and iterdir_case.get("accepted") is True and bool(iterdir_case.get("outside"))
         and environb_case.get("accepted") is True and bool(environb_case.get("env_events"))
         and getenvb_case.get("accepted") is True and bool(getenvb_case.get("env_events"))
+        and r51_outside_mutations_caught and r51_inroot_positive and r51_object_rules_caught
         and env_case.get("accepted") is True and bool(env_case.get("env_events"))
         and unsynced_case.get("accepted") is True
         and unsynced_case.get("transition_ok") is False)
@@ -2730,7 +3042,7 @@ for fd in held:
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'))} captured={captured_primitive_rig_ok,reference_cases['valid'].get('primitive_counts'),bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw),path_positive_case.get('primitive_counts',{}).get('path_stat',0),path_positive_case.get('primitive_counts',{}).get('path_iterdir',0)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
