@@ -327,15 +327,16 @@ def lexical_bindings(tree: ast.Module):
     node_scope: dict[ast.AST, ast.AST] = {}
     scope_globals: dict[ast.AST, set[str]] = {tree: set()}
     scope_nonlocals: dict[ast.AST, set[str]] = {tree: set()}
-    class_os_ambiguities: set[tuple[int, str]] = set()
+    class_process_events: set[tuple[ast.ClassDef, str, int, str]] = set()
 
     def bind(scope: ast.AST, name: str, kind: str, value: str | None = None) -> None:
         scope_bindings.setdefault(scope, {}).setdefault(name, set()).add((kind, value))
 
     def bind_target(scope: ast.AST, name: str, kind: str = "local",
                     value: str | None = None, node: ast.AST | None = None) -> None:
-        if isinstance(scope, ast.ClassDef) and name == "os":
-            class_os_ambiguities.add((getattr(node, "lineno", 0), kind))
+        if isinstance(scope, ast.ClassDef) and name in PROCESS_ATTRS:
+            class_process_events.add(
+                (scope, name, getattr(node, "lineno", 0), kind))
         if name in scope_globals.get(scope, set()):
             bind(tree, name, kind, value)
         elif name not in scope_nonlocals.get(scope, set()):
@@ -358,20 +359,25 @@ def lexical_bindings(tree: ast.Module):
             return super().visit(node)
 
         def visit_Name(self, node: ast.Name) -> None:
-            if isinstance(self.scope, ast.ClassDef) and node.id == "os":
-                class_os_ambiguities.add((node.lineno, type(node.ctx).__name__))
+            if isinstance(self.scope, ast.ClassDef) and node.id in PROCESS_ATTRS:
+                class_process_events.add(
+                    (self.scope, node.id, node.lineno, type(node.ctx).__name__))
             if isinstance(node.ctx, (ast.Store, ast.Del)):
                 bind_target(self.scope, node.id, node=node)
 
         def visit_Global(self, node: ast.Global) -> None:
             scope_globals.setdefault(self.scope, set()).update(node.names)
-            if isinstance(self.scope, ast.ClassDef) and "os" in node.names:
-                class_os_ambiguities.add((node.lineno, "Global"))
+            if isinstance(self.scope, ast.ClassDef):
+                for name in set(node.names) & set(PROCESS_ATTRS):
+                    class_process_events.add(
+                        (self.scope, name, node.lineno, "Global"))
 
         def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
             scope_nonlocals.setdefault(self.scope, set()).update(node.names)
-            if isinstance(self.scope, ast.ClassDef) and "os" in node.names:
-                class_os_ambiguities.add((node.lineno, "Nonlocal"))
+            if isinstance(self.scope, ast.ClassDef):
+                for name in set(node.names) & set(PROCESS_ATTRS):
+                    class_process_events.add(
+                        (self.scope, name, node.lineno, "Nonlocal"))
 
         def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
             if node.type is not None:
@@ -510,6 +516,44 @@ def lexical_bindings(tree: ast.Module):
 
     LexicalBindings().visit(tree)
 
+    def resolve_outside_class(scope: ast.ClassDef,
+                              name: str) -> tuple[str, str | None]:
+        """Model the binding used when a class LOAD_NAME misses its namespace."""
+        if name in scope_globals.get(scope, set()):
+            records = scope_bindings.get(tree, {}).get(name, set())
+            return (next(iter(records)) if len(records) == 1
+                    else ("ambiguous", None))
+
+        parent = scope_parent.get(scope)
+        if (name not in scope_nonlocals.get(scope, set())
+                and scope_bindings.get(scope, {}).get(name, set())):
+            # A class-local binding forces LOAD_NAME. Before that binding exists (or
+            # after deletion), LOAD_NAME falls back to module globals rather than an
+            # enclosing function's fast locals.
+            parent = tree
+
+        while parent is not None:
+            if isinstance(parent, ast.ClassDef):
+                parent = scope_parent.get(parent)
+                continue
+            if name in scope_globals.get(parent, set()):
+                parent = tree
+            elif name in scope_nonlocals.get(parent, set()):
+                parent = scope_parent.get(parent)
+                continue
+            records = scope_bindings.get(parent, {}).get(name, set())
+            if records:
+                return (next(iter(records)) if len(records) == 1
+                        else ("ambiguous", None))
+            parent = scope_parent.get(parent)
+        return ("unbound", None)
+
+    class_process_ambiguities = sorted(
+        (line, name, binding_kind)
+        for scope, name, line, binding_kind in class_process_events
+        if resolve_outside_class(scope, name) == ("module", name)
+    )
+
     def enclosing_scope(scope: ast.AST) -> ast.AST | None:
         """Function-like scopes do not close over an intervening class namespace."""
         parent = scope_parent.get(scope)
@@ -540,7 +584,7 @@ def lexical_bindings(tree: ast.Module):
             scope = enclosing_scope(scope)
         return ("unbound", None)
 
-    return resolve, scope_bindings, sorted(class_os_ambiguities)
+    return resolve, scope_bindings, class_process_ambiguities
 
 
 def process_shape(text: str) -> dict[str, object]:
@@ -549,7 +593,7 @@ def process_shape(text: str) -> dict[str, object]:
     except SyntaxError as exc:
         return {"boundary_ok": False, "observer_ok": False, "detail": f"syntax:{exc}"}
     owners = owner_map(tree)
-    resolve_binding, scope_bindings, class_os_ambiguities = lexical_bindings(tree)
+    resolve_binding, scope_bindings, class_process_ambiguities = lexical_bindings(tree)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     annotation_nodes: set[ast.AST] = set()
     for candidate in ast.walk(tree):
@@ -599,9 +643,9 @@ def process_shape(text: str) -> dict[str, object]:
             if len(records) > 1 and ("module", module) in records:
                 violations.append(("<module>", 0,
                                    f"ambiguous-{module}-binding"))
-    for line, binding_kind in class_os_ambiguities:
+    for line, module, binding_kind in class_process_ambiguities:
         violations.append(("<class-body>", line,
-                           f"class-body-os-ambiguous:{binding_kind}"))
+                           f"class-body-{module}-ambiguous:{binding_kind}"))
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
@@ -1233,6 +1277,47 @@ class H031MethodComprehension:
         return [os.fstat for os in (H031LocalOS(),)]
 H031MethodComprehension().probe()
 """.strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalAsyncio:
+    def create_subprocess_exec(self, value):
+        return value
+class H031ClassLocalAsyncio:
+    asyncio = H031LocalAsyncio()
+    captured = asyncio.create_subprocess_exec
+H031ClassLocalAsyncio.captured("ordinary")
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalPty:
+    def spawn(self, value):
+        return value
+class H031ClassLocalPty:
+    pty = H031LocalPty()
+    captured = pty.spawn
+H031ClassLocalPty.captured(["ordinary"])
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+def h031_enclosing_local_class():
+    subprocess = H031LocalSubprocess()
+    class H031ClosureClass:
+        captured = subprocess.Popen
+    return H031ClosureClass.captured(["ordinary"])
+h031_enclosing_local_class()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+def h031_enclosing_nonlocal_class():
+    subprocess = H031LocalSubprocess()
+    class H031NonlocalClass:
+        nonlocal subprocess
+        captured = subprocess.Popen
+    return H031NonlocalClass.captured(["ordinary"])
+h031_enclosing_nonlocal_class()
+""".strip()),
     ]
     ordinary_process_shadow_positives = [
         inject_run_codex_prefix(source_text, """
@@ -1367,6 +1452,71 @@ class H031BadClassDeclaration:
     global os
     captured = os.fstat
 """.strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessOrder:
+    captured = subprocess.Popen
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessDelete:
+    subprocess = object()
+    del subprocess
+    captured = subprocess.Popen
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessConditional:
+    if False:
+        subprocess = object()
+    captured = subprocess.Popen
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessStart:
+    started = subprocess.Popen(["/bin/true"])
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessDefault:
+    def probe(self, spawn=subprocess.Popen):
+        return spawn
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessDecorator:
+    @subprocess.Popen
+    class Nested:
+        pass
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessComprehension:
+    captured = [value for value in (subprocess.Popen,)]
+    subprocess = object()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadSubprocessGlobal:
+    global subprocess
+    captured = subprocess.Popen
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+def h031_nested_function_fallback():
+    subprocess = H031LocalSubprocess()
+    class H031BadNestedFunctionClass:
+        captured = subprocess.Popen
+        subprocess = object()
+    return H031BadNestedFunctionClass
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalSubprocess:
+    def Popen(self, value):
+        return value
+class H031OuterClass:
+    subprocess = H031LocalSubprocess()
+    class H031BadNestedClass:
+        captured = subprocess.Popen
+""".strip()),
     ]
     protected_fstat_transfer_mutants = [
         inject_run_codex_prefix(source_text, """
@@ -1491,11 +1641,13 @@ subprocess = object()
     ordinary_process_shadow_source_ok = all(
         item.get("boundary_ok") is True
         for item in ordinary_process_shadow_shapes)
+    class_body_ambiguity_shapes = [
+        process_shape(candidate) for candidate in class_body_ambiguity_mutants]
     class_body_ambiguity_rejected = all(
-        process_shape(candidate).get("boundary_ok") is False
-        and "class-body-os-ambiguous"
-            in str(process_shape(candidate).get("detail"))
-        for candidate in class_body_ambiguity_mutants)
+        item.get("boundary_ok") is False
+        and "class-body-" in str(item.get("detail"))
+        and "-ambiguous" in str(item.get("detail"))
+        for item in class_body_ambiguity_shapes)
     protected_fstat_transfers_rejected = all(
         process_shape(candidate).get("boundary_ok") is False
         and "protected-fstat-not-direct-call"
@@ -1540,6 +1692,8 @@ subprocess = object()
           f"ordinary_process_shadow_shapes="
           f"{[item.get('detail') for item in ordinary_process_shadow_shapes]} "
           f"class_body_ambiguity_rejected={class_body_ambiguity_rejected} "
+          f"class_body_ambiguity_shapes="
+          f"{[item.get('detail') for item in class_body_ambiguity_shapes]} "
           f"protected_fstat_transfers_rejected={protected_fstat_transfers_rejected} "
           f"imported_os_rebinding_rejected={imported_os_rebinding_rejected} "
           f"process_module_identity_rejected={process_module_identity_rejected} "

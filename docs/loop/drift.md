@@ -1566,3 +1566,28 @@ bare modules, aliases, rebinding and process references, alongside every prior
 protected-fstat transfer and process-site mutant. This is local resolver reuse—not a
 provenance graph or control-flow interpreter. H032, production, provider authority,
 G20, H017 and live execution remain untouched.
+
+### 2026-08-20 — H032/H031 R66 conditional class process fallback
+
+R65 correctly made the legacy process restrictions lexical, but R64's separate
+class-body `LOAD_NAME` guard still named only `os`. A class could therefore read the
+real global `subprocess.Popen` before a later class-local `subprocess` assignment,
+after deleting that assignment, or when a conditional assignment never ran. The
+unordered lexical set then classified the load as ordinary and hid an actual process
+reference or start.
+
+R66 generalizes the existing class event inventory across every PROCESS_ATTRS
+spelling, while conditioning rejection on an exact imported-module fallback for that
+same name. A class-local binding forces a missing `LOAD_NAME` to module globals;
+nested class namespaces are skipped because they are not closure scopes. A class
+`nonlocal` that resolves to an ordinary enclosing-function value remains ordinary.
+This bounded lexical rule covers loads, binds, deletes, declarations, method defaults,
+decorators, comprehension outer iterables and direct starts without interpreting
+branch order or constructing a dataflow graph.
+
+Connected negatives cover `subprocess` later/delete/conditional bindings, direct
+Popen, method default, decorator, comprehension, global, nested-function and nested-
+class fallback. Positives retain every R62-R65 case and add direct class-local
+`asyncio`/`pty`, an enclosing-function ordinary `subprocess` closure and an explicit
+class `nonlocal`. H032, production, provider authority, G20, H017 and live execution
+remain untouched.
