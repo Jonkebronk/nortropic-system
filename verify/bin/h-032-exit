@@ -632,6 +632,23 @@ if mode == 'output_then_fail': sys.exit(17)
                     for condition in generator.ifs: self.visit(condition)
                 for value in value_nodes: self.visit(value)
                 self.scope=outer
+            def visit_NamedExpr(self,node):
+                # Python 3.9 assignment expressions in comprehensions bind in
+                # the nearest enclosing non-comprehension scope, never in the
+                # synthetic comprehension iteration scope.  The value still
+                # resolves in the current expression scope and is evaluated
+                # before the target binding.
+                self.visit(node.value)
+                target_scope=self.scope
+                while isinstance(target_scope,(ast.ListComp,ast.SetComp,
+                                                 ast.DictComp,ast.GeneratorExp)):
+                    target_scope=scope_parent.get(target_scope)
+                if isinstance(node.target,ast.Name):
+                    node_scope[node.target]=target_scope
+                    bind(target_scope,node.target.id,"local")
+                else:
+                    outer=self.scope;self.scope=target_scope
+                    self.visit(node.target);self.scope=outer
             def visit_ListComp(self,node): self.visit_comprehension_scope(node,(node.elt,))
             visit_SetComp=visit_ListComp
             visit_GeneratorExp=visit_ListComp
@@ -945,6 +962,23 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
     )
     r51_path_deferred_results=[kernel_structure_inventory(ast.parse(text),text)[0]
                                for text in r51_path_deferred_sources]
+    r52_namedexpr_sources=(
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _walrus_same_scope(fd):\n    import os\n    data=os.pread(fd,1,0)\n    [(os:=1) for unused in (0,)]\n    return data\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _walrus_nested(fd):\n    import os\n    data=os.pread(fd,1,0)\n    [[(os:=1) for inner in (0,)] for outer in (0,)]\n    return data\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("import stat","import stat\nimport os").replace(
+            "def _bounded(fd):",
+            "[(os:=1) for unused in (0,)]\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _walrus_global(fd):\n    global os\n    [(os:=1) for unused in (0,)]\n    return fd\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _ordinary_target(values):\n    return [os for os in values]\ndef _bounded(fd):"),
+        kernel_inventory_fixture.replace("def _bounded(fd):",
+            "def _local_shadow(values):\n    os=1\n    return [(value:=os) for unused in values]\ndef _bounded(fd):"),
+    )
+    r52_namedexpr_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                           for text in r52_namedexpr_sources]
     fcntl_positive=kernel_inventory_fixture.replace("import stat","import stat\nimport fcntl").replace(
         "return _bounded(sink_fd)",
         "flags=fcntl.fcntl(sink_fd,fcntl.F_GETFL)\n    fdflags=fcntl.fcntl(sink_fd,fcntl.F_GETFD)\n    return (_bounded(sink_fd),flags,fdflags)")
@@ -954,7 +988,8 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         and reviewer_inventory_results==[False,False,False,True]
         and not any(module_proxy_results) and not any(r51_capture_results)
         and all(r51_shadow_results) and not any(r51_alias_escape_results)
-        and all(r51_path_deferred_results))
+        and all(r51_path_deferred_results)
+        and r52_namedexpr_results==[False,False,False,False,True,True])
 
     kernel_structure_ok=False;kernel_structure_detail={"absent":True}
     kernel_module=None
@@ -2177,41 +2212,58 @@ events=[];transitions=[];held=[];fsynced=set();call_active=[False];transition_do
 primitive_counts={name:0 for name in ("open","fsync","fstat","stat","lstat","access","readlink","listdir","scandir","walk","chmod","fchmod","mkdir","makedirs","symlink","link","unlink","remove","rmdir","environ","environb","getenv","getenvb","putenv","unsetenv","path_open","path_iterdir","path_glob","path_rglob","path_read_text","path_read_bytes","path_stat","path_lstat","path_readlink","path_resolve","path_chmod","path_mkdir","path_symlink_to","path_hardlink_to","path_link_to","path_unlink","path_rmdir","path_rename","path_replace","path_touch")}
 env_events=[];security_events=[];original_environ=os.environ;original_environb=getattr(os,"environb",None)
 env_before=dict(original_environ);envb_before=dict(original_environb or {});module_error="NONE"
-allowed_roots=(staging.resolve(),canonical_parent.resolve())
-inside_state=threading.local()
+# Freeze the observer's lexical authority before subject execution.  The
+# scoped observer never calls a subject-provided __fspath__, resolve or stat
+# method while deciding authority.
+original_abspath=os.path.abspath;original_normpath=os.path.normpath
+original_isabs=os.path.isabs;original_purepath_str=pathlib.PurePath.__str__
+concrete_path_type=type(pathlib.Path())
+allowed_roots=tuple(original_normpath(original_abspath(original_purepath_str(item)))
+                    for item in (staging,canonical_parent))
+judge_state=threading.local()
+def judge_active(): return getattr(judge_state,"depth",0)>0
+def judge_enter(): judge_state.depth=getattr(judge_state,"depth",0)+1
+def judge_leave(): judge_state.depth=max(0,getattr(judge_state,"depth",0)-1)
+def lexical_path(value):
+ if type(value) is str: raw=value
+ elif type(value) is bytes:
+  try: raw=value.decode(sys.getfilesystemencoding(),"surrogateescape")
+  except Exception: return None
+ elif type(value) is concrete_path_type:
+  try: raw=original_purepath_str(value)
+  except Exception: return None
+ else: return None
+ if not raw or "\0" in raw or not original_isabs(raw): return None
+ if ".." in raw.split(os.sep): return None
+ normalized=original_normpath(raw)
+ return normalized if original_isabs(normalized) else None
+def fd_path(value):
+ if type(value) is not int or value<0: return None
+ try:
+  raw=fcntl.fcntl(value,50,b"\0"*1024)
+  return lexical_path(raw.split(b"\0",1)[0])
+ except Exception: return None
+def observed_path(value):
+ return fd_path(value) if type(value) is int else lexical_path(value)
+def path_label(value):
+ path=observed_path(value)
+ return path if path is not None else (f"<FD:{value}>" if type(value) is int else "<UNSAFE_PATH>")
+def path_supported(value):
+ return observed_path(value) is not None
 def inside_allowed(value):
- if getattr(inside_state,"active",False): return True
- inside_state.active=True
- try:
-  if isinstance(value,int):
-   try:
-    raw=fcntl.fcntl(value,50,b"\0"*1024)
-    resolved=raw.split(b"\0",1)[0].decode("utf-8","strict")
-   except Exception: resolved=os.path.realpath(f"/dev/fd/{value}")
-   path=pathlib.Path(resolved)
-  else: path=pathlib.Path(os.path.realpath(os.path.abspath(os.fspath(value))))
-  if not path.is_absolute(): return True
-  return (any(path==root or root in path.parents for root in allowed_roots)
-          or str(path)=="/dev/fd" or str(path).startswith("/dev/fd/"))
- except Exception: return False
- finally: inside_state.active=False
+ path=observed_path(value)
+ if path is None: return False
+ return any(path==root or path.startswith(root+os.sep) for root in allowed_roots)
 def strict_member(value):
- previous=getattr(inside_state,"active",False);inside_state.active=True
- try:
-  if isinstance(value,int):
-   try:
-    raw=fcntl.fcntl(value,50,b"\0"*1024)
-    value=raw.split(b"\0",1)[0].decode("utf-8","strict")
-   except Exception: value=os.path.realpath(f"/dev/fd/{value}")
-  path=pathlib.Path(os.path.realpath(os.path.abspath(os.fspath(value))))
-  return any(root in path.parents for root in allowed_roots)
- except Exception: return False
- finally: inside_state.active=previous
+ path=observed_path(value)
+ if path is None: return False
+ return any(path.startswith(root+os.sep) for root in allowed_roots)
 original_fstat=os.fstat
 original_lstat=os.lstat
 def safe_existing(value):
  try:
-  current=original_fstat(value) if isinstance(value,int) else original_lstat(value)
+  if not path_supported(value): return False
+  current=original_fstat(value) if type(value) is int else original_lstat(value)
   return stat.S_ISREG(current.st_mode) or stat.S_ISDIR(current.st_mode)
  except OSError: return False
 def secure_mode(value,directory=False):
@@ -2254,22 +2306,30 @@ def observed_fstat(fd):
 os.fstat=observed_fstat
 def observed_os_open(path,flags,*args,**kwargs):
  primitive_counts["open"]+=1
+ if judge_active(): return original_os_open(path,flags,*args,**kwargs)
  mode=(args[0] if args else kwargs.get("mode",0o777))
  allowed=inside_allowed(path)
  if flags&os.O_CREAT: allowed=allowed and strict_member(path) and secure_mode(mode)
- if call_active[0]: events.append(("os.open",str(path),flags,allowed))
+ if call_active[0]:
+  events.append(("os.open",path_label(path),flags,allowed))
+  if not allowed: raise PermissionError("path outside scoped result authority")
  return original_os_open(path,flags,*args,**kwargs)
 os.open=observed_os_open
 def observed_builtin_open(*args,**kwargs):
  primitive_counts["open"]+=1
  path=args[0] if args else kwargs.get("file","");mode=args[1] if len(args)>1 else kwargs.get("mode","r")
+ if judge_active(): return original_builtin_open(*args,**kwargs)
  writing=any(token in str(mode) for token in "wax+")
- if call_active[0]: events.append(("builtins.open",str(path),str(mode),inside_allowed(path) and not writing))
+ allowed=inside_allowed(path) and not writing
+ if call_active[0]:
+  events.append(("builtins.open",path_label(path),str(mode),allowed))
+  if not allowed: raise PermissionError("path outside scoped result authority")
  return original_builtin_open(*args,**kwargs)
 builtins.open=observed_builtin_open
 def observed_path_method(name):
  def invoke(self,*args,**kwargs):
   primitive_counts["path_"+name]+=1
+  if judge_active(): return original_path_methods[name](self,*args,**kwargs)
   allowed=inside_allowed(self)
   if name=="open":
    mode=args[0] if args else kwargs.get("mode","r")
@@ -2281,7 +2341,9 @@ def observed_path_method(name):
    allowed=strict_member(self) and bool(args) and strict_member(args[0])
   if name=="touch": allowed=strict_member(self) and secure_mode(args[0] if args else kwargs.get("mode",0o666))
   if name in {"symlink_to","hardlink_to","link_to"}: allowed=False
-  if call_active[0]: events.append(("path."+name,str(self),str(args[0]) if args else "",allowed))
+  if call_active[0]:
+   events.append(("path."+name,path_label(self),path_label(args[0]) if args else "",allowed))
+   if not allowed: raise PermissionError("path outside scoped result authority")
   return original_path_methods[name](self,*args,**kwargs)
  return invoke
 for path_method in path_method_names: setattr(pathlib.Path,path_method,observed_path_method(path_method))
@@ -2289,7 +2351,11 @@ original_path_ops={name:getattr(os,name) for name in ("stat","lstat","access","r
 def observed_path_op(name):
  def invoke(path,*args,**kwargs):
   primitive_counts[name]+=1
-  if call_active[0]: events.append((name,str(path),0,inside_allowed(path)))
+  if judge_active(): return original_path_ops[name](path,*args,**kwargs)
+  allowed=inside_allowed(path)
+  if call_active[0]:
+   events.append((name,path_label(path),0,allowed))
+   if not allowed: raise PermissionError("path outside scoped result authority")
   return original_path_ops[name](path,*args,**kwargs)
  return invoke
 for path_op in original_path_ops: setattr(os,path_op,observed_path_op(path_op))
@@ -2297,7 +2363,11 @@ original_dir_ops={name:getattr(os,name) for name in ("listdir","scandir","walk")
 def observed_dir_op(name):
  def invoke(path=".",*args,**kwargs):
   primitive_counts[name]+=1
-  if call_active[0]: events.append(("os."+name,str(path),0,inside_allowed(path)))
+  if judge_active(): return original_dir_ops[name](path,*args,**kwargs)
+  allowed=inside_allowed(path)
+  if call_active[0]:
+   events.append(("os."+name,path_label(path),0,allowed))
+   if not allowed: raise PermissionError("path outside scoped result authority")
   return original_dir_ops[name](path,*args,**kwargs)
  return invoke
 for dir_op in original_dir_ops: setattr(os,dir_op,observed_dir_op(dir_op))
@@ -2305,8 +2375,11 @@ def observed_mutation(name):
  def invoke(*args,**kwargs):
   primitive_counts[name]+=1
   target=(args[1] if name in {"symlink","link"} and len(args)>1 else args[0] if args else "")
+  if judge_active(): return original_mutation_ops[name](*args,**kwargs)
   allowed=mutation_allowed(name,args)
-  if call_active[0]: events.append(("os."+name,str(target),repr(args[:2]),allowed))
+  if call_active[0]:
+   events.append(("os."+name,path_label(target),name,allowed))
+   if not allowed: raise PermissionError("mutation outside scoped result authority")
   return original_mutation_ops[name](*args,**kwargs)
  return invoke
 for mutation_op in mutation_os_names: setattr(os,mutation_op,observed_mutation(mutation_op))
@@ -2347,34 +2420,47 @@ os.getenv=observed_getenv
 if original_getenvb is not None: os.getenvb=observed_getenvb
 os.putenv=observed_putenv;os.unsetenv=observed_unsetenv
 def audit(event,args):
- if not call_active[0]: return
+ if not call_active[0] or judge_active(): return
  if event=="open" and args:
   path=args[0];flags=args[2] if len(args)>2 and isinstance(args[2],int) else 0
-  events.append(("open",str(path),flags,inside_allowed(path)))
-  if transition_done[0] and pathlib.Path(str(path))==canonical and flags&(os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC): events.append(("post_write",str(path),flags,False))
+  allowed=inside_allowed(path);label=path_label(path)
+  events.append(("open",label,flags,allowed))
+  if not allowed: raise PermissionError("audit path outside scoped result authority")
+  if transition_done[0] and lexical_path(path)==lexical_path(canonical) and flags&(os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC): events.append(("post_write",label,flags,False))
  elif event in {"os.remove","os.unlink"} and args:
-  events.append((event,str(args[0]),0,inside_allowed(args[0])))
-  if transition_done[0] and pathlib.Path(str(args[0]))==canonical: events.append(("post_remove",str(args[0]),0,False))
+  allowed=inside_allowed(args[0]);label=path_label(args[0]);events.append((event,label,0,allowed))
+  if not allowed: raise PermissionError("audit path outside scoped result authority")
+  if transition_done[0] and lexical_path(args[0])==lexical_path(canonical): events.append(("post_remove",label,0,False))
  elif event=="os.rename" and len(args)>=2:
-  src,dst=pathlib.Path(str(args[0])),pathlib.Path(str(args[1]));events.append((event,str(src),str(dst),strict_member(src) and strict_member(dst)))
-  if dst==canonical:
-   absent=not canonical.exists();fd=os.open(src,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0));before=os.fstat(fd);data=b""
-   while len(data)<=5*1024*1024:
-    chunk=os.read(fd,min(65536,5*1024*1024+1-len(data)))
-    if not chunk: break
-    data+=chunk
-   after=os.fstat(fd);identity=(before.st_dev,before.st_ino);writers=fd_inventory(identity,True)
-   transitions.append({"absent":absent,"dev":before.st_dev,"ino":before.st_ino,"size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),"stable":(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns),"writers":writers,"fsynced":identity in fsynced})
-   held.append(fd);transition_done[0]=True
-  elif transition_done[0] and (src==canonical or dst==canonical): events.append(("post_rename",str(src),str(dst),False))
+  src_path=lexical_path(args[0]);dst_path=lexical_path(args[1]);allowed=(strict_member(args[0]) and strict_member(args[1]))
+  events.append((event,path_label(args[0]),path_label(args[1]),allowed))
+  if not allowed: raise PermissionError("audit rename outside scoped result authority")
+  canonical_path=lexical_path(canonical)
+  if dst_path==canonical_path:
+   judge_enter()
+   try:
+    try: original_lstat(canonical);absent=False
+    except FileNotFoundError: absent=True
+    fd=original_os_open(src_path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0));before=original_fstat(fd);data=b""
+    while len(data)<=5*1024*1024:
+     chunk=os.read(fd,min(65536,5*1024*1024+1-len(data)))
+     if not chunk: break
+     data+=chunk
+    after=original_fstat(fd);identity=(before.st_dev,before.st_ino);writers=fd_inventory(identity,True)
+    transitions.append({"absent":absent,"dev":before.st_dev,"ino":before.st_ino,"size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),"stable":(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns),"writers":writers,"fsynced":identity in fsynced})
+    held.append(fd);transition_done[0]=True
+   finally: judge_leave()
+  elif transition_done[0] and (src_path==canonical_path or dst_path==canonical_path): events.append(("post_rename",src_path,dst_path,False))
  elif event in {"os.putenv","os.unsetenv"}:
   env_events.append((event,str(args[0]) if args else ""))
  elif event in {"os.listdir","os.scandir"} and args:
-  events.append((event,str(args[0]),0,inside_allowed(args[0])))
+  allowed=inside_allowed(args[0]);events.append((event,path_label(args[0]),0,allowed))
+  if not allowed: raise PermissionError("audit directory outside scoped result authority")
  elif event in {"os.chmod","os.mkdir","os.rmdir","os.remove","os.unlink"} and args:
-  events.append((event,str(args[0]),repr(args[1:3]),mutation_allowed(event.split(".",1)[1],args)))
+  allowed=mutation_allowed(event.split(".",1)[1],args);events.append((event,path_label(args[0]),event,allowed))
+  if not allowed: raise PermissionError("audit mutation outside scoped result authority")
  elif event in {"os.symlink","os.link"} and len(args)>=2:
-  events.append((event,str(args[1]),repr(args[:2]),False))
+  events.append((event,path_label(args[1]),event,False));raise PermissionError("link authority denied")
  elif event=="subprocess.Popen" or event=="os.system" or event.startswith("os.exec") \
         or event.startswith("os.posix_spawn") or event.startswith("socket."):
   security_events.append((event,repr(args)[:240]))
@@ -2510,6 +2596,12 @@ for fd in held:
             and not case.get("env_events") and case.get("env_changed") is False
             and not case.get("security_events")
             and (canonical is None or preseed_ok))
+    def outside_blocked(case,canonical_absent=False):
+        return (case.get("rc")==0 and case.get("accepted") is False
+            and bool(case.get("outside")) and case.get("trap_unchanged") is True
+            and not case.get("env_events") and case.get("env_changed") is False
+            and not case.get("security_events")
+            and (not canonical_absent or case.get("canonical") is None))
 
     reference_cases={
         "valid":fresh_kernel_effect(reference_kernel,rig_valid_raw),
@@ -2638,8 +2730,7 @@ for fd in held:
             if artifact.is_symlink() or artifact.is_file(): artifact.unlink()
             elif artifact.is_dir(): shutil.rmtree(artifact)
     r51_outside_mutations_caught=all(
-        case.get("accepted") is True and bool(case.get("outside"))
-        and not fresh_success(case,rig_valid_raw)
+        outside_blocked(case) and not fresh_success(case,rig_valid_raw)
         for case in r51_mutation_cases.values())
     r51_inroot_source=reference_kernel_source.replace(
         '        return envelope','''        private_parent=Path(os.path.dirname(os.fspath(canonical_destination)))
@@ -2670,9 +2761,58 @@ for fd in held:
         object_path=work/f"r51-inroot-object-mutant-{index}.py"
         object_path.write_text(object_source,encoding="utf-8")
         r51_object_rule_cases.append(fresh_kernel_effect(object_path,rig_valid_raw))
-    r51_object_rules_caught=all(case.get("accepted") is True
-        and bool(case.get("outside")) and not fresh_success(case,rig_valid_raw)
+    r51_object_rules_caught=all(outside_blocked(case)
+        and not fresh_success(case,rig_valid_raw)
         for case in r51_object_rule_cases)
+    # R52 closes the observer itself: unsupported PathLike values are rejected
+    # without invoking product-controlled conversion, and a nested audit event
+    # cannot inherit judge authority.  The victim leaves prove no callback or
+    # nested outside mutation occurred.
+    r52_fspath_source=reference_kernel_source.replace(
+        '        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE','''        state=[False]
+        def convert(unused):
+            state[0]=True
+            os.unlink(Path(__file__).with_suffix(".victim"))
+            return os.fspath(canonical_destination)
+        crafted=type("CraftedPathLike",(),{"__fspath__":convert})()
+        os.stat(crafted)
+        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE''',1)
+    r52_fspath=work/"r52-fspath-mutant.py";r52_fspath.write_text(r52_fspath_source,encoding="utf-8")
+    r52_fspath_victim=r52_fspath.with_suffix(".victim");r52_fspath_victim.write_text("SECRET",encoding="utf-8")
+    r52_fspath_case=fresh_kernel_effect(r52_fspath,rig_valid_raw)
+    r52_fspath_no_effect=(r52_fspath_victim.read_text(encoding="utf-8")=="SECRET")
+    r52_subclass_source=reference_kernel_source.replace(
+        '__all__ = ["consume_private_result"]','''__all__ = ["consume_private_result"]
+class CraftedConcretePath(type(Path())):
+    def __fspath__(self):
+        os.unlink(Path(__file__).with_suffix(".victim"))
+        return super().__fspath__()''',1).replace(
+        '        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE','''        os.stat(CraftedConcretePath(canonical_destination))
+        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE''',1)
+    r52_subclass=work/"r52-path-subclass-mutant.py";r52_subclass.write_text(r52_subclass_source,encoding="utf-8")
+    r52_subclass_victim=r52_subclass.with_suffix(".victim");r52_subclass_victim.write_text("SECRET",encoding="utf-8")
+    r52_subclass_case=fresh_kernel_effect(r52_subclass,rig_valid_raw)
+    r52_subclass_no_effect=(r52_subclass_victim.read_text(encoding="utf-8")=="SECRET")
+    r52_nested_source=reference_kernel_source.replace(
+        'import tempfile','import tempfile\nimport sys',1).replace(
+        '        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE','''        nested=[False]
+        def nested_audit(event,args):
+            if event=="open" and not nested[0]:
+                nested[0]=True
+                os.unlink(Path(__file__).with_suffix(".victim"))
+        sys.addaudithook(nested_audit)
+        probe=os.open(os.path.dirname(os.fspath(canonical_destination)),os.O_RDONLY|os.O_CLOEXEC)
+        os.close(probe)
+        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE''',1)
+    r52_nested=work/"r52-nested-audit-mutant.py";r52_nested.write_text(r52_nested_source,encoding="utf-8")
+    r52_nested_victim=r52_nested.with_suffix(".victim");r52_nested_victim.write_text("SECRET",encoding="utf-8")
+    r52_nested_case=fresh_kernel_effect(r52_nested,rig_valid_raw)
+    r52_nested_no_effect=(r52_nested_victim.read_text(encoding="utf-8")=="SECRET")
+    r52_path_observer_ok=(outside_blocked(r52_fspath_case,True) and r52_fspath_no_effect
+        and outside_blocked(r52_subclass_case,True) and r52_subclass_no_effect
+        and outside_blocked(r52_nested_case,True) and r52_nested_no_effect
+        and fresh_success(reference_cases["valid"],rig_valid_raw)
+        and fresh_success(path_positive_case,rig_valid_raw))
     env_source=reference_kernel_source.replace(
         '        return envelope',
         '        os.putenv("H032_R49_MUTATION","1")\n        return envelope',1)
@@ -2691,15 +2831,16 @@ for fd in held:
         and captured_reference_case.get("primitive_counts",{}).get("fstat",0)>=1
         and captured_reference_case.get("primitive_counts",{}).get("stat",0)>=1
         and captured_reference_case.get("primitive_counts",{}).get("fsync",0)>=1
-        and import_probe_case.get("accepted") is True and bool(import_probe_case.get("outside"))
-        and captured_stat_case.get("accepted") is True and bool(captured_stat_case.get("outside"))
+        and outside_blocked(import_probe_case,True)
+        and outside_blocked(captured_stat_case,True)
         and fresh_success(path_positive_case,rig_valid_raw)
         and path_positive_case.get("primitive_counts",{}).get("path_stat",0)>=1
         and path_positive_case.get("primitive_counts",{}).get("path_iterdir",0)>=1
-        and iterdir_case.get("accepted") is True and bool(iterdir_case.get("outside"))
+        and outside_blocked(iterdir_case,True)
         and environb_case.get("accepted") is True and bool(environb_case.get("env_events"))
         and getenvb_case.get("accepted") is True and bool(getenvb_case.get("env_events"))
         and r51_outside_mutations_caught and r51_inroot_positive and r51_object_rules_caught
+        and r52_path_observer_ok
         and env_case.get("accepted") is True and bool(env_case.get("env_events"))
         and unsynced_case.get("accepted") is True
         and unsynced_case.get("transition_ok") is False)
@@ -3042,7 +3183,7 @@ for fd in held:
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
