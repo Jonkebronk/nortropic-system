@@ -1129,6 +1129,8 @@ def run_codex(sink, canonical, invocation, run, role):
         active = audit_active[0]
         if active is None or event not in {"os.mkdir", "open", "os.remove", "os.rename", "subprocess.Popen"}:
             return
+        if active.get("observer_busy") is True:
+            return
         if event == "subprocess.Popen":
             outputs = active["provider_outputs"]
             assert isinstance(outputs, list)
@@ -1142,6 +1144,38 @@ def run_codex(sink, canonical, invocation, run, role):
             opened = active["opened"]
             assert isinstance(opened, list)
             opened.append(tuple(args))
+            if args:
+                try:
+                    path = Path(args[0]).absolute()
+                    flags = args[2] if len(args) > 2 and type(args[2]) is int else 0
+                    runs_root = active["runs_root"]
+                    assert isinstance(runs_root, Path)
+                    if (path.name == "result.json" and runs_root in path.parents
+                            and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC)):
+                        direct_writes = active["canonical_direct_writes"]
+                        assert isinstance(direct_writes, list)
+                        direct_writes.append((str(path), flags, path.exists()))
+                except Exception:
+                    pass
+        if event in {"os.remove", "os.rename"} and args:
+            candidate = args[1] if event == "os.rename" and len(args) > 1 else args[0]
+            try:
+                path = Path(candidate).absolute()
+                runs_root = active["runs_root"]
+                assert isinstance(runs_root, Path)
+                if path.name == "result.json" and runs_root in path.parents \
+                        and path.is_file() and not path.is_symlink():
+                    active["observer_busy"] = True
+                    current = path.stat()
+                    epoch = (str(path), current.st_dev, current.st_ino, sha256(path))
+                    epochs = active["canonical_visibility_epochs"]
+                    assert isinstance(epochs, list)
+                    if not epochs or epochs[-1] != epoch:
+                        epochs.append(epoch)
+            except Exception:
+                pass
+            finally:
+                active["observer_busy"] = False
         values = args[1:2] if event == "os.rename" else args[:1]
         for value in values:
             if isinstance(value, (str, bytes, os.PathLike)):
@@ -1168,7 +1202,12 @@ def run_codex(sink, canonical, invocation, run, role):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
         arena_before = {str(path.absolute()) for path in arena.rglob("*")}
         observed: dict[str, object] = {"created": set(), "opened": [], "provider_outputs": [],
-                                      "run_return": None, "canonical_paths": []}
+                                      "run_return": None, "canonical_paths": [],
+                                      "runs_root": runs_root,
+                                      "arena": arena,
+                                      "canonical_direct_writes": [],
+                                      "canonical_visibility_epochs": [],
+                                      "observer_busy": False}
         audit_active[0] = observed
         try:
             try:
@@ -1185,6 +1224,15 @@ def run_codex(sink, canonical, invocation, run, role):
         after_runs = set(runs_root.iterdir()) if runs_root.is_dir() else set()
         observed["canonical_paths"] = [str(path / "result.json")
                                        for path in sorted(after_runs - before_runs)]
+        for value in observed["canonical_paths"]:
+            path = Path(value)
+            if path.is_file() and not path.is_symlink():
+                current = path.stat()
+                epoch = (str(path), current.st_dev, current.st_ino, sha256(path))
+                epochs = observed["canonical_visibility_epochs"]
+                assert isinstance(epochs, list)
+                if not epochs or epochs[-1] != epoch:
+                    epochs.append(epoch)
         last_attempt_observed[0] = observed
         created = observed["created"]
         assert isinstance(created, set)
@@ -1231,6 +1279,9 @@ def run_codex(sink, canonical, invocation, run, role):
     valid_canonical = (Path(valid_canonical_paths[-1]) if valid_canonical_paths
                        else Path("/private/tmp/h032-missing-canonical"))
     run_return=valid_observed.get("run_return")
+    valid_publication_lifecycle_ok = (
+        len(valid_observed.get("canonical_visibility_epochs", [])) == 1
+        and not valid_observed.get("canonical_direct_writes"))
     integration_dynamic_ok=False
     if len(integration_calls)==1:
         call=integration_calls[0];call_cap=call.get("capture") or {}
@@ -1481,6 +1532,7 @@ def run_codex(sink, canonical, invocation, run, role):
     object_attacks = {kind: object_attack(kind) for kind in
                       ("symlink", "directory", "hardlink", "fifo", "socket", "parent_swap")}
     object_attacks_ok = all(not value[0][0]
+                            and not value[0][4]
                             and value[1] and value[2] and value[3]
                             and value[4]==[(True,1,0o600)]
                             for value in object_attacks.values())
@@ -1515,17 +1567,41 @@ def run_codex(sink, canonical, invocation, run, role):
             module.subprocess.Popen = original_popen
             module.os.unlink = original_unlink
             module.shutil.rmtree = original_rmtree
-        residue = [path for path in targets if path.exists()]
-        result = outcome, failures[0], [str(path) for path in residue]
-        for path in residue:
-            if path.is_file() or path.is_symlink(): path.unlink()
+        transport_residue: list[Path] = []
+        for target in targets:
+            for candidate in (target, target.parent):
+                if candidate.exists() or candidate.is_symlink():
+                    transport_residue.append(candidate)
+        result = (outcome, failures[0], list(outcome[4]),
+                  sorted({str(path) for path in transport_residue}))
+        # Gate-owned cleanup happens only after the complete attempt residue and
+        # private-parent observations have been retained in result.
+        for target in targets:
+            if target.parent.exists():
+                target.parent.chmod(0o700)
+                shutil.rmtree(target.parent)
+        observed_cleanup = last_attempt_observed[0] or {}
+        cleanup_arena = observed_cleanup.get("arena")
+        if isinstance(cleanup_arena, Path) and cleanup_arena.exists():
+            # The persistent-failure control may leave protected provider
+            # snapshots elsewhere in this exact attempt arena. The verdict
+            # above retains them in outcome[4]; only then does the judge make
+            # its own arena removable so the gate itself leaves no residue.
+            for root_path, directories, _files in os.walk(cleanup_arena, topdown=False):
+                for directory in directories:
+                    candidate = Path(root_path) / directory
+                    if not candidate.is_symlink(): candidate.chmod(0o700)
+                Path(root_path).chmod(0o700)
+            shutil.rmtree(cleanup_arena)
         return result
     transient_cleanup = cleanup_failure_case(False)
     persistent_cleanup = cleanup_failure_case(True)
     cleanup_error_ok = (
-        transient_cleanup[1] == 1 and transient_cleanup[0][0] and not transient_cleanup[2]
+        transient_cleanup[1] == 1 and transient_cleanup[0][0]
+        and not transient_cleanup[2] and not transient_cleanup[3]
         and persistent_cleanup[1] > 0 and not persistent_cleanup[0][0]
-        and "cleanup" in persistent_cleanup[0][1].lower())
+        and "cleanup" in persistent_cleanup[0][1].lower()
+        and not persistent_cleanup[2] and not persistent_cleanup[3])
 
     oversized_positive = result_case("exact_max")
 
@@ -1545,7 +1621,10 @@ def run_codex(sink, canonical, invocation, run, role):
                 partial_visible.append(candidate.read_bytes() if candidate.exists() else b"")
         time.sleep(0.005)
     atomic_thread.join(); launch_mode[0] = "valid"
-    atomic_ok = (len(atomic_box) == 1 and atomic_box[0][0] and not partial_visible)
+    atomic_observed = last_attempt_observed[0] or {}
+    atomic_ok = (len(atomic_box) == 1 and atomic_box[0][0] and not partial_visible
+        and len(atomic_observed.get("canonical_visibility_epochs", [])) == 1
+        and not atomic_observed.get("canonical_direct_writes"))
 
     # Causal stale/preseed/replay controls.  These bytes exist before the
     # invocation creates its channel; fixture-only mode strings are not used.
@@ -1560,7 +1639,7 @@ def run_codex(sink, canonical, invocation, run, role):
     stale_case = attempt(valid_repo)
     launch_mode[0] = "valid"
     stale_rejects = (not stale_case[0] and stale_result.read_bytes() == stale_bytes
-                     and stale_case[2] == 0)
+                     and stale_case[2] == 0 and not stale_case[4])
 
     replay_id = "20000101-000001-replay"
     replay_run = module.journal_root(valid_repo) / "runs" / f"{replay_id}-builder"
@@ -1594,7 +1673,9 @@ def run_codex(sink, canonical, invocation, run, role):
         module.subprocess.Popen = original_external_popen
         launch_mode[0] = "valid"
     external_replay_ok = (len(external_writes) == 1 and not external_replay_case[0]
-                          and external_replay_case[2] == 1)
+                          and external_replay_case[2] == 1
+                          and not external_replay_case[4]
+                          and all(not path.parent.exists() for path in external_writes))
 
     def connected_read_attack(kind: str):
         attack_repo = make_repo(str(provider)); targets: list[Path] = []; fired = [0]
@@ -1836,8 +1917,10 @@ def run_codex(sink, canonical, invocation, run, role):
                                   and len({item[2] for item in effect_two_values[1]}) == 2)
     effect_two_promotions_caught = (not effect_two_promotions[0][0]
                                     and len(effect_two_promotions[1]) == 1
-                                    and effect_two_promotions[2] and effect_two_promotions[3])
-    effect_sink_attacks_caught = not effect_sink_swap[0][0]
+                                    and effect_two_promotions[2] and effect_two_promotions[3]
+                                    and not effect_two_promotions[0][4])
+    effect_sink_attacks_caught = (not effect_sink_swap[0][0]
+                                  and not effect_sink_swap[0][4])
 
     # Reproduce repo == ROT and LIVE_GIT physically without touching the shared
     # repository.  This no-hardlink tree contains the exact candidate bytes,
@@ -1919,8 +2002,47 @@ def run_codex(sink, canonical, invocation, run, role):
         and staging.get("entries") == [valid_output.name]
         and not valid_output.parent.exists())
     def rejected_clean(case) -> bool:
-        result, _capture, output_exists, canonical_exists, hostile_exists = case
-        return not result[0] and result[2] == 1 and not output_exists and not canonical_exists and not hostile_exists
+        result, case_capture, output_exists, canonical_exists, hostile_exists = case
+        output_paths = [Path(value) for value in case_capture.get("_gate_output_paths", [])]
+        return (not result[0] and result[2] == 1 and not result[4]
+                and len(output_paths) == 1
+                and all(not path.exists() and not path.is_symlink()
+                        and not path.parent.exists() for path in output_paths)
+                and not output_exists and not canonical_exists and not hostile_exists)
+
+    # These cases are constructed before rejected_clean so that their process
+    # lifecycle can be monitored causally. Bind their final verdict here to the
+    # same complete attempt-residue/private-parent oracle as every other
+    # negative result rather than retaining the earlier leaf-only fallback.
+    timeout_ok = rejected_clean(timeout_case)
+    tracked_quiescent = (tracked_quiescent
+        and rejected_clean(tracked_interruption)
+        and rejected_clean(tracked_timeout)
+        and rejected_clean(tracked_fork))
+
+    # Unconditional oracle sensitivity: a leaf-free but still-existing private
+    # parent, or any helper path present in the complete attempt residue list,
+    # must turn the otherwise identical clean rejection false.
+    r55_private_parent = work / "r55-negative-private-parent"
+    r55_private_sink = r55_private_parent / "result.json"
+    r55_capture = {"_gate_output_paths": [str(r55_private_sink)]}
+    r55_clean_rejection = ((False, "REJECTED", 1, 0, []), r55_capture,
+                           False, False, False)
+    r55_parent_only_rejection = ((False, "REJECTED", 1, 0,
+                                  [str(r55_private_parent)]), r55_capture,
+                                 False, False, False)
+    r55_helper = work / "r55-helper-residue"
+    r55_helper_rejection = ((False, "REJECTED", 1, 0, [str(r55_helper)]),
+                            r55_capture, False, False, False)
+    r55_clean_oracle_positive = rejected_clean(r55_clean_rejection)
+    r55_private_parent.mkdir()
+    r55_parent_residue_caught = not rejected_clean(r55_parent_only_rejection)
+    r55_private_parent.rmdir()
+    r55_helper.mkdir()
+    r55_helper_residue_caught = not rejected_clean(r55_helper_rejection)
+    r55_helper.rmdir()
+    r55_complete_residue_oracle_ok = (r55_clean_oracle_positive
+        and r55_parent_residue_caught and r55_helper_residue_caught)
 
     # R12 boundary: a fresh interpreter imports the exact candidate source and
     # retains the genuine stdlib subprocess.Popen object.  Each behavior is
@@ -2280,6 +2402,7 @@ if sink_fd>=0:
  st=os.fstat(sink_fd);sink_identity=(st.st_dev,st.st_ino)
 accepted_digest=hashlib.sha256(raw).hexdigest()
 events=[];transitions=[];held=[];fsynced=set();call_active=[False];transition_done=[False]
+canonical_epochs=[];canonical_direct_writes=[]
 primitive_counts={name:0 for name in ("open","fsync","fstat","stat","lstat","access","readlink","listdir","scandir","walk","chmod","fchmod","mkdir","makedirs","symlink","link","unlink","remove","rmdir","environ","environb","getenv","getenvb","putenv","unsetenv","path_open","path_iterdir","path_glob","path_rglob","path_read_text","path_read_bytes","path_stat","path_lstat","path_readlink","path_resolve","path_chmod","path_mkdir","path_symlink_to","path_hardlink_to","path_link_to","path_unlink","path_rmdir","path_rename","path_replace","path_touch")}
 env_events=[];security_events=[];original_environ=os.environ;original_environb=getattr(os,"environb",None)
 env_before=dict(original_environ);envb_before=dict(original_environb or {});module_error="NONE"
@@ -2407,6 +2530,29 @@ path_method_names=tuple(name for name in ("open","iterdir","glob","rglob","read_
 original_path_methods={name:getattr(pathlib.Path,name) for name in path_method_names}
 mutation_os_names=("chmod","fchmod","mkdir","makedirs","symlink","link","unlink","remove","rmdir")
 original_mutation_ops={name:getattr(os,name) for name in mutation_os_names}
+def observe_existing_canonical(reason):
+ try:
+  current=original_lstat(canonical)
+  if not stat.S_ISREG(current.st_mode):
+   canonical_epochs.append({"reason":reason,"kind":"nonregular","dev":current.st_dev,"ino":current.st_ino})
+   return
+  flags=os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0)
+  ticket=make_ticket("canonical_epoch_open","original_os_open","open",(lexical_path(canonical),),flags,None,None,None)
+  fd=original_os_open(canonical,flags);require_ticket_consumed(ticket)
+  try:
+   before=original_fstat(fd);data=b""
+   while len(data)<=5*1024*1024:
+    chunk=os.read(fd,min(65536,5*1024*1024+1-len(data)))
+    if not chunk: break
+    data+=chunk
+   after=original_fstat(fd)
+  finally: os.close(fd)
+  epoch={"reason":reason,"kind":"regular","dev":before.st_dev,"ino":before.st_ino,
+         "size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),
+         "stable":(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)}
+  if not canonical_epochs or any(epoch.get(key)!=canonical_epochs[-1].get(key) for key in ("dev","ino","digest")):
+   canonical_epochs.append(epoch)
+ except FileNotFoundError: pass
 def observed_fsync(fd):
  primitive_counts["fsync"]+=1;st=original_fstat(fd);fsynced.add((st.st_dev,st.st_ino));return original_fsync(fd)
 os.fsync=observed_fsync
@@ -2530,10 +2676,13 @@ def audit(event,args):
   allowed=inside_allowed(path);label=path_label(path)
   events.append(("open",label,flags,allowed))
   if not allowed: raise PermissionError("audit path outside scoped result authority")
+  if lexical_path(path)==lexical_path(canonical) and flags&(os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC):
+   canonical_direct_writes.append((label,flags,safe_existing(canonical)))
   if transition_done[0] and lexical_path(path)==lexical_path(canonical) and flags&(os.O_WRONLY|os.O_RDWR|os.O_CREAT|os.O_TRUNC): events.append(("post_write",label,flags,False))
  elif event in {"os.remove","os.unlink"} and args:
   allowed=inside_allowed(args[0]);label=path_label(args[0]);events.append((event,label,0,allowed))
   if not allowed: raise PermissionError("audit path outside scoped result authority")
+  if lexical_path(args[0])==lexical_path(canonical): observe_existing_canonical("before_remove")
   if transition_done[0] and lexical_path(args[0])==lexical_path(canonical): events.append(("post_remove",label,0,False))
  elif event=="os.rename" and len(args)>=2:
   src_path=lexical_path(args[0]);dst_path=lexical_path(args[1]);allowed=(strict_member(args[0]) and strict_member(args[1]))
@@ -2541,6 +2690,7 @@ def audit(event,args):
   if not allowed: raise PermissionError("audit rename outside scoped result authority")
   canonical_path=lexical_path(canonical)
   if dst_path==canonical_path:
+   observe_existing_canonical("before_replace")
    source_flags=os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0)
    source_ticket=make_ticket("canonical_source_open","original_os_open","open",(src_path,),source_flags,None,None,None)
    try:
@@ -2671,13 +2821,20 @@ if canonical.is_file() and not canonical.is_symlink():
   doc=json.loads(data.decode("utf-8"),object_pairs_hook=lambda pairs: dict(pairs))
   canonical_info={"dev":before.st_dev,"ino":before.st_ino,"size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),"stable":(before.st_dev,before.st_ino,before.st_size)==(after.st_dev,after.st_ino,after.st_size),"keys":sorted(doc),"schema_version_type":type(doc.get("schema_version")).__name__,"schema_version":doc.get("schema_version"),"invocation":doc.get("invocation_id"),"run":doc.get("run_id"),"role":doc.get("role"),"result_sha256":doc.get("result_sha256"),"report_role":doc.get("report",{}).get("role") if isinstance(doc.get("report"),dict) else None}
  except Exception: canonical_info={"invalid":True,"digest":hashlib.sha256(data).hexdigest(),"dev":before.st_dev,"ino":before.st_ino}
+if canonical_info is not None:
+ final_epoch={"reason":"final","kind":"regular","dev":canonical_info.get("dev"),
+              "ino":canonical_info.get("ino"),"size":canonical_info.get("size"),
+              "digest":canonical_info.get("digest"),"stable":canonical_info.get("stable")}
+ if not canonical_epochs or any(final_epoch.get(key)!=canonical_epochs[-1].get(key) for key in ("dev","ino","digest")):
+  canonical_epochs.append(final_epoch)
 temps=[str(path) for path in canonical_parent.iterdir() if path.name!="result.json"]
 outside=[event for event in events if event[-1] is False and event[0] not in {"post_write","post_remove","post_rename"}]
 post_events=[event for event in events if event[0] in {"post_write","post_remove","post_rename"}]
 env_changed=(dict(original_environ)!=env_before or dict(original_environb or {})!=envb_before)
 transition_ok=(len(transitions)==1 and canonical_info is not None and transitions[0]["absent"] and transitions[0]["stable"] and transitions[0]["fsynced"] and not transitions[0]["writers"] and (transitions[0]["dev"],transitions[0]["ino"],transitions[0]["digest"])==(canonical_info.get("dev"),canonical_info.get("ino"),canonical_info.get("digest")))
-visibility_ok=(not visible or (canonical_info is not None and all(item==canonical_info.get("digest") for item in visible)))
-print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events,"ticket_selftest":ticket_selftest},separators=(",",":"),sort_keys=True))
+publication_ok=(len(canonical_epochs)==1 and not canonical_direct_writes and canonical_info is not None and canonical_epochs[0].get("dev")==canonical_info.get("dev") and canonical_epochs[0].get("ino")==canonical_info.get("ino") and canonical_epochs[0].get("digest")==canonical_info.get("digest"))
+visibility_ok=(publication_ok and (not visible or all(item==canonical_info.get("digest") for item in visible)))
+print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"publication_ok":publication_ok,"canonical_epochs":canonical_epochs,"canonical_direct_writes":canonical_direct_writes,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events,"ticket_selftest":ticket_selftest},separators=(",",":"),sort_keys=True))
 for fd in held:
  try: os.close(fd)
  except OSError: pass
@@ -2704,6 +2861,9 @@ for fd in held:
         canonical=case.get("canonical") or {}
         return (case.get("rc")==0 and case.get("accepted") is True
             and case.get("fd_aliases")==[] and case.get("transition_ok") is True
+            and case.get("publication_ok") is True
+            and len(case.get("canonical_epochs",[]))==1
+            and not case.get("canonical_direct_writes")
             and case.get("visibility_ok") is True and not case.get("temps")
             and not case.get("outside") and not case.get("post_events")
             and not case.get("env_events") and case.get("env_changed") is False
@@ -3035,6 +3195,22 @@ class CraftedConcretePath(type(Path())):
         and atomic_mutant_case.get("transitions")
         and atomic_mutant_case["transitions"][0].get("writers")
         and not fresh_success(atomic_mutant_case,rig_valid_raw))
+    double_publication_source=reference_kernel_source.replace(
+        "        os.replace(temp_name,canonical_destination);temp_name=None",
+        '''        early_fd=os.open(canonical_destination,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC,0o600)
+        try: _write_all(early_fd,encoded);_sync(early_fd)
+        finally: os.close(early_fd)
+        os.unlink(canonical_destination)
+        os.replace(temp_name,canonical_destination);temp_name=None''',1)
+    double_publication_mutant=work/"r55-two-publication-mutant.py"
+    double_publication_mutant.write_text(double_publication_source,encoding="utf-8")
+    double_publication_case=fresh_kernel_effect(double_publication_mutant,rig_valid_raw)
+    double_publication_caught=(double_publication_case.get("accepted") is True
+        and double_publication_case.get("canonical") is not None
+        and len(double_publication_case.get("canonical_epochs",[]))==2
+        and bool(double_publication_case.get("canonical_direct_writes"))
+        and double_publication_case.get("publication_ok") is False
+        and not fresh_success(double_publication_case,rig_valid_raw))
     bool_version_source=reference_kernel_source.replace(
         'envelope={"schema_version":1,',
         'envelope={"schema_version":True,',1)
@@ -3044,7 +3220,8 @@ class CraftedConcretePath(type(Path())):
     bool_version_caught=(bool_version_case.get("accepted") is True
         and not fresh_success(bool_version_case,rig_valid_raw))
     reference_effect_rig_ok=(reference_kernel_inventory_ok and reference_basic_ok and leak_mutants_ok
-        and atomic_mutant_caught and bool_version_caught and captured_primitive_rig_ok)
+        and atomic_mutant_caught and double_publication_caught
+        and bool_version_caught and captured_primitive_rig_ok)
 
     product_fresh_cases={};product_fresh_ok=False
     if kernel_structure_ok:
@@ -3258,7 +3435,8 @@ class CraftedConcretePath(type(Path())):
     deterministic_result_ok = (
         kernel_structure_ok and kernel_integration_structure_ok and integration_dynamic_ok
         and kernel_direct_ok and product_fresh_ok
-        and valid[0] and valid_schema and physical_topology_ok and physical_hostile_ok and staging_ok
+        and valid[0] and valid_schema and valid_publication_lifecycle_ok
+        and physical_topology_ok and physical_hostile_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
         and r12_real_boundary_ok
@@ -3337,8 +3515,9 @@ class CraftedConcretePath(type(Path())):
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
-          and kernel_oracle_rig_ok and reference_effect_rig_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
+          and kernel_oracle_rig_ok and reference_effect_rig_ok
+          and r55_complete_residue_oracle_ok,
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
