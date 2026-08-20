@@ -1378,3 +1378,31 @@ admitted; no provider helper name or AGENT_START chronology is verdict authority
 partial-builder host diagnostic produced `post_retained:Path.iterdir` versus
 `popen_before_delegate`, and all five connected journal corruptions rejected cleanly.
 Production, H017, G20 and provider authority remain unchanged.
+
+### 2026-08-20 — H032 R59 journal continuity and dynamic pre-Popen effects
+
+R58's stable same-fd journal read retained the file mode in its observation but compared
+only device/inode and prefix across the attempt. R59 requires every present attempt
+journal to remain an exact mode-0600 regular nlink-one object, and a pre-existing journal
+must preserve device, inode, type, link count, mode, complete prefix and exact size
+accounting. The connected chmod control keeps the same device/inode, widens 0600 to 0666,
+appends a valid unrelated event and is rejected. Existing strict history stays admissible,
+and a Popen failure may legitimately have appended either zero or one correctly shaped
+current AGENT_START.
+
+The post-retained cleanup control no longer selects one of six owner-named operations. It
+mechanically resolves the exact candidate `run_codex` direct OS, concrete Path and project
+helper call capabilities, discovers the actual dynamic effect sequence after the first
+successful retained-sink fstat and before Popen, and replays one fresh failure at every
+ordinal. Repeated capabilities remain separate intervals. Every replay binds the actual
+sink dev/inode plus a live read-only alias and requires zero provider starts and complete
+descriptor/staging/helper cleanup. Removing one discovered replay fails the matrix.
+
+The disposable partial-builder composition discovered 26 real intervals and injected all
+26 cleanly. A complete source variant with a second `os.fstat(sink_fd)` exposed that new
+call as ordinal zero and rejected cleanly. A mechanically constrained complete variant
+moved all fallible preparation before retained validation, produced an empty interval and
+was admitted until the separately injected Popen boundary. These are connected executions,
+not literal trace claims. Production, H017, G20 and H031 remain unchanged; the owner
+baseline stays 131 PASS / 1 FAIL solely for
+`STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT`, and no live model call runs while RED.

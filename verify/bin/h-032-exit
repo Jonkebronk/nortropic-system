@@ -1003,7 +1003,8 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
                     kernel_tree,kernel_text)
             except Exception as exc:
                 kernel_structure_detail={"error":f"{type(exc).__name__}:{exc}"}
-    source_tree=ast.parse(source.read_text(encoding="utf-8"))
+    source_text=source.read_text(encoding="utf-8")
+    source_tree=ast.parse(source_text)
     kernel_integration_structure_ok,kernel_integration_structure_detail=(
         integration_structure_inventory(source_tree))
     integration_fixture='''from controller.result.consumer import consume_private_result
@@ -1100,6 +1101,7 @@ def run_codex(sink, canonical, invocation, run, role):
     journal_open = os.open; journal_close = os.close
     journal_fstat = os.fstat; journal_pread = os.pread
     MAX_ATTEMPT_JOURNAL_BYTES = 4 * 1024 * 1024
+    SAFE_ATTEMPT_JOURNAL_MODE = 0o600
 
     def journal_object(repo: Path) -> dict[str, object]:
         path = module.journal_root(repo) / "events.jsonl"
@@ -1113,6 +1115,7 @@ def run_codex(sink, canonical, invocation, run, role):
         try:
             before = journal_fstat(fd)
             if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or stat.S_IMODE(before.st_mode) != SAFE_ATTEMPT_JOURNAL_MODE
                     or before.st_size < 0 or before.st_size > MAX_ATTEMPT_JOURNAL_BYTES):
                 return {"valid": False, "exists": True, "path": str(path), "raw": b"",
                         "error": "unsafe journal object"}
@@ -1130,7 +1133,8 @@ def run_codex(sink, canonical, invocation, run, role):
             return {"valid": stable and len(raw) == before.st_size,
                     "exists": True, "path": str(path), "raw": raw,
                     "dev": before.st_dev, "ino": before.st_ino,
-                    "mode": before.st_mode, "size": before.st_size,
+                    "mode": before.st_mode, "nlink": before.st_nlink,
+                    "size": before.st_size,
                     "error": None if stable and len(raw) == before.st_size
                     else "unstable journal object"}
         except Exception as exc:
@@ -1159,14 +1163,32 @@ def run_codex(sink, canonical, invocation, run, role):
         if not isinstance(before_raw, bytes) or not isinstance(after_raw, bytes):
             result["error"] = "journal bytes unavailable"
             return result
-        if before_exists and (before.get("dev"), before.get("ino")) != (
-                after.get("dev"), after.get("ino")):
-            result["error"] = "journal object replaced"
+        if before_exists and (
+                before.get("dev"), before.get("ino"),
+                stat.S_IFMT(int(before.get("mode", 0))), before.get("nlink"),
+                stat.S_IMODE(int(before.get("mode", 0)))) != (
+                after.get("dev"), after.get("ino"),
+                stat.S_IFMT(int(after.get("mode", 0))), after.get("nlink"),
+                stat.S_IMODE(int(after.get("mode", 0)))):
+            result["error"] = "journal object identity or protection changed"
+            return result
+        if (after.get("nlink") != 1
+                or stat.S_IFMT(int(after.get("mode", 0))) != stat.S_IFREG
+                or stat.S_IMODE(int(after.get("mode", 0))) != SAFE_ATTEMPT_JOURNAL_MODE):
+            result["error"] = "journal protection is not owner-private regular nlink-one"
             return result
         if not after_raw.startswith(before_raw):
             result["error"] = "journal truncated or prefix changed"
             return result
         suffix = after_raw[len(before_raw):]
+        if (not isinstance(before.get("size", 0), int)
+                or not isinstance(after.get("size"), int)
+                or before.get("size", 0) != len(before_raw)
+                or after.get("size") != len(after_raw)
+                or after.get("size", -1) < before.get("size", 0)
+                or len(suffix) != after.get("size", 0) - before.get("size", 0)):
+            result["error"] = "journal size/prefix accounting changed"
+            return result
         result["suffix"] = suffix
         if not suffix:
             result["valid"] = True
@@ -1506,8 +1528,12 @@ def run_codex(sink, canonical, invocation, run, role):
         case_capture["_gate_journal_preexisting_preserved"] = (
             isinstance(journal_before, dict) and isinstance(journal_after, dict)
             and journal_before.get("exists") is True
-            and (journal_before.get("dev"), journal_before.get("ino")) ==
-                (journal_after.get("dev"), journal_after.get("ino"))
+            and (journal_before.get("dev"), journal_before.get("ino"),
+                 journal_before.get("mode"), journal_before.get("nlink")) ==
+                (journal_after.get("dev"), journal_after.get("ino"),
+                 journal_after.get("mode"), journal_after.get("nlink"))
+            and stat.S_IMODE(int(journal_after.get("mode", 0)))
+                == SAFE_ATTEMPT_JOURNAL_MODE
             and isinstance(journal_before.get("raw"), bytes)
             and isinstance(journal_after.get("raw"), bytes)
             and journal_after["raw"].startswith(journal_before["raw"]))
@@ -1838,26 +1864,51 @@ def run_codex(sink, canonical, invocation, run, role):
         return outcome, allocations, output_paths, matches
 
     def setup_spawn_fault_case(stage: str, result_root_ordinal: int,
-                               case_repo: Path | None = None):
-        """Inject one failure by result-root/sink/fd effects, independent of chronology."""
+                               case_repo: Path | None = None, *,
+                               effect_tree=None, post_effect_target: int | None = None):
+        """Inject by observed result-root/sink/fd effects, never a chosen helper order."""
         if case_repo is None: case_repo = make_repo(str(provider))
         if capture.exists(): capture.unlink()
         original_mkdtemp = module.tempfile.mkdtemp
-        original_open = module.os.open; original_fsync = module.os.fsync
-        original_fstat = module.os.fstat; original_close = module.os.close
-        original_urandom = module.os.urandom; original_chmod = module.os.chmod
-        original_journal = module.journal
         original_popen = module.subprocess.Popen
         path_type = type(Path()); path_busy = [False]
-        path_originals = {name: getattr(path_type, name) for name in
-                          ("lstat", "stat", "resolve", "is_symlink", "iterdir",
-                           "write_text", "open")}
+        subject_tree = source_tree if effect_tree is None else effect_tree
+        run_node = next((node for node in subject_tree.body
+                         if isinstance(node, ast.FunctionDef) and node.name == "run_codex"), None)
+        run_calls = list(ast.walk(run_node)) if run_node is not None else []
+        os_names = {node.func.attr for node in run_calls if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "os"
+                    and callable(getattr(module.os, node.func.attr, None))}
+        path_names = {node.func.attr for node in run_calls if isinstance(node, ast.Call)
+                      and isinstance(node.func, ast.Attribute)
+                      and not (isinstance(node.func.value, ast.Name)
+                               and node.func.value.id in {"os", "stat", "subprocess",
+                                   "tempfile", "shutil", "hashlib", "json", "sys", "fcntl"})
+                      and callable(getattr(path_type, node.func.attr, None))}
+        helper_names = {node.func.id for node in run_calls if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id != "run_codex"
+                        and hasattr(getattr(module, node.func.id, None), "__code__")
+                        and getattr(module, node.func.id).__module__ == module.__name__}
+        # Root/sink observation uses these operations even if a legitimate source
+        # spells a later schedule differently.  The post-retained matrix itself is
+        # generated only from the source's resolved call capabilities above.
+        path_names.update({"lstat", "iterdir"})
+        os_names.update({"open", "fsync", "fstat", "close"})
+        os_originals = {name: getattr(module.os, name) for name in sorted(os_names)}
+        path_originals = {name: getattr(path_type, name) for name in sorted(path_names)}
+        helper_originals = {name: getattr(module, name) for name in sorted(helper_names)}
+        original_open = os_originals["open"]; original_fsync = os_originals["fsync"]
+        original_fstat = os_originals["fstat"]; original_close = os_originals["close"]
         allocations: list[Path] = []; target_root: list[Path] = []
         root_operations = [0]; injected = [False]
         create_fd = [-1]; create_identity: list[tuple[int, int]] = []
         retained_validated = [False]
         boundary_aliases: list[tuple[int, int, int, int]] = []
         stage_trace: list[str] = []
+        post_effects: list[str] = []
 
         def path_value(value) -> Path | None:
             return Path(value) if type(value) is str or type(value) is path_type else None
@@ -1903,13 +1954,19 @@ def run_codex(sink, canonical, invocation, run, role):
             return aliases
 
         def post_retained_effect(effect: str) -> None:
-            if (stage != "post_retained_setup_effect" or not retained_validated[0]
-                    or injected[0]): return
-            aliases = live_sink_aliases(); boundary_aliases.extend(aliases)
-            if any(item[3] == os.O_RDONLY for item in aliases):
-                stage_trace.append(f"post_retained:{effect}")
+            if not retained_validated[0] or injected[0]: return
+            ordinal = len(post_effects)
+            post_effects.append(effect)
+            stage_trace.append(f"post_retained:{ordinal}:{effect}")
+            aliases = live_sink_aliases()
+            for alias in aliases:
+                if alias not in boundary_aliases: boundary_aliases.append(alias)
+            if (stage == "post_retained_setup_effect"
+                    and post_effect_target == ordinal):
+                if not any(item[3] == os.O_RDONLY for item in aliases):
+                    raise RuntimeError("post-retained effect lacks live retained sink capability")
                 injected[0] = True
-                raise OSError(f"H032 injected first post-retained setup effect:{effect}")
+                raise OSError(f"H032 injected post-retained effect {ordinal}:{effect}")
 
         def wrap_path(name):
             original = path_originals[name]
@@ -1923,7 +1980,15 @@ def run_codex(sink, canonical, invocation, run, role):
                 return original(self, *args, **kwargs)
             return wrapped
 
+        def wrap_helper(name):
+            original = helper_originals[name]
+            def wrapped(*args, **kwargs):
+                post_retained_effect(f"helper.{name}")
+                return original(*args, **kwargs)
+            return wrapped
+
         def observe_open(path, flags, *args, **kwargs):
+            post_retained_effect("os.open")
             candidate = path_value(path)
             is_child = bool(target_root and candidate is not None
                             and candidate.parent == target_root[0])
@@ -1947,12 +2012,14 @@ def run_codex(sink, canonical, invocation, run, role):
             return fd
 
         def observe_fsync(fd):
+            post_retained_effect("os.fsync")
             if stage == "create_fd_fsync" and fd == create_fd[0] and not injected[0]:
                 injected[0] = True
                 raise OSError("H032 injected while product owns writable create fd")
             return original_fsync(fd)
 
         def observe_close(fd):
+            post_retained_effect("os.close")
             if stage == "create_fd_close" and fd == create_fd[0] and not injected[0]:
                 # The close is product-invoked and real; the injected failure is
                 # after that syscall, never a judge pre-close of the returned fd.
@@ -1961,34 +2028,33 @@ def run_codex(sink, canonical, invocation, run, role):
             return original_close(fd)
 
         def observe_fstat(fd):
+            if retained_validated[0]:
+                post_retained_effect("os.fstat")
             opened = original_fstat(fd)
             if create_identity and (opened.st_dev, opened.st_ino) == create_identity[0] \
                     and (fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE) == os.O_RDONLY:
-                stage_trace.append("retained_fstat")
-                if stage == "retained_fd_fstat" and not injected[0]:
-                    injected[0] = True
-                    raise OSError("H032 injected retained sink fstat")
-                retained_validated[0] = True
+                if not retained_validated[0]:
+                    stage_trace.append("retained_fstat")
+                    if stage == "retained_fd_fstat" and not injected[0]:
+                        injected[0] = True
+                        raise OSError("H032 injected retained sink fstat")
+                    retained_validated[0] = True
             return opened
 
-        def observe_urandom(*args, **kwargs):
-            post_retained_effect("os.urandom")
-            return original_urandom(*args, **kwargs)
-
-        def observe_chmod(*args, **kwargs):
-            post_retained_effect("os.chmod")
-            return original_chmod(*args, **kwargs)
-
-        def observe_journal(*args, **kwargs):
-            post_retained_effect("journal_append")
-            return original_journal(*args, **kwargs)
+        def wrap_os(name):
+            original = os_originals[name]
+            def wrapped(*args, **kwargs):
+                post_retained_effect(f"os.{name}")
+                return original(*args, **kwargs)
+            return wrapped
 
         def observe_popen(argv, *args, **kwargs):
             flat = list(argv)
-            if "-o" in flat and stage == "popen_before_delegate":
+            if "-o" in flat and stage in {"popen_before_delegate", "discover_post_retained"}:
                 sink = Path(flat[flat.index("-o") + 1]); identity = record_sink(sink, output_path=True)
                 if identity is not None:
-                    boundary_aliases.extend(live_sink_aliases())
+                    for alias in live_sink_aliases():
+                        if alias not in boundary_aliases: boundary_aliases.append(alias)
                 if any(item[3] == os.O_RDONLY for item in boundary_aliases):
                     stage_trace.append("popen_before_delegate")
                     injected[0] = True
@@ -1996,20 +2062,19 @@ def run_codex(sink, canonical, invocation, run, role):
             return original_popen(argv, *args, **kwargs)
 
         module.tempfile.mkdtemp = observe_mkdtemp
-        module.os.open = observe_open; module.os.fsync = observe_fsync
-        module.os.fstat = observe_fstat; module.os.close = observe_close
-        module.os.urandom = observe_urandom; module.os.chmod = observe_chmod
-        module.journal = observe_journal
+        for name in os_originals:
+            observer = {"open": observe_open, "fsync": observe_fsync,
+                        "fstat": observe_fstat, "close": observe_close}.get(name)
+            setattr(module.os, name, observer if observer is not None else wrap_os(name))
+        for name in helper_originals: setattr(module, name, wrap_helper(name))
         module.subprocess.Popen = observe_popen
         for name in path_originals: setattr(path_type, name, wrap_path(name))
         try:
             outcome = attempt(case_repo)
         finally:
             module.tempfile.mkdtemp = original_mkdtemp
-            module.os.open = original_open; module.os.fsync = original_fsync
-            module.os.fstat = original_fstat; module.os.close = original_close
-            module.os.urandom = original_urandom; module.os.chmod = original_chmod
-            module.journal = original_journal
+            for name, original in os_originals.items(): setattr(module.os, name, original)
+            for name, original in helper_originals.items(): setattr(module, name, original)
             module.subprocess.Popen = original_popen
             for name, original in path_originals.items(): setattr(path_type, name, original)
         observed = last_attempt_observed[0] or {}
@@ -2032,8 +2097,12 @@ def run_codex(sink, canonical, invocation, run, role):
         case_capture["_gate_journal_preexisting_preserved"] = (
             isinstance(journal_before, dict) and isinstance(journal_after, dict)
             and journal_before.get("exists") is True
-            and (journal_before.get("dev"), journal_before.get("ino")) ==
-                (journal_after.get("dev"), journal_after.get("ino"))
+            and (journal_before.get("dev"), journal_before.get("ino"),
+                 journal_before.get("mode"), journal_before.get("nlink")) ==
+                (journal_after.get("dev"), journal_after.get("ino"),
+                 journal_after.get("mode"), journal_after.get("nlink"))
+            and stat.S_IMODE(int(journal_after.get("mode", 0)))
+                == SAFE_ATTEMPT_JOURNAL_MODE
             and isinstance(journal_before.get("raw"), bytes)
             and isinstance(journal_after.get("raw"), bytes)
             and journal_after["raw"].startswith(journal_before["raw"]))
@@ -2050,10 +2119,16 @@ def run_codex(sink, canonical, invocation, run, role):
                 if path.is_symlink() or (path.exists() and not path.is_dir()): path.unlink()
                 elif path.is_dir(): path.chmod(0o700); shutil.rmtree(path)
         return (case, injected[0], [str(path) for path in target_root],
-                root_operations[0], list(stage_trace))
+                root_operations[0], list(stage_trace), list(post_effects),
+                {"os": sorted(os_names), "path": sorted(path_names),
+                 "helper": sorted(helper_names)})
 
     discovery = (False, [], [], []); result_root_ordinal = 0
     setup_spawn_faults = {}; setup_spawn_faults_ok = False
+    post_retained_discovery = None; post_retained_effects: list[str] = []
+    post_retained_cases = {}; post_retained_omission_caught = False
+    r59_repeated_fstat_connected = True; r59_zero_effect_reorder_connected = True
+    r59_variant_detail = {"skipped": True}
     if kernel_structure_ok and kernel_integration_structure_ok \
             and hasattr(module, "consume_private_result"):
         discovery = result_root_ordinal_discovery()
@@ -2064,15 +2139,22 @@ def run_codex(sink, canonical, invocation, run, role):
             stages = ("root_validation_1", "root_validation_2", "before_sink_create",
                       "sink_open_raises", "create_fd_fsync", "create_fd_close",
                       "after_create_close_before_retained", "retained_fd_fstat",
-                      "post_retained_setup_effect", "popen_before_delegate")
+                      "popen_before_delegate")
             for stage in stages:
                 setup_spawn_faults[stage] = setup_spawn_fault_case(stage, result_root_ordinal)
+            post_retained_discovery = setup_spawn_fault_case(
+                "discover_post_retained", result_root_ordinal)
+            post_retained_effects = list(post_retained_discovery[5])
+            for ordinal in range(len(post_retained_effects)):
+                post_retained_cases[ordinal] = setup_spawn_fault_case(
+                    "post_retained_setup_effect", result_root_ordinal,
+                    post_effect_target=ordinal)
             precreate = {"root_validation_1", "root_validation_2",
                          "before_sink_create", "sink_open_raises"}
             create_owned = {"create_fd_fsync", "create_fd_close",
                             "after_create_close_before_retained", "retained_fd_fstat"}
-            retained_owned = {"post_retained_setup_effect", "popen_before_delegate"}
-            setup_spawn_faults_ok = all(
+            retained_owned = {"popen_before_delegate"}
+            fixed_faults_ok = all(
                 injected and roots
                 and rejected_clean(case, expected_process_starts=0,
                                    expected_output_paths=(0 if stage in precreate else 1),
@@ -2082,11 +2164,133 @@ def run_codex(sink, canonical, invocation, run, role):
                 and (stage not in retained_owned
                      or any(item[3] == os.O_RDONLY for item in
                             case[1].get("_gate_boundary_sink_aliases", [])))
-                and (stage != "post_retained_setup_effect"
-                     or any(str(item).startswith("post_retained:") for item in trace))
                 and (stage != "popen_before_delegate"
                      or trace[-1:] == ["popen_before_delegate"])
-                for stage, (case, injected, roots, _ops, trace) in setup_spawn_faults.items())
+                for stage, (case, injected, roots, _ops, trace, _effects, _caps)
+                in setup_spawn_faults.items())
+            def post_matrix_valid(effects: list[str], cases: dict[int, tuple]) -> bool:
+                if set(cases) != set(range(len(effects))): return False
+                return all(
+                    injected and roots and observed_effects == effects[:ordinal + 1]
+                    and rejected_clean(case, expected_process_starts=0,
+                                       expected_output_paths=1,
+                                       expected_journal_starts=(0, 1))
+                    and any(item[3] == os.O_RDONLY for item in
+                            case[1].get("_gate_boundary_sink_aliases", []))
+                    and trace[-1:] == [
+                        f"post_retained:{ordinal}:{effects[ordinal]}"]
+                    for ordinal, (case, injected, roots, _ops, trace,
+                                  observed_effects, _caps) in cases.items())
+            discovery_case, discovery_injected, discovery_roots, _discovery_ops, \
+                discovery_trace, _discovery_effects, _discovery_caps = post_retained_discovery
+            discovery_ok = (
+                discovery_injected and discovery_roots
+                and rejected_clean(discovery_case, expected_process_starts=0,
+                                   expected_output_paths=1,
+                                   expected_journal_starts=(0, 1))
+                and discovery_trace[-1:] == ["popen_before_delegate"])
+            post_matrix_ok = post_matrix_valid(post_retained_effects, post_retained_cases)
+            if post_retained_effects:
+                omitted = dict(post_retained_cases); omitted.pop(len(post_retained_effects) // 2)
+                post_retained_omission_caught = not post_matrix_valid(
+                    post_retained_effects, omitted)
+            else:
+                post_retained_omission_caught = post_matrix_valid([], {})
+            setup_spawn_faults_ok = (fixed_faults_ok and discovery_ok
+                                     and post_matrix_ok and post_retained_omission_caught)
+
+            def schedule_variant_case(variant_text: str, label: str,
+                                      *, inject_ordinal: int | None = None):
+                global module
+                variant_tree = ast.parse(variant_text)
+                variant_name = f"h032_r59_{label}_{len(sys.modules)}"
+                variant_spec = importlib.util.spec_from_loader(
+                    variant_name, loader=None, origin=str(source))
+                if variant_spec is None: raise RuntimeError("R59 variant spec unavailable")
+                variant_module = importlib.util.module_from_spec(variant_spec)
+                variant_module.__file__ = str(source)
+                sys.modules[variant_name] = variant_module
+                exec(compile(variant_text, str(source), "exec"), variant_module.__dict__)
+                variant_module.now_id = fixture_now_id
+                saved_module = module; module = variant_module
+                try:
+                    if inject_ordinal is None:
+                        return setup_spawn_fault_case(
+                            "discover_post_retained", result_root_ordinal,
+                            effect_tree=variant_tree)
+                    return setup_spawn_fault_case(
+                        "post_retained_setup_effect", result_root_ordinal,
+                        effect_tree=variant_tree, post_effect_target=inject_ordinal)
+                finally:
+                    module = saved_module
+                    sys.modules.pop(variant_name, None)
+
+            retained_line = "        sink_identity = os.fstat(sink_fd)\n"
+            repeated_text = source_text.replace(
+                retained_line, retained_line + "        os.fstat(sink_fd)\n", 1)
+            repeated_shape_ok = repeated_text != source_text \
+                and repeated_text.count("os.fstat(sink_fd)") \
+                    == source_text.count("os.fstat(sink_fd)") + 1
+            repeated_discovery = (schedule_variant_case(repeated_text, "repeat_discovery")
+                                  if repeated_shape_ok else None)
+            repeated_injection = (schedule_variant_case(
+                repeated_text, "repeat_injection", inject_ordinal=0)
+                if repeated_discovery is not None and repeated_discovery[5][:1] == ["os.fstat"]
+                else None)
+            r59_repeated_fstat_connected = bool(
+                repeated_injection is not None and repeated_injection[1]
+                and repeated_injection[5] == ["os.fstat"]
+                and repeated_injection[4][-1:] == ["post_retained:0:os.fstat"]
+                and rejected_clean(repeated_injection[0], expected_process_starts=0,
+                                   expected_output_paths=1,
+                                   expected_journal_starts=(0, 1)))
+
+            validation_block = '''        sink_identity = os.fstat(sink_fd)
+        if (not stat.S_ISREG(sink_identity.st_mode) or sink_identity.st_nlink != 1
+                or stat.S_IMODE(sink_identity.st_mode) != 0o600
+                or sorted(path.name for path in result_root.iterdir()) != [result_sink.name]):
+            raise Stop("private result sink has unsafe identity")
+'''
+            reordered_prefix = '''        sink_members = sorted(
+            path.name for path in result_root.iterdir())
+'''
+            reordered_guard = '''            sink_identity = os.fstat(sink_fd)
+            if (not stat.S_ISREG(sink_identity.st_mode) or sink_identity.st_nlink != 1
+                    or stat.S_IMODE(sink_identity.st_mode) != 0o600
+                    or sink_members != [result_sink.name]):
+                raise Stop("private result sink has unsafe identity")
+'''
+            popen_line = "            p = subprocess.Popen(argv, cwd=str(wt), stdout=subprocess.PIPE,\n"
+            reordered_text = source_text.replace(validation_block, reordered_prefix, 1)
+            reordered_text = reordered_text.replace(popen_line, reordered_guard + popen_line, 1)
+            reordered_shape_ok = (
+                reordered_text != source_text and validation_block not in reordered_text
+                and reordered_text.count("sink_identity = os.fstat(sink_fd)") == 1
+                and reordered_text.count("sink_members = sorted(") == 1
+                and reordered_text.count(popen_line) == 1)
+            reordered_discovery = (schedule_variant_case(reordered_text, "zero_effect_reorder")
+                                   if reordered_shape_ok else None)
+            r59_zero_effect_reorder_connected = bool(
+                reordered_discovery is not None and reordered_discovery[1]
+                and reordered_discovery[5] == []
+                and reordered_discovery[4][-2:] == ["retained_fstat",
+                                                     "popen_before_delegate"]
+                and rejected_clean(reordered_discovery[0], expected_process_starts=0,
+                                   expected_output_paths=1,
+                                   expected_journal_starts=(0, 1)))
+            r59_variant_detail = {
+                "repeated_shape": repeated_shape_ok,
+                "repeated_discovered": (repeated_discovery[5]
+                                        if repeated_discovery is not None else None),
+                "repeated_injected": r59_repeated_fstat_connected,
+                "reordered_shape": reordered_shape_ok,
+                "reordered_discovered": (reordered_discovery[5]
+                                         if reordered_discovery is not None else None),
+                "empty_admitted": r59_zero_effect_reorder_connected,
+            }
+            setup_spawn_faults_ok = (setup_spawn_faults_ok
+                                     and r59_repeated_fstat_connected
+                                     and r59_zero_effect_reorder_connected)
 
     journal_write = os.write; journal_fsync = os.fsync
     def append_gate_journal_bytes(case_repo: Path, raw: bytes) -> None:
@@ -2114,6 +2318,7 @@ def run_codex(sink, canonical, invocation, run, role):
         original_journal = module.journal
         allocations: list[Path] = []; target_root: list[Path] = []
         injected = [False]; sink_paths: list[Path] = []
+        journal_mutation_identity: list[tuple[int, int, int, int]] = []
 
         def observe_mkdtemp(*args, **kwargs):
             value = Path(original_mkdtemp(*args, **kwargs)); allocations.append(value)
@@ -2149,6 +2354,22 @@ def run_codex(sink, canonical, invocation, run, role):
                 append_gate_journal_bytes(case_repo, b'{"event":"AGENT_START"')
             elif mode == "duplicate_valid":
                 original_journal(*args, **kwargs); original_journal(*args, **kwargs)
+            elif mode == "chmod_same_inode":
+                original_journal(*args, **kwargs)
+                journal_path = module.journal_root(case_repo) / "events.jsonl"
+                before_fd = journal_open(journal_path, os.O_RDONLY)
+                try: before = journal_fstat(before_fd)
+                finally: journal_close(before_fd)
+                journal_path.chmod(0o666)
+                after_fd = journal_open(journal_path, os.O_RDONLY)
+                try: after = journal_fstat(after_fd)
+                finally: journal_close(after_fd)
+                if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                    raise AssertionError("chmod mutant replaced journal object")
+                journal_mutation_identity.append(
+                    (before.st_dev, before.st_ino, stat.S_IMODE(before.st_mode),
+                     stat.S_IMODE(after.st_mode)))
+                append_gate_journal_bytes(case_repo, b'{"event":"OTHER","phase":"chmod"}\n')
             else: raise AssertionError(mode)
             raise OSError(f"H032 injected journal append corruption:{mode}")
 
@@ -2170,6 +2391,7 @@ def run_codex(sink, canonical, invocation, run, role):
             "_gate_journal_start_records": list(observed.get("journal_start_records", [])),
             "_gate_journal_append_valid": observed.get("journal_append_valid", False),
             "_gate_journal_append_error": observed.get("journal_append_error"),
+            "_gate_journal_mutation_identity": list(journal_mutation_identity),
         })
         output_paths = [Path(value) for value in case_capture["_gate_output_paths"]]
         canonical_paths = [Path(value) for value in case_capture["_gate_canonical_paths"]]
@@ -2189,7 +2411,7 @@ def run_codex(sink, canonical, invocation, run, role):
     preexisting_journal_positive = False; preexisting_journal_case = None
     if result_root_ordinal:
         for mode in ("malformed_unrelated", "non_dict", "truncated_start",
-                     "valid_plus_truncated", "duplicate_valid"):
+                     "valid_plus_truncated", "duplicate_valid", "chmod_same_inode"):
             journal_faults[mode] = journal_fault_case(mode, result_root_ordinal)
         journal_faults_ok = all(
             injected and roots and not case[0][0]
@@ -2205,12 +2427,13 @@ def run_codex(sink, canonical, invocation, run, role):
         module.journal(history_repo, "PREEXISTING_HISTORY", marker="preserve-me")
         preexisting_journal_case = setup_spawn_fault_case(
             "popen_before_delegate", result_root_ordinal, history_repo)
-        pre_case, pre_injected, pre_roots, _pre_ops, pre_trace = preexisting_journal_case
+        pre_case, pre_injected, pre_roots, _pre_ops, pre_trace, _pre_effects, \
+            _pre_capabilities = preexisting_journal_case
         preexisting_journal_positive = (
             pre_injected and pre_roots and pre_trace[-1:] == ["popen_before_delegate"]
             and pre_case[1].get("_gate_journal_preexisting_preserved") is True
             and rejected_clean(pre_case, expected_process_starts=0,
-                               expected_output_paths=1, expected_journal_starts=(1,)))
+                               expected_output_paths=1, expected_journal_starts=(0, 1)))
     r58_journal_fault_summary = {
         mode: {
             "injected": injected, "root_bound": bool(roots),
@@ -2221,6 +2444,7 @@ def run_codex(sink, canonical, invocation, run, role):
             "starts": case[1].get("_gate_provider_process_starts"),
             "private_present": case[1].get("_gate_private_paths_present"),
             "aliases_after": case[1].get("_gate_sink_fd_aliases"),
+            "object_mutation": case[1].get("_gate_journal_mutation_identity"),
         }
         for mode, (case, injected, roots) in journal_faults.items()
     }
@@ -2232,7 +2456,8 @@ def run_codex(sink, canonical, invocation, run, role):
                 "head":"0" * 40}
 
     def strict_append_fixture(suffix: bytes, *, preexisting: bool = False,
-                              replace: bool = False, truncate: bool = False):
+                              replace: bool = False, truncate: bool = False,
+                              chmod_mode: int | None = None):
         fixture_repo = make_repo(str(provider))
         path = module.journal_root(fixture_repo) / "events.jsonl"
         if preexisting:
@@ -2242,6 +2467,8 @@ def run_codex(sink, canonical, invocation, run, role):
             old = path.read_bytes(); path.unlink(); path.write_bytes(old)
         if truncate and path.exists():
             path.write_bytes(path.read_bytes()[:-1])
+        if chmod_mode is not None and path.exists():
+            path.chmod(chmod_mode)
         if suffix: append_gate_journal_bytes(fixture_repo, suffix)
         return strict_journal_append(before, fixture_repo)
 
@@ -2262,6 +2489,8 @@ def run_codex(sink, canonical, invocation, run, role):
                                                         replace=True),
         "truncated_preexisting": strict_append_fixture(encoded_start, preexisting=True,
                                                          truncate=True),
+        "chmod_same_inode": strict_append_fixture(encoded_start, preexisting=True,
+                                                    chmod_mode=0o666),
     }
     journal_parser_rig_ok = (
         strict_append_empty.get("valid") is True
@@ -2317,23 +2546,22 @@ def run_codex(sink, canonical, invocation, run, role):
         and result_root_matches(root_order_a, work / "outside" / "opaque") == [])
     r56_zero_start_oracle_positive = r57_journal_order_positive
     r56_zero_start_mutants = r57_zero_start_mutants
-    def post_retained_trace_valid(trace: list[str]) -> bool:
-        return (len(trace) >= 2 and trace[0] == "retained_fstat"
-                and trace[-1].startswith("post_retained:")
-                and trace[-1] != "popen_before_delegate")
-    r58_post_retained_reorder_positive = all(post_retained_trace_valid(
-        ["retained_fstat", f"post_retained:{effect}"])
-        for effect in ("Path.iterdir", "Path.write_text", "Path.open",
-                       "os.urandom", "os.chmod", "journal_append"))
+    r59_post_retained_dynamic_positive = (
+        post_retained_discovery is None
+        or (post_retained_discovery[4][-1:] == ["popen_before_delegate"]
+            and post_retained_discovery[5] == post_retained_effects
+            and post_retained_omission_caught))
+    r59_empty_interval_positive = post_matrix_valid([], {}) if result_root_ordinal else True
     r58_distinct_popen_trace_positive = (
-        ["retained_fstat", "popen_before_delegate"][-1]
-        == "popen_before_delegate"
-        and not post_retained_trace_valid(
-            ["retained_fstat", "popen_before_delegate"]))
+        not setup_spawn_faults or setup_spawn_faults["popen_before_delegate"][4][-1:]
+        == ["popen_before_delegate"])
     r56_setup_oracle_ok = (r57_journal_order_positive and r57_root_order_positive
                            and r57_wrong_root_mutant_caught
                            and journal_parser_rig_ok
-                           and r58_post_retained_reorder_positive
+                           and r59_post_retained_dynamic_positive
+                           and r59_empty_interval_positive
+                           and r59_repeated_fstat_connected
+                           and r59_zero_effect_reorder_connected
                            and r58_distinct_popen_trace_positive
                            and all(r57_zero_start_mutants))
     r57_setup_effect_summary = {
@@ -2347,9 +2575,26 @@ def run_codex(sink, canonical, invocation, run, role):
             "aliases_after": case[1].get("_gate_sink_fd_aliases"),
             "boundary_aliases": case[1].get("_gate_boundary_sink_aliases"),
             "create_fd_returned": case[1].get("_gate_create_fd_returned"),
-            "trace": trace,
+            "trace_tail": trace[-1:], "post_effect_count": len(effects),
         }
-        for stage, (case, injected, roots, operations, trace) in setup_spawn_faults.items()
+        for stage, (case, injected, roots, operations, trace, effects, capabilities)
+        in setup_spawn_faults.items()
+    }
+    r59_post_retained_effect_summary = {
+        "discovered": post_retained_effects,
+        "capabilities": (post_retained_discovery[6]
+                         if post_retained_discovery is not None else {}),
+        "injected_ordinals": {
+            str(ordinal): {"effect": effects[-1] if effects else None,
+                           "injected": injected, "trace_tail": trace[-1:],
+                           "starts": case[1].get("_gate_provider_process_starts"),
+                           "residue": case[0][4],
+                           "boundary_aliases": case[1].get("_gate_boundary_sink_aliases"),
+                           "aliases_after": case[1].get("_gate_sink_fd_aliases")}
+            for ordinal, (case, injected, _roots, _operations, trace, effects, _caps)
+            in post_retained_cases.items()},
+        "empty_interval_admitted": r59_empty_interval_positive,
+        "omission_caught": post_retained_omission_caught,
     }
 
     oversized_positive = result_case("exact_max")
@@ -4263,16 +4508,16 @@ class CraftedConcretePath(type(Path())):
         exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
-    print("R58_BOUND_EVIDENCE=" + json.dumps({
+    print("R59_BOUND_EVIDENCE=" + json.dumps({
         "candidate_sha": sh(GIT, "rev-parse", "HEAD", cwd=repo).strip(),
         "journal_parser_rig_ok": journal_parser_rig_ok,
         "journal_faults": r58_journal_fault_summary,
         "journal_faults_ok": journal_faults_ok,
         "preexisting_journal_positive": preexisting_journal_positive,
-        "post_retained_trace": r57_setup_effect_summary.get(
-            "post_retained_setup_effect", {}).get("trace", []),
+        "post_retained_effect_matrix": r59_post_retained_effect_summary,
+        "post_retained_variants": r59_variant_detail,
         "popen_trace": r57_setup_effect_summary.get(
-            "popen_before_delegate", {}).get("trace", []),
+            "popen_before_delegate", {}).get("trace_tail", []),
         "setup_spawn_faults_ok": setup_spawn_faults_ok,
         "schema_version": 1,
         "task": "h-032",
@@ -4280,9 +4525,9 @@ class CraftedConcretePath(type(Path())):
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok
           and r55_complete_residue_oracle_ok and r56_setup_oracle_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r58_post_retained_reorder_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r59_post_retained_dynamic_positive,r59_empty_interval_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary,r59_post_retained_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={setup_spawn_faults,setup_spawn_faults_ok} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
