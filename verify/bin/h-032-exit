@@ -2220,10 +2220,6 @@ original_isabs=os.path.isabs;original_purepath_str=pathlib.PurePath.__str__
 concrete_path_type=type(pathlib.Path())
 allowed_roots=tuple(original_normpath(original_abspath(original_purepath_str(item)))
                     for item in (staging,canonical_parent))
-judge_state=threading.local()
-def judge_active(): return getattr(judge_state,"depth",0)>0
-def judge_enter(): judge_state.depth=getattr(judge_state,"depth",0)+1
-def judge_leave(): judge_state.depth=max(0,getattr(judge_state,"depth",0)-1)
 def lexical_path(value):
  if type(value) is str: raw=value
  elif type(value) is bytes:
@@ -2237,6 +2233,39 @@ def lexical_path(value):
  if ".." in raw.split(os.sep): return None
  normalized=original_normpath(raw)
  return normalized if original_isabs(normalized) else None
+ticket_state=threading.local()
+def ticket_queue():
+ queue=getattr(ticket_state,"queue",None)
+ if queue is None: queue=[];ticket_state.queue=queue
+ return queue
+def make_ticket(phase,callable_name,event,paths,flags=None,mode=None,dir_fd=None,identity=None):
+ ticket={"phase":phase,"callable":callable_name,"event":event,"paths":tuple(paths),"flags":flags,
+         "mode":mode,"dir_fd":dir_fd,"identity":identity,"uses":0}
+ ticket_queue().append(ticket);return ticket
+def audit_callable(event):
+ return {"open":"original_os_open","os.listdir":"original_listdir"}.get(event)
+def audit_shape(event,args):
+ if event=="open" and args:
+  path=lexical_path(args[0]);mode=args[1] if len(args)>1 else None
+  flags=args[2] if len(args)>2 and type(args[2]) is int else None
+  return ((path,),flags,mode,None,None)
+ if event in {"os.listdir","os.scandir"} and args:
+  return ((lexical_path(args[0]),),None,None,None,None)
+ return ((),None,None,None,None)
+def consume_ticket(event,args):
+ queue=ticket_queue()
+ if not queue: return False
+ paths,flags,mode,dir_fd,identity=audit_shape(event,args);ticket=queue[0]
+ if (ticket["callable"],ticket["event"],ticket["paths"],ticket["flags"],ticket["mode"],
+     ticket["dir_fd"],ticket["identity"])!=(audit_callable(event),event,paths,flags,mode,dir_fd,identity):
+  return False
+ ticket["uses"]+=1
+ if ticket["uses"]!=1: return False
+ queue.pop(0);return True
+def require_ticket_consumed(ticket):
+ if ticket["uses"]!=1 or ticket in ticket_queue():
+  if ticket in ticket_queue(): ticket_queue().remove(ticket)
+  raise RuntimeError("judge operation ticket was not consumed exactly once")
 def fd_path(value):
  if type(value) is not int or value<0: return None
  try:
@@ -2260,6 +2289,7 @@ def strict_member(value):
  return any(path.startswith(root+os.sep) for root in allowed_roots)
 original_fstat=os.fstat
 original_lstat=os.lstat
+original_listdir=os.listdir
 def safe_existing(value):
  try:
   if not path_supported(value): return False
@@ -2279,10 +2309,18 @@ def mutation_allowed(name,args):
   return secure_mode(args[1] if len(args)>1 else 0o777,True)
  if name in {"unlink","remove","rmdir"}: return safe_existing(target)
  return False
-def fd_inventory(identity,writable=None):
+def fd_inventory(identity,writable=None,ticket_phase=None):
  found=[]
- try: numbers=sorted(int(name) for name in os.listdir("/dev/fd") if name.isdigit())
- except OSError: numbers=list(range(0,512))
+ inventory_ticket=(make_ticket(ticket_phase,"original_listdir","os.listdir",("/dev/fd",),None,None,None,None)
+                   if ticket_phase is not None else None)
+ try:
+  numbers=sorted(int(name) for name in original_listdir("/dev/fd") if name.isdigit())
+  if inventory_ticket is not None: require_ticket_consumed(inventory_ticket)
+ except OSError:
+  if inventory_ticket is not None and inventory_ticket in ticket_queue():
+   ticket_queue().remove(inventory_ticket)
+  if inventory_ticket is not None: raise
+  numbers=list(range(0,512))
  for number in numbers:
   try:
    current=original_fstat(number)
@@ -2306,7 +2344,6 @@ def observed_fstat(fd):
 os.fstat=observed_fstat
 def observed_os_open(path,flags,*args,**kwargs):
  primitive_counts["open"]+=1
- if judge_active(): return original_os_open(path,flags,*args,**kwargs)
  mode=(args[0] if args else kwargs.get("mode",0o777))
  allowed=inside_allowed(path)
  if flags&os.O_CREAT: allowed=allowed and strict_member(path) and secure_mode(mode)
@@ -2318,7 +2355,6 @@ os.open=observed_os_open
 def observed_builtin_open(*args,**kwargs):
  primitive_counts["open"]+=1
  path=args[0] if args else kwargs.get("file","");mode=args[1] if len(args)>1 else kwargs.get("mode","r")
- if judge_active(): return original_builtin_open(*args,**kwargs)
  writing=any(token in str(mode) for token in "wax+")
  allowed=inside_allowed(path) and not writing
  if call_active[0]:
@@ -2329,7 +2365,6 @@ builtins.open=observed_builtin_open
 def observed_path_method(name):
  def invoke(self,*args,**kwargs):
   primitive_counts["path_"+name]+=1
-  if judge_active(): return original_path_methods[name](self,*args,**kwargs)
   allowed=inside_allowed(self)
   if name=="open":
    mode=args[0] if args else kwargs.get("mode","r")
@@ -2351,7 +2386,6 @@ original_path_ops={name:getattr(os,name) for name in ("stat","lstat","access","r
 def observed_path_op(name):
  def invoke(path,*args,**kwargs):
   primitive_counts[name]+=1
-  if judge_active(): return original_path_ops[name](path,*args,**kwargs)
   allowed=inside_allowed(path)
   if call_active[0]:
    events.append((name,path_label(path),0,allowed))
@@ -2363,7 +2397,6 @@ original_dir_ops={name:getattr(os,name) for name in ("listdir","scandir","walk")
 def observed_dir_op(name):
  def invoke(path=".",*args,**kwargs):
   primitive_counts[name]+=1
-  if judge_active(): return original_dir_ops[name](path,*args,**kwargs)
   allowed=inside_allowed(path)
   if call_active[0]:
    events.append(("os."+name,path_label(path),0,allowed))
@@ -2375,7 +2408,6 @@ def observed_mutation(name):
  def invoke(*args,**kwargs):
   primitive_counts[name]+=1
   target=(args[1] if name in {"symlink","link"} and len(args)>1 else args[0] if args else "")
-  if judge_active(): return original_mutation_ops[name](*args,**kwargs)
   allowed=mutation_allowed(name,args)
   if call_active[0]:
    events.append(("os."+name,path_label(target),name,allowed))
@@ -2420,7 +2452,8 @@ os.getenv=observed_getenv
 if original_getenvb is not None: os.getenvb=observed_getenvb
 os.putenv=observed_putenv;os.unsetenv=observed_unsetenv
 def audit(event,args):
- if not call_active[0] or judge_active(): return
+ if not call_active[0]: return
+ if consume_ticket(event,args): return
  if event=="open" and args:
   path=args[0];flags=args[2] if len(args)>2 and isinstance(args[2],int) else 0
   allowed=inside_allowed(path);label=path_label(path)
@@ -2437,19 +2470,22 @@ def audit(event,args):
   if not allowed: raise PermissionError("audit rename outside scoped result authority")
   canonical_path=lexical_path(canonical)
   if dst_path==canonical_path:
-   judge_enter()
+   source_flags=os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0)
+   source_ticket=make_ticket("canonical_source_open","original_os_open","open",(src_path,),source_flags,None,None,None)
    try:
     try: original_lstat(canonical);absent=False
     except FileNotFoundError: absent=True
-    fd=original_os_open(src_path,os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0));before=original_fstat(fd);data=b""
+    fd=original_os_open(src_path,source_flags);require_ticket_consumed(source_ticket);before=original_fstat(fd);data=b""
     while len(data)<=5*1024*1024:
      chunk=os.read(fd,min(65536,5*1024*1024+1-len(data)))
      if not chunk: break
      data+=chunk
-    after=original_fstat(fd);identity=(before.st_dev,before.st_ino);writers=fd_inventory(identity,True)
+    after=original_fstat(fd);identity=(before.st_dev,before.st_ino);writers=fd_inventory(identity,True,"canonical_writer_inventory")
     transitions.append({"absent":absent,"dev":before.st_dev,"ino":before.st_ino,"size":before.st_size,"digest":hashlib.sha256(data).hexdigest(),"stable":(before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)==(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns),"writers":writers,"fsynced":identity in fsynced})
     held.append(fd);transition_done[0]=True
-   finally: judge_leave()
+   except Exception:
+    if source_ticket in ticket_queue(): ticket_queue().remove(source_ticket)
+    raise
   elif transition_done[0] and (src_path==canonical_path or dst_path==canonical_path): events.append(("post_rename",src_path,dst_path,False))
  elif event in {"os.putenv","os.unsetenv"}:
   env_events.append((event,str(args[0]) if args else ""))
@@ -2465,6 +2501,30 @@ def audit(event,args):
         or event.startswith("os.posix_spawn") or event.startswith("socket."):
   security_events.append((event,repr(args)[:240]))
 sys.addaudithook(audit)
+ticket_probe_path=allowed_roots[0]+os.sep+"ticket-probe"
+ticket_probe_flags=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)
+wrong_path_ticket=make_ticket("probe_wrong_path","original_os_open","open",(ticket_probe_path,),ticket_probe_flags,None,None,None)
+ticket_wrong_path=(not consume_ticket("open",(ticket_probe_path+"-wrong",None,ticket_probe_flags))
+                   and consume_ticket("open",(ticket_probe_path,None,ticket_probe_flags)))
+ticket_replay=not consume_ticket("open",(ticket_probe_path,None,ticket_probe_flags))
+wrong_flags_ticket=make_ticket("probe_wrong_flags","original_os_open","open",(ticket_probe_path,),ticket_probe_flags,None,None,None)
+ticket_wrong_flags=(not consume_ticket("open",(ticket_probe_path,None,ticket_probe_flags|os.O_CREAT))
+                    and consume_ticket("open",(ticket_probe_path,None,ticket_probe_flags)))
+thread_ticket=make_ticket("probe_wrong_thread","original_os_open","open",(ticket_probe_path,),ticket_probe_flags,None,None,None)
+thread_probe=[]
+thread=threading.Thread(target=lambda:thread_probe.append(
+    consume_ticket("open",(ticket_probe_path,None,ticket_probe_flags))))
+thread.start();thread.join()
+ticket_wrong_thread=(thread_probe==[False]
+                     and consume_ticket("open",(ticket_probe_path,None,ticket_probe_flags)))
+ordered_first=make_ticket("probe_order_first","original_os_open","open",(ticket_probe_path,),ticket_probe_flags,None,None,None)
+ordered_second=make_ticket("probe_order_second","original_listdir","os.listdir",("/dev/fd",),None,None,None,None)
+ticket_ordered=(not consume_ticket("os.listdir",("/dev/fd",))
+                and consume_ticket("open",(ticket_probe_path,None,ticket_probe_flags))
+                and consume_ticket("os.listdir",("/dev/fd",)))
+ticket_selftest={"wrong_path":ticket_wrong_path,"wrong_flags":ticket_wrong_flags,
+                 "replay":ticket_replay,"wrong_thread":ticket_wrong_thread,
+                 "ordered":ticket_ordered,"empty":ticket_queue()==[]}
 call_active[0]=True
 try:
  exec(compile(module_source,str(module_path),"exec"),mod.__dict__)
@@ -2546,7 +2606,7 @@ post_events=[event for event in events if event[0] in {"post_write","post_remove
 env_changed=(dict(original_environ)!=env_before or dict(original_environb or {})!=envb_before)
 transition_ok=(len(transitions)==1 and canonical_info is not None and transitions[0]["absent"] and transitions[0]["stable"] and transitions[0]["fsynced"] and not transitions[0]["writers"] and (transitions[0]["dev"],transitions[0]["ino"],transitions[0]["digest"])==(canonical_info.get("dev"),canonical_info.get("ino"),canonical_info.get("digest")))
 visibility_ok=(not visible or (canonical_info is not None and all(item==canonical_info.get("digest") for item in visible)))
-print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events},separators=(",",":"),sort_keys=True))
+print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events,"ticket_selftest":ticket_selftest},separators=(",",":"),sort_keys=True))
 for fd in held:
  try: os.close(fd)
  except OSError: pass
@@ -2578,6 +2638,7 @@ for fd in held:
             and not case.get("env_events") and case.get("env_changed") is False
             and not case.get("security_events")
             and case.get("trap_unchanged") is True
+            and case.get("ticket_selftest") and all(case["ticket_selftest"].values())
             and canonical.get("keys")==expected_binding_keys
             and canonical.get("schema_version_type")=="int"
             and canonical.get("schema_version")==1
@@ -2595,12 +2656,14 @@ for fd in held:
             and not case.get("outside") and case.get("trap_unchanged") is True
             and not case.get("env_events") and case.get("env_changed") is False
             and not case.get("security_events")
+            and case.get("ticket_selftest") and all(case["ticket_selftest"].values())
             and (canonical is None or preseed_ok))
     def outside_blocked(case,canonical_absent=False):
         return (case.get("rc")==0 and case.get("accepted") is False
             and bool(case.get("outside")) and case.get("trap_unchanged") is True
             and not case.get("env_events") and case.get("env_changed") is False
             and not case.get("security_events")
+            and case.get("ticket_selftest") and all(case["ticket_selftest"].values())
             and (not canonical_absent or case.get("canonical") is None))
 
     reference_cases={
@@ -2808,9 +2871,33 @@ class CraftedConcretePath(type(Path())):
     r52_nested_victim=r52_nested.with_suffix(".victim");r52_nested_victim.write_text("SECRET",encoding="utf-8")
     r52_nested_case=fresh_kernel_effect(r52_nested,rig_valid_raw)
     r52_nested_no_effect=(r52_nested_victim.read_text(encoding="utf-8")=="SECRET")
+    r53_ticket_window_source=reference_kernel_source.replace(
+        'import tempfile','import tempfile\nimport sys',1).replace(
+        '        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE','''        def ticket_window_audit(event,args):
+            expected_flags=os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0)
+            if (event=="open" and len(args)>2 and type(args[0]) is str
+                    and args[2]==expected_flags and os.path.basename(args[0]).startswith(".result-")
+                    and os.path.dirname(args[0])==os.path.dirname(os.fspath(canonical_destination))):
+                try: os.unlink(Path(__file__).with_suffix(".victim"))
+                except PermissionError: pass
+        sys.addaudithook(ticket_window_audit)
+        access=fcntl.fcntl(sink_fd,fcntl.F_GETFL)&os.O_ACCMODE''',1)
+    r53_ticket_window=work/"r53-ticket-window-mutant.py"
+    r53_ticket_window.write_text(r53_ticket_window_source,encoding="utf-8")
+    r53_ticket_window_victim=r53_ticket_window.with_suffix(".victim")
+    r53_ticket_window_victim.write_text("SECRET",encoding="utf-8")
+    r53_ticket_window_case=fresh_kernel_effect(r53_ticket_window,rig_valid_raw)
+    r53_ticket_window_ok=(r53_ticket_window_victim.read_text(encoding="utf-8")=="SECRET"
+        and r53_ticket_window_case.get("accepted") is True
+        and r53_ticket_window_case.get("transition_ok") is True
+        and bool(r53_ticket_window_case.get("outside"))
+        and r53_ticket_window_case.get("ticket_selftest")
+        and all(r53_ticket_window_case["ticket_selftest"].values())
+        and not fresh_success(r53_ticket_window_case,rig_valid_raw))
     r52_path_observer_ok=(outside_blocked(r52_fspath_case,True) and r52_fspath_no_effect
         and outside_blocked(r52_subclass_case,True) and r52_subclass_no_effect
         and outside_blocked(r52_nested_case,True) and r52_nested_no_effect
+        and r53_ticket_window_ok
         and fresh_success(reference_cases["valid"],rig_valid_raw)
         and fresh_success(path_positive_case,rig_valid_raw))
     env_source=reference_kernel_source.replace(
@@ -3183,7 +3270,7 @@ class CraftedConcretePath(type(Path())):
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
