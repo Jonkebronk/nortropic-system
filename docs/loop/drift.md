@@ -1692,3 +1692,27 @@ and a canonical envelope bound to that sink digest. Zero-start, stale capture, w
 sentinel, wrong mode and repeated-output controls all reject. These J controls prove
 the observation rig only; the full connected product predicate remains in the sole
 structured-result RED. H031 adds no process or route and only rebinds H032's final hash.
+
+### 2026-08-21 — H032/H031 R71 unpredictable unrelated environment observation
+
+R70 proved that one unrelated value reached the provider, but published the observation
+key in the frozen gate and provider fixture. A defective controller could retain that
+single known name plus launcher mechanics while discarding arbitrary credentials,
+proxies and other runtime state.
+
+R71 locks the exact candidate source digest before choosing two per-attempt environment
+names of different lengths and two independent values. Complete generated literals are
+absent from candidate and gate source. Only the disposable provider fixture is rewritten
+with the generated names; their values remain unavailable there. The connected hostile
+attempt must preserve the exact pair map into the current provider capture while removing
+all Git controls and satisfying R70's exact one-start, valid-mode, new-output, private-sink
+identity/digest and canonical binding.
+
+Wrong-value, missing-key, former-fixed-key-only, zero-start, stale, wrong-mode and repeated
+output observations reject. In addition, a disposable candidate variant that copies only
+fixture mechanics and the former fixed sentinel must actually start one provider with zero
+Git controls; its capture contains the unpredictable keys with absent values and is
+causally rejected. The exact unfiltered current attempt is the legitimate positive. The
+mutant is rig evidence only and grants no product credit. Complete-decoy comparison and
+the read-only authoritative 179-record observation remain intact; H031 adds no route and
+only binds the final R71 H032 digest.
