@@ -634,7 +634,21 @@ elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
 parent_stat=out.parent.lstat() if out.parent.exists() else None
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,'git_control_env':sorted(key for key in os.environ if key.startswith('GIT_')),'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,'is_symlink':out.parent.is_symlink(),'entries':sorted(p.name for p in out.parent.iterdir())} if parent_stat else None}))
+output_stat=out.lstat() if out.is_file() and not out.is_symlink() else None
+output_digest=hashlib.sha256(out.read_bytes()).hexdigest() if output_stat else None
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({
+ 'argv0':str(self_path),'sha256':before,'host_path':str(host_path),
+ 'host_sha256':host_before,'attacks':attacks,'output_path':str(out),
+ 'output_identity':{'dev':output_stat.st_dev,'ino':output_stat.st_ino,
+                    'size':output_stat.st_size,'mode':output_stat.st_mode & 0o777,
+                    'digest':output_digest} if output_stat else None,
+ 'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,
+ 'git_control_env':sorted(key for key in os.environ if key.startswith('GIT_')),
+ 'unrelated_runtime_sentinel':os.environ.get('NORTROPIC_OPAQUE_RUNTIME_SENTINEL'),
+ 'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,
+                  'is_symlink':out.parent.is_symlink(),
+                  'entries':sorted(p.name for p in out.parent.iterdir())}
+                 if parent_stat else None}))
 thread='h032'
 if mode == 'wrong_thread': thread='foreign-thread'
 if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
@@ -3309,8 +3323,29 @@ def run_codex(sink, canonical, invocation, run, role):
         sh(GIT,"add",".",cwd=product_git_decoy)
         sh(GIT,"commit","-qm","hostile caller Git authority",cwd=product_git_decoy)
         product_git_decoy_common=git_repository_common_dir(product_git_decoy)
-        product_git_decoy_control=product_git_decoy_common/"nortropic-codex-autopilot"
-        product_git_decoy_before=exact_tree_snapshot(product_git_decoy_control)
+        product_git_decoy_before=exact_tree_snapshot(product_git_decoy)
+        # Prove the full-tree oracle sees mutations outside the autopilot
+        # subtree: worktree, config, index, refs and arbitrary object siblings.
+        product_git_snapshot_mutants={}
+        decoy_mutation_paths={
+            "worktree":product_git_decoy/"anchor",
+            "config":product_git_decoy_common/"config",
+            "index":product_git_decoy_common/"index",
+            "ref":next((product_git_decoy_common/"refs"/"heads").iterdir()),
+        }
+        for mutation_name,mutation_path in decoy_mutation_paths.items():
+            original_bytes=mutation_path.read_bytes()
+            mutation_path.write_bytes(original_bytes+b"\nR70-MUTATION\n")
+            product_git_snapshot_mutants[mutation_name]=(
+                exact_tree_snapshot(product_git_decoy)!=product_git_decoy_before)
+            mutation_path.write_bytes(original_bytes)
+        object_mutant=product_git_decoy_common/"objects"/"r70-review-mutant"
+        object_mutant.write_bytes(b"object mutation\n")
+        product_git_snapshot_mutants["object"]=(
+            exact_tree_snapshot(product_git_decoy)!=product_git_decoy_before)
+        object_mutant.unlink()
+        product_git_decoy_restored=(
+            exact_tree_snapshot(product_git_decoy)==product_git_decoy_before)
         physical_git_runs_before=(set(physical_runs_root.iterdir())
                                   if physical_runs_root.is_dir() else set())
         physical_git_common=git_repository_common_dir(physical_repo)
@@ -3320,8 +3355,17 @@ def run_codex(sink, canonical, invocation, run, role):
         product_git_changes={
             "GIT_DIR":str(product_git_decoy_common),
             "GIT_WORK_TREE":str(product_git_decoy),
+            "NORTROPIC_OPAQUE_RUNTIME_SENTINEL":os.urandom(24).hex(),
         }
         product_git_prior={key:os.environ.get(key) for key in product_git_changes}
+        # A stale capture from the preceding physical attempt is deliberately
+        # present and then removed before this invocation. Only a new provider
+        # child can recreate it.
+        capture_was_stale=capture.is_file()
+        stale_capture_output=(safe_capture().get("output_path") if capture_was_stale else None)
+        if capture.exists(): capture.unlink()
+        capture_absent_before=not capture.exists()
+        physical_git_starts_before=provider_process_starts[0]
         launch_mode[0]="valid"
         try:
             os.environ.update(product_git_changes)
@@ -3336,7 +3380,8 @@ def run_codex(sink, canonical, invocation, run, role):
             for key,value in product_git_prior.items():
                 if value is None: os.environ.pop(key,None)
                 else: os.environ[key]=value
-        product_git_decoy_after=exact_tree_snapshot(product_git_decoy_control)
+        physical_git_start_delta=provider_process_starts[0]-physical_git_starts_before
+        product_git_decoy_after=exact_tree_snapshot(product_git_decoy)
         physical_git_runs_after=(set(physical_runs_root.iterdir())
                                  if physical_runs_root.is_dir() else set())
         physical_git_new_runs=sorted(physical_git_runs_after-physical_git_runs_before)
@@ -3378,18 +3423,80 @@ def run_codex(sink, canonical, invocation, run, role):
         and all(value!=0 for value in physical_hostile_capture.get("live_attacks",{}).values()))
     physical_git_output=Path(physical_git_capture.get(
         "output_path","/private/tmp/h032-missing-git-output"))
+    def current_provider_capture_admits(observed, sentinel, start_delta,
+                                        prior_output) -> bool:
+        identity=observed.get("output_identity") if isinstance(observed,dict) else None
+        output=observed.get("output_path") if isinstance(observed,dict) else None
+        return (start_delta==1 and observed.get("mode")=="valid"
+            and observed.get("unrelated_runtime_sentinel")==sentinel
+            and isinstance(output,str) and bool(output) and Path(output).is_absolute()
+            and output!=prior_output and isinstance(identity,dict)
+            and set(identity)=={"dev","ino","size","mode","digest"}
+            and type(identity.get("dev")) is int and type(identity.get("ino")) is int
+            and type(identity.get("size")) is int and identity.get("size",0)>0
+            and identity.get("mode")==0o600
+            and isinstance(identity.get("digest"),str)
+            and len(identity.get("digest"))==64
+            and set(identity.get("digest"))<=set("0123456789abcdef"))
+    physical_git_capture_bound=current_provider_capture_admits(
+        physical_git_capture,product_git_changes["NORTROPIC_OPAQUE_RUNTIME_SENTINEL"],
+        physical_git_start_delta,stale_capture_output)
+    stale_capture_mutant=dict(physical_git_capture)
+    wrong_sentinel_mutant=dict(physical_git_capture)
+    wrong_sentinel_mutant["unrelated_runtime_sentinel"]="wrong"
+    wrong_mode_mutant=dict(physical_git_capture);wrong_mode_mutant["mode"]="missing"
+    repeated_output_mutant=dict(physical_git_capture)
+    repeated_output_mutant["output_path"]=stale_capture_output
+    capture_binding_mutants_reject=(
+        not current_provider_capture_admits(
+            stale_capture_mutant,product_git_changes["NORTROPIC_OPAQUE_RUNTIME_SENTINEL"],
+            0,stale_capture_output)
+        and not current_provider_capture_admits(
+            wrong_sentinel_mutant,product_git_changes["NORTROPIC_OPAQUE_RUNTIME_SENTINEL"],
+            1,stale_capture_output)
+        and not current_provider_capture_admits(
+            wrong_mode_mutant,product_git_changes["NORTROPIC_OPAQUE_RUNTIME_SENTINEL"],
+            1,stale_capture_output)
+        and not current_provider_capture_admits(
+            repeated_output_mutant,product_git_changes["NORTROPIC_OPAQUE_RUNTIME_SENTINEL"],
+            1,stale_capture_output))
+    physical_git_canonical_valid=False
+    if len(physical_git_new_runs)==1:
+        physical_git_canonical=physical_git_new_runs[0]/"result.json"
+        if physical_git_canonical.is_file() and not physical_git_canonical.is_symlink():
+            try:
+                physical_git_canonical_document=strict_json(
+                    physical_git_canonical.read_text(encoding="utf-8"))
+                physical_git_canonical_valid=canonical_result_valid(
+                    physical_git_canonical_document,schema_document,
+                    accepted_digest=physical_git_capture["output_identity"]["digest"])
+            except Exception:
+                physical_git_canonical_valid=False
+    check("J_R70_FULL_DECOY_TREE_MUTATION_ORACLE",
+          product_git_decoy_restored
+          and set(product_git_snapshot_mutants)=={
+              "worktree","config","index","ref","object"}
+          and all(product_git_snapshot_mutants.values()),
+          f"mutants={product_git_snapshot_mutants} restored={product_git_decoy_restored}")
+    check("J_R70_CURRENT_PROVIDER_CAPTURE_ORACLE",
+          capture_was_stale and capture_absent_before
+          and physical_git_capture_bound and capture_binding_mutants_reject,
+          f"stale={capture_was_stale} cleared={capture_absent_before} "
+          f"starts={physical_git_start_delta} capture_bound={physical_git_capture_bound} "
+          f"mutants_reject={capture_binding_mutants_reject}")
     physical_git_environment_ok=(
         physical_git_case[0]
         and product_git_decoy_after==product_git_decoy_before
+        and product_git_decoy_restored
         and len(physical_git_new_runs)==1
         and physical_git_journal_ok and len(physical_git_records)==1
         and physical_git_records[0].get("event")=="AGENT_START"
         and physical_git_records[0].get("head")==git_repository_head(physical_wt)
         and physical_git_records[0].get("worktree")==str(physical_wt)
         and physical_git_capture.get("git_control_env")==[]
+        and physical_git_capture_bound and physical_git_canonical_valid
         and physical_git_common/"nortropic-codex-autopilot"/"runs" \
             in (physical_git_new_runs[0]/"result.json").parents
-        and (physical_git_new_runs[0]/"result.json").is_file()
         and physical_git_common not in physical_git_output.parents
         and product_git_decoy_common not in physical_git_output.parents
         and not physical_git_output.exists())
@@ -4933,7 +5040,7 @@ class CraftedConcretePath(type(Path())):
           and r55_complete_residue_oracle_ok and r56_setup_oracle_ok,
           f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r59_post_retained_dynamic_positive,r59_empty_interval_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary,r59_post_retained_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_capture.get('git_control_env'),physical_git_records,physical_git_new_runs,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_start_delta,physical_git_capture.get('mode'),physical_git_capture.get('git_control_env'),physical_git_capture.get('unrelated_runtime_sentinel'),physical_git_capture_bound,physical_git_canonical_valid,physical_git_records,physical_git_new_runs,product_git_snapshot_mutants,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),

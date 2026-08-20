@@ -1665,3 +1665,30 @@ intended common Git, the intended exact HEAD/worktree, an untouched decoy and no
 sink satisfy the control. All attack targets live under gate-owned WORK, so the owner
 gate never repeats the authoritative mutation. H031 keeps its one-run/one-Popen route
 and merely admits this bounded environment construction after rebinding H032's hash.
+
+### 2026-08-21 — H032/H031 R70 complete decoy and current provider binding
+
+R69 correctly separated gate sanitation from the product verdict, but its decoy
+immutability observation covered only `.git/nortropic-codex-autopilot`. A product could
+mutate decoy config, index, refs, objects, hooks or worktree while that absent subtree
+remained unchanged. R69 also observed only an empty provider `GIT_*` list: an
+implementation that discarded credentials, proxy and all unrelated runtime environment
+could pass. Finally, the shared provider capture was not cleared or bound to a current
+start, so a no-Popen hostile branch could reuse a prior empty-Git capture.
+
+R70 snapshots the entire committed decoy repository root without following links. This
+includes the worktree and its embedded common Git. Before the product attempt, causal
+worktree, config, index, ref and object mutations each must alter the snapshot; exact
+restoration must reproduce the baseline. The actual accepted attempt then requires the
+whole tree unchanged, not merely one control subtree.
+
+The same attempt carries a fresh opaque `NORTROPIC_OPAQUE_RUNTIME_SENTINEL`. It does not
+select provider behavior and grants no authority, but the actual provider child must
+capture its exact value while capturing zero caller `GIT_*` names. The known prior
+capture is deleted first. Credit requires exactly one new provider-process start,
+`mode=valid`, a newly created absolute output path distinct from the stale attempt,
+owner-private current sink identity/size/digest, exactly one intended AGENT_START/run
+and a canonical envelope bound to that sink digest. Zero-start, stale capture, wrong
+sentinel, wrong mode and repeated-output controls all reject. These J controls prove
+the observation rig only; the full connected product predicate remains in the sole
+structured-result RED. H031 adds no process or route and only rebinds H032's final hash.
