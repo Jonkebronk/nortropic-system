@@ -507,11 +507,26 @@ if mode == 'output_then_fail': sys.exit(17)
         export_ok=(len(exports)==1 and isinstance(exports[0].value,(ast.List,ast.Tuple))
                    and [item.value for item in exports[0].value.elts
                         if isinstance(item,ast.Constant)]==["consume_private_result"])
-        allowed_modules={"hashlib","json","os","stat","tempfile","pathlib","typing","fcntl"}
+        allowed_modules={"hashlib","json","os","stat","tempfile","pathlib","fcntl"}
         allowed_from={
             "pathlib":{"Path"},
-            "typing":{"Any"},
-            "fcntl":{"F_GETFD","F_GETFL","F_SETFD","FD_CLOEXEC"},
+        }
+        allowed_module_members={
+            "hashlib":{("sha256",)},
+            "json":{("loads",),("dumps",)},
+            "stat":{("S_ISREG",)},
+            "tempfile":{("mkstemp",)},
+            "pathlib":{("Path",)},
+            "fcntl":{("fcntl",),("F_GETFD",),("F_GETFL",),("F_SETFD",),
+                     ("FD_CLOEXEC",),("F_DUPFD",)},
+            "os":{("open",),("close",),("read",),("pread",),("readv",),("preadv",),
+                  ("write",),("pwrite",),("lseek",),("fstat",),("stat",),("lstat",),
+                  ("access",),("readlink",),("fsync",),("unlink",),("remove",),
+                  ("replace",),("rename",),("fspath",),("O_RDONLY",),("O_WRONLY",),
+                  ("O_RDWR",),("O_CREAT",),("O_EXCL",),("O_TRUNC",),("O_CLOEXEC",),
+                  ("O_NOFOLLOW",),("O_ACCMODE",),("SEEK_SET",),("F_OK",),("R_OK",),
+                  ("W_OK",),("path","dirname"),("path","abspath"),("path","realpath"),
+                  ("path","lexists")},
         }
         forbidden_module_roots={"subprocess","socket","urllib","http","importlib","requests",
                                 "git","ctypes","multiprocessing","asyncio"}
@@ -523,13 +538,14 @@ if mode == 'output_then_fail': sys.exit(17)
                     root=alias.name.split(".",1)[0]
                     bound=alias.asname or root
                     module_aliases[bound]=alias.name
-                    imports_ok &= (alias.name in allowed_modules
+                    imports_ok &= (alias.asname is None and alias.name in allowed_modules
                                    and root not in forbidden_module_roots)
             elif isinstance(node,ast.ImportFrom):
                 imports.append((node.module or "",tuple((a.name,a.asname) for a in node.names)))
                 imports_ok &= (node.level==0 and node.module in allowed_from
                                and all(alias.name in allowed_from.get(node.module,set())
-                                       and alias.name!="*" for alias in node.names))
+                                       and alias.name!="*" and alias.asname is None
+                                       for alias in node.names))
                 for alias in node.names:
                     capability_aliases[alias.asname or alias.name]=f"{node.module}.{alias.name}"
         forbidden_names={"eval","exec","compile","__import__","globals","locals","vars",
@@ -538,7 +554,31 @@ if mode == 'output_then_fail': sys.exit(17)
         forbidden_attrs={"environ","getenv","system","popen","fork","forkpty","posix_spawn",
                          "execv","execve","spawnv","spawnve","__dict__","__globals__",
                          "__getattribute__","__subclasses__","__mro__","listdir","scandir",
-                         "putenv","unsetenv"}
+                         "walk","putenv","unsetenv","environb","getenvb","sys","modules",
+                         "socket","socketpair","connect","connect_ex","getaddrinfo",
+                         "gethostbyname","gethostbyaddr","create_connection"}
+        parents={child:parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        module_capability_ok=True;module_uses=[]
+        for node in ast.walk(tree):
+            if not (isinstance(node,ast.Name) and isinstance(node.ctx,ast.Load)
+                    and node.id in module_aliases): continue
+            current=node;parts=[]
+            while isinstance(parents.get(current),ast.Attribute) \
+                    and parents[current].value is current:
+                current=parents[current];parts.append(current.attr)
+            chain=tuple(parts)
+            module_name=module_aliases[node.id]
+            permitted=chain in allowed_module_members.get(module_name,set())
+            module_uses.append((module_name,chain,permitted))
+            module_capability_ok &= permitted
+        imported_member_ok=True
+        for node in ast.walk(tree):
+            if not (isinstance(node,ast.Name) and isinstance(node.ctx,ast.Load)
+                    and node.id in capability_aliases): continue
+            parent=parents.get(node);capability=capability_aliases[node.id]
+            permitted=(capability=="pathlib.Path" and isinstance(parent,ast.Call)
+                       and parent.func is node)
+            imported_member_ok &= permitted
         forbidden_alias_use=any(isinstance(node,ast.Name)
             and isinstance(node.ctx,ast.Load)
             and (module_aliases.get(node.id,"").split(".",1)[0] in forbidden_module_roots
@@ -629,13 +669,15 @@ if mode == 'output_then_fail': sys.exit(17)
             and isinstance(node.ctx,(ast.Store,ast.Del)) for node in ast.walk(tree))
         return (consumer_ok and export_ok and imports_ok and module_shape and max_ok
                 and not forbidden_use and not forbidden_alias_use and not forbidden_literals
-                and not hidden_identity and not attribute_write and not import_time_forbidden), {
+                and not hidden_identity and not attribute_write and not import_time_forbidden
+                and module_capability_ok and imported_member_ok), {
             "consumer":consumer_ok,"export":export_ok,"imports":tuple(imports),
             "imports_ok":imports_ok,"module_shape":module_shape,"max":max_ok,
             "forbidden":forbidden_use,"forbidden_alias":forbidden_alias_use,
             "forbidden_literal":forbidden_literals,"hidden_identity":hidden_identity,
             "attribute_write":attribute_write,"import_time_expressions":len(import_time_expressions),
-            "import_time_forbidden":import_time_forbidden}
+            "import_time_forbidden":import_time_forbidden,"module_capability":module_capability_ok,
+            "imported_member":imported_member_ok,"module_uses":tuple(module_uses)}
 
     def integration_structure_inventory(tree):
         parents={child:parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
@@ -731,12 +773,40 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
     )
     inventory_adversary_results=[kernel_structure_inventory(ast.parse(text),text)[0]
                                  for text in inventory_adversaries]
+    reviewer_inventory_sources=(
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return os.environb.get(b'R50_SECRET')"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return os.getenvb(b'R50_SECRET')"),
+        kernel_inventory_fixture.replace("import stat","import stat\nimport typing").replace(
+            "return _bounded(sink_fd)",
+            "net=typing.sys.modules['socket']\n    return net.socketpair()"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return tuple(Path(canonical_destination).iterdir())"),
+    )
+    reviewer_inventory_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                                for text in reviewer_inventory_sources]
+    module_proxy_sources=(
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "proxy=os\n    return proxy.fstat(sink_fd)"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "proxy={'module':json}['module']\n    return proxy.loads('{}')"),
+        kernel_inventory_fixture.replace("return _bounded(sink_fd)",
+            "return (lambda module: module.sha256(b'x'))(hashlib)"),
+        kernel_inventory_fixture.replace("import stat","import stat\nimport pathlib").replace(
+            "return _bounded(sink_fd)",
+            "return pathlib.os.stat(canonical_destination)"),
+    )
+    module_proxy_results=[kernel_structure_inventory(ast.parse(text),text)[0]
+                          for text in module_proxy_sources]
     fcntl_positive=kernel_inventory_fixture.replace("import stat","import stat\nimport fcntl").replace(
         "return _bounded(sink_fd)",
         "flags=fcntl.fcntl(sink_fd,fcntl.F_GETFL)\n    fdflags=fcntl.fcntl(sink_fd,fcntl.F_GETFD)\n    return (_bounded(sink_fd),flags,fdflags)")
     fcntl_inventory_ok=kernel_structure_inventory(ast.parse(fcntl_positive),fcntl_positive)[0]
     kernel_inventory_rig_ok=(rig_inventory_base[0] and not any(rig_inventory_mutants)
-        and not any(inventory_adversary_results) and fcntl_inventory_ok)
+        and not any(inventory_adversary_results) and fcntl_inventory_ok
+        and reviewer_inventory_results==[False,False,False,True]
+        and not any(module_proxy_results))
 
     kernel_structure_ok=False;kernel_structure_detail={"absent":True}
     kernel_module=None
@@ -1927,7 +1997,7 @@ def consume_private_result(sink_fd, canonical_destination, invocation_id, run_id
         ast.parse(reference_kernel_source),reference_kernel_source)[0]
 
     effect_runner=work/"r48-kernel-effect-runner.py"
-    effect_runner.write_text(r'''import builtins,fcntl,hashlib,json,os,pathlib,socket,stat,sys,tempfile,threading,time,types,typing
+    effect_runner.write_text(r'''import builtins,fcntl,hashlib,json,os,pathlib,socket,stat,sys,tempfile,threading,time,types
 module_path,arena,raw_path,mode=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),sys.argv[4]
 staging=arena/"staging";canonical_parent=arena/"canonical";sink=staging/"sink";canonical=canonical_parent/"result.json"
 staging.mkdir(mode=0o700);canonical_parent.mkdir(mode=0o700)
@@ -1956,15 +2026,17 @@ if sink_fd>=0:
  st=os.fstat(sink_fd);sink_identity=(st.st_dev,st.st_ino)
 accepted_digest=hashlib.sha256(raw).hexdigest()
 events=[];transitions=[];held=[];fsynced=set();call_active=[False];transition_done=[False]
-primitive_counts={name:0 for name in ("open","path_open","path_read_text","fsync","fstat","stat","lstat","access","readlink","getenv","putenv","unsetenv")}
-env_events=[];env_before=dict(os.environ);module_error="NONE"
+primitive_counts={name:0 for name in ("open","fsync","fstat","stat","lstat","access","readlink","listdir","scandir","walk","environ","environb","getenv","getenvb","putenv","unsetenv","path_open","path_iterdir","path_glob","path_rglob","path_read_text","path_read_bytes","path_stat","path_lstat","path_readlink","path_resolve")}
+env_events=[];security_events=[];original_environ=os.environ;original_environb=getattr(os,"environb",None)
+env_before=dict(original_environ);envb_before=dict(original_environb or {});module_error="NONE"
 allowed_roots=(staging.resolve(),canonical_parent.resolve())
 def inside_allowed(value):
  try:
   if isinstance(value,int): return True
   path=pathlib.Path(os.path.abspath(os.fspath(value)))
   if not path.is_absolute(): return True
-  return any(path==root or root in path.parents for root in allowed_roots) or str(path).startswith("/dev/fd/")
+  return (any(path==root or root in path.parents for root in allowed_roots)
+          or str(path)=="/dev/fd" or str(path).startswith("/dev/fd/"))
  except Exception: return False
 original_fstat=os.fstat
 def fd_inventory(identity,writable=None):
@@ -1980,8 +2052,10 @@ def fd_inventory(identity,writable=None):
   except OSError: pass
  return found
 original_fsync=os.fsync;original_os_open=os.open;original_builtin_open=builtins.open
-original_getenv=os.getenv;original_putenv=os.putenv;original_unsetenv=os.unsetenv
-original_path_open=pathlib.Path.open;original_path_read_text=pathlib.Path.read_text
+original_getenv=os.getenv;original_getenvb=getattr(os,"getenvb",None)
+original_putenv=os.putenv;original_unsetenv=os.unsetenv
+path_method_names=("open","iterdir","glob","rglob","read_text","read_bytes","stat","lstat","readlink","resolve")
+original_path_methods={name:getattr(pathlib.Path,name) for name in path_method_names}
 def observed_fsync(fd):
  primitive_counts["fsync"]+=1;st=original_fstat(fd);fsynced.add((st.st_dev,st.st_ino));return original_fsync(fd)
 os.fsync=observed_fsync
@@ -1994,12 +2068,13 @@ os.open=observed_os_open
 def observed_builtin_open(*args,**kwargs):
  primitive_counts["open"]+=1;return original_builtin_open(*args,**kwargs)
 builtins.open=observed_builtin_open
-def observed_path_open(self,*args,**kwargs):
- primitive_counts["path_open"]+=1;return original_path_open(self,*args,**kwargs)
-pathlib.Path.open=observed_path_open
-def observed_path_read_text(self,*args,**kwargs):
- primitive_counts["path_read_text"]+=1;return original_path_read_text(self,*args,**kwargs)
-pathlib.Path.read_text=observed_path_read_text
+def observed_path_method(name):
+ def invoke(self,*args,**kwargs):
+  primitive_counts["path_"+name]+=1
+  if call_active[0]: events.append(("path."+name,str(self),0,inside_allowed(self)))
+  return original_path_methods[name](self,*args,**kwargs)
+ return invoke
+for path_method in path_method_names: setattr(pathlib.Path,path_method,observed_path_method(path_method))
 original_path_ops={name:getattr(os,name) for name in ("stat","lstat","access","readlink")}
 def observed_path_op(name):
  def invoke(path,*args,**kwargs):
@@ -2008,6 +2083,31 @@ def observed_path_op(name):
   return original_path_ops[name](path,*args,**kwargs)
  return invoke
 for path_op in original_path_ops: setattr(os,path_op,observed_path_op(path_op))
+original_dir_ops={name:getattr(os,name) for name in ("listdir","scandir","walk")}
+def observed_dir_op(name):
+ def invoke(path=".",*args,**kwargs):
+  primitive_counts[name]+=1
+  if call_active[0]: events.append(("os."+name,str(path),0,inside_allowed(path)))
+  return original_dir_ops[name](path,*args,**kwargs)
+ return invoke
+for dir_op in original_dir_ops: setattr(os,dir_op,observed_dir_op(dir_op))
+class ObservedEnviron:
+ def __init__(self,backing,name): self.backing=backing;self.name=name
+ def note(self,kind,key=""):
+  primitive_counts[self.name]+=1
+  if call_active[0]: env_events.append((self.name+"."+kind,str(key)))
+ def __getitem__(self,key): self.note("getitem",key);return self.backing[key]
+ def get(self,key,default=None): self.note("get",key);return self.backing.get(key,default)
+ def __setitem__(self,key,value): self.note("setitem",key);self.backing[key]=value
+ def __delitem__(self,key): self.note("delitem",key);del self.backing[key]
+ def __iter__(self): self.note("iter");return iter(self.backing)
+ def __len__(self): return len(self.backing)
+ def keys(self): self.note("keys");return self.backing.keys()
+ def items(self): self.note("items");return self.backing.items()
+ def values(self): self.note("values");return self.backing.values()
+ def copy(self): self.note("copy");return self.backing.copy()
+os.environ=ObservedEnviron(original_environ,"environ")
+if original_environb is not None: os.environb=ObservedEnviron(original_environb,"environb")
 def observed_getenv(key,*args):
  primitive_counts["getenv"]+=1
  if call_active[0]: env_events.append(("getenv",str(key)))
@@ -2020,7 +2120,13 @@ def observed_unsetenv(key):
  primitive_counts["unsetenv"]+=1
  if call_active[0]: env_events.append(("unsetenv",str(key)))
  return original_unsetenv(key)
-os.getenv=observed_getenv;os.putenv=observed_putenv;os.unsetenv=observed_unsetenv
+def observed_getenvb(key,*args):
+ primitive_counts["getenvb"]+=1
+ if call_active[0]: env_events.append(("getenvb",str(key)))
+ return original_getenvb(key,*args) if original_getenvb is not None else None
+os.getenv=observed_getenv
+if original_getenvb is not None: os.getenvb=observed_getenvb
+os.putenv=observed_putenv;os.unsetenv=observed_unsetenv
 def audit(event,args):
  if not call_active[0]: return
  if event=="open" and args:
@@ -2044,6 +2150,11 @@ def audit(event,args):
   elif transition_done[0] and (src==canonical or dst==canonical): events.append(("post_rename",str(src),str(dst),False))
  elif event in {"os.putenv","os.unsetenv"}:
   env_events.append((event,str(args[0]) if args else ""))
+ elif event in {"os.listdir","os.scandir"} and args:
+  events.append((event,str(args[0]),0,inside_allowed(args[0])))
+ elif event=="subprocess.Popen" or event=="os.system" or event.startswith("os.exec") \
+        or event.startswith("os.posix_spawn") or event.startswith("socket."):
+  security_events.append((event,repr(args)[:240]))
 sys.addaudithook(audit)
 call_active[0]=True
 try:
@@ -2093,10 +2204,14 @@ except Exception as exc: error=type(exc).__name__+":"+str(exc)
 finally:
  call_active[0]=False;module_os.replace=original_replace;module_os.unlink=original_unlink
  for path_op,original_path_op in original_path_ops.items(): setattr(os,path_op,original_path_op)
+ for dir_op,original_dir_op in original_dir_ops.items(): setattr(os,dir_op,original_dir_op)
  os.fsync=original_fsync;os.fstat=original_fstat;os.open=original_os_open
  os.getenv=original_getenv;os.putenv=original_putenv;os.unsetenv=original_unsetenv
- builtins.open=original_builtin_open;pathlib.Path.open=original_path_open
- pathlib.Path.read_text=original_path_read_text
+ if original_getenvb is not None: os.getenvb=original_getenvb
+ os.environ=original_environ
+ if original_environb is not None: os.environb=original_environb
+ builtins.open=original_builtin_open
+ for path_method,original_path_method in original_path_methods.items(): setattr(pathlib.Path,path_method,original_path_method)
  if stop_mutation is not None: stop_mutation.set();mutator.join(timeout=1)
  stop.set();observer.join(timeout=1)
 fd_aliases=fd_inventory(sink_identity) if sink_identity else []
@@ -2118,10 +2233,10 @@ if canonical.is_file() and not canonical.is_symlink():
 temps=[str(path) for path in canonical_parent.iterdir() if path.name!="result.json"]
 outside=[event for event in events if event[-1] is False and event[0] not in {"post_write","post_remove","post_rename"}]
 post_events=[event for event in events if event[0] in {"post_write","post_remove","post_rename"}]
-env_changed=(dict(os.environ)!=env_before)
+env_changed=(dict(original_environ)!=env_before or dict(original_environb or {})!=envb_before)
 transition_ok=(len(transitions)==1 and canonical_info is not None and transitions[0]["absent"] and transitions[0]["stable"] and transitions[0]["fsynced"] and not transitions[0]["writers"] and (transitions[0]["dev"],transitions[0]["ino"],transitions[0]["digest"])==(canonical_info.get("dev"),canonical_info.get("ino"),canonical_info.get("digest")))
 visibility_ok=(not visible or (canonical_info is not None and all(item==canonical_info.get("digest") for item in visible)))
-print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed},separators=(",",":"),sort_keys=True))
+print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events},separators=(",",":"),sort_keys=True))
 for fd in held:
  try: os.close(fd)
  except OSError: pass
@@ -2151,6 +2266,7 @@ for fd in held:
             and case.get("visibility_ok") is True and not case.get("temps")
             and not case.get("outside") and not case.get("post_events")
             and not case.get("env_events") and case.get("env_changed") is False
+            and not case.get("security_events")
             and case.get("trap_unchanged") is True
             and canonical.get("keys")==expected_binding_keys
             and canonical.get("schema_version_type")=="int"
@@ -2168,6 +2284,7 @@ for fd in held:
             and case.get("fd_aliases")==[] and not case.get("temps")
             and not case.get("outside") and case.get("trap_unchanged") is True
             and not case.get("env_events") and case.get("env_changed") is False
+            and not case.get("security_events")
             and (canonical is None or preseed_ok))
 
     reference_cases={
@@ -2223,6 +2340,32 @@ for fd in held:
     captured_stat.write_text(captured_stat_source,encoding="utf-8")
     captured_stat.with_suffix(".trap").write_text("STAT_TRAP",encoding="utf-8")
     captured_stat_case=fresh_kernel_effect(captured_stat,rig_valid_raw)
+    path_positive_source=reference_kernel_source.replace(
+        '_path_stat(os.path.dirname(os.fspath(canonical_destination)))',
+        '_path_stat(os.path.dirname(os.fspath(canonical_destination)))\n        Path(os.path.dirname(os.fspath(canonical_destination))).stat()\n        tuple(Path(os.path.dirname(os.fspath(canonical_destination))).iterdir())',1)
+    path_positive=work/"r50-path-positive.py"
+    path_positive.write_text(path_positive_source,encoding="utf-8")
+    path_positive_case=fresh_kernel_effect(path_positive,rig_valid_raw)
+    iterdir_source=reference_kernel_source.replace(
+        '__all__ = ["consume_private_result"]',
+        '__all__ = ["consume_private_result"]\ndef _iter_probe(value=tuple(Path(__file__).with_suffix("."+"trapdir").iterdir())):\n    return value',1)
+    iterdir_mutant=work/"r50-iterdir-mutant.py"
+    iterdir_mutant.write_text(iterdir_source,encoding="utf-8")
+    iterdir_mutant.with_suffix(".trapdir").mkdir()
+    (iterdir_mutant.with_suffix(".trapdir")/"secret-name").write_text("TRAP",encoding="utf-8")
+    iterdir_case=fresh_kernel_effect(iterdir_mutant,rig_valid_raw)
+    environb_source=reference_kernel_source.replace(
+        '        return envelope',
+        '        os.environb.get(b"PATH")\n        return envelope',1)
+    environb_mutant=work/"r50-environb-mutant.py"
+    environb_mutant.write_text(environb_source,encoding="utf-8")
+    environb_case=fresh_kernel_effect(environb_mutant,rig_valid_raw)
+    getenvb_source=reference_kernel_source.replace(
+        '        return envelope',
+        '        os.getenvb(b"PATH")\n        return envelope',1)
+    getenvb_mutant=work/"r50-getenvb-mutant.py"
+    getenvb_mutant.write_text(getenvb_source,encoding="utf-8")
+    getenvb_case=fresh_kernel_effect(getenvb_mutant,rig_valid_raw)
     env_source=reference_kernel_source.replace(
         '        return envelope',
         '        os.putenv("H032_R49_MUTATION","1")\n        return envelope',1)
@@ -2239,6 +2382,12 @@ for fd in held:
         and reference_cases["valid"].get("primitive_counts",{}).get("stat",0)>=1
         and import_probe_case.get("accepted") is True and bool(import_probe_case.get("outside"))
         and captured_stat_case.get("accepted") is True and bool(captured_stat_case.get("outside"))
+        and fresh_success(path_positive_case,rig_valid_raw)
+        and path_positive_case.get("primitive_counts",{}).get("path_stat",0)>=1
+        and path_positive_case.get("primitive_counts",{}).get("path_iterdir",0)>=1
+        and iterdir_case.get("accepted") is True and bool(iterdir_case.get("outside"))
+        and environb_case.get("accepted") is True and bool(environb_case.get("env_events"))
+        and getenvb_case.get("accepted") is True and bool(getenvb_case.get("env_events"))
         and env_case.get("accepted") is True and bool(env_case.get("env_events"))
         and unsynced_case.get("accepted") is True
         and unsynced_case.get("transition_ok") is False)
@@ -2581,7 +2730,7 @@ for fd in held:
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok} captured={captured_primitive_rig_ok,reference_cases['valid'].get('primitive_counts'),bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok')} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'))} captured={captured_primitive_rig_ok,reference_cases['valid'].get('primitive_counts'),bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw),path_positive_case.get('primitive_counts',{}).get('path_stat',0),path_positive_case.get('primitive_counts',{}).get('path_iterdir',0)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
           f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_caught, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
