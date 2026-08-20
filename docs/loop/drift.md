@@ -1493,3 +1493,25 @@ only direct C events plus Python helper-frame/internal-effect ordinals. After H0
 bytes are final, H031 alone binds their exact digest. Production, provider authority,
 G20, H017 and live-model behavior remain untouched; the structured-result boundary
 remains the sole intended product RED.
+
+### 2026-08-20 — H032/H031 R63 lexical protected-fstat authority
+
+R62 applied its local Attribute-to-Call rule to every Name spelled `os`. That spelling
+is not authority: a parameter, local, comprehension target, exception target or
+nonlocal binding may independently expose an attribute named `fstat`, and R51 had
+already frozen those lexical shadows as ordinary values.
+
+R63 resolves each `os` load through a bounded Python-3.9 lexical scope table. Only a
+load that resolves to the exact unaliased module-level `import os` receives the R62
+protected-capability rule. A global reference to that intact module remains protected;
+a module rebind, conflicting import/store or ambiguous global/nonlocal binding rejects
+fail closed. No generic provenance or control-flow graph is restored.
+
+Connected full-`run_codex` controls retain genuine direct, helper, helper-alias and
+nested-helper positives and every R62 transfer negative. Separate positives cover
+parameter, local, comprehension, exception, nonlocal and unrelated local
+`list.sort(key=os.fstat)` shadows; module and ambiguous rebinding mutants reject. H032
+and its direct-C/Python-helper ordinal router are byte-identical at the frozen digest.
+The expected owner result remains H032 131 PASS / 1 FAIL and H031 94 PASS / 2 FAIL,
+solely for the absent structured-result production boundary. Production, provider
+authority, G20, H017 and live execution remain untouched.

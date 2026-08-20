@@ -318,12 +318,227 @@ def owner_map(tree: ast.Module) -> dict[ast.AST, str]:
     return owners
 
 
+def lexical_bindings(tree: ast.Module):
+    """Resolve import capability names without interpreting control flow."""
+    scope_parent: dict[ast.AST, ast.AST | None] = {tree: None}
+    scope_bindings: dict[ast.AST, dict[str, set[tuple[str, str | None]]]] = {
+        tree: {}
+    }
+    node_scope: dict[ast.AST, ast.AST] = {}
+    scope_globals: dict[ast.AST, set[str]] = {tree: set()}
+    scope_nonlocals: dict[ast.AST, set[str]] = {tree: set()}
+
+    def bind(scope: ast.AST, name: str, kind: str, value: str | None = None) -> None:
+        scope_bindings.setdefault(scope, {}).setdefault(name, set()).add((kind, value))
+
+    def bind_store(scope: ast.AST, name: str) -> None:
+        if name in scope_globals.get(scope, set()):
+            bind(tree, name, "local")
+        elif name not in scope_nonlocals.get(scope, set()):
+            bind(scope, name, "local")
+
+    def bind_arguments(scope: ast.AST, args: ast.arguments) -> None:
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            bind(scope, arg.arg, "local")
+        if args.vararg is not None:
+            bind(scope, args.vararg.arg, "local")
+        if args.kwarg is not None:
+            bind(scope, args.kwarg.arg, "local")
+
+    class LexicalBindings(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self.scope: ast.AST = tree
+
+        def visit(self, node: ast.AST):
+            node_scope.setdefault(node, self.scope)
+            return super().visit(node)
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, (ast.Store, ast.Del)):
+                bind_store(self.scope, node.id)
+
+        def visit_Global(self, node: ast.Global) -> None:
+            scope_globals.setdefault(self.scope, set()).update(node.names)
+
+        def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+            scope_nonlocals.setdefault(self.scope, set()).update(node.names)
+
+        def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+            if node.type is not None:
+                self.visit(node.type)
+            if isinstance(node.name, str):
+                bind(self.scope, node.name, "local")
+            for statement in node.body:
+                self.visit(statement)
+
+        def generic_visit(self, node: ast.AST):
+            node_name = type(node).__name__
+            if (node_name in {"MatchAs", "MatchStar"}
+                    and isinstance(getattr(node, "name", None), str)):
+                bind(self.scope, node.name, "local")
+            if (node_name == "MatchMapping"
+                    and isinstance(getattr(node, "rest", None), str)):
+                bind(self.scope, node.rest, "local")
+            return super().generic_visit(node)
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                bind(self.scope, alias.asname or root, "module", alias.name)
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            for alias in node.names:
+                bind(self.scope, alias.asname or alias.name, "member",
+                     f"{node.module}.{alias.name}")
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            bind(self.scope, node.name, "local")
+            for item in node.decorator_list:
+                self.visit(item)
+            for item in (*node.args.defaults, *node.args.kw_defaults):
+                if item is not None:
+                    self.visit(item)
+            for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
+                if arg.annotation is not None:
+                    self.visit(arg.annotation)
+            if node.args.vararg and node.args.vararg.annotation:
+                self.visit(node.args.vararg.annotation)
+            if node.args.kwarg and node.args.kwarg.annotation:
+                self.visit(node.args.kwarg.annotation)
+            if node.returns is not None:
+                self.visit(node.returns)
+            outer = self.scope
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            bind_arguments(node, node.args)
+            for statement in node.body:
+                self.visit(statement)
+            self.scope = outer
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            for item in (*node.args.defaults, *node.args.kw_defaults):
+                if item is not None:
+                    self.visit(item)
+            outer = self.scope
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            bind_arguments(node, node.args)
+            self.visit(node.body)
+            self.scope = outer
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            bind(self.scope, node.name, "local")
+            for item in node.decorator_list:
+                self.visit(item)
+            for item in node.bases:
+                self.visit(item)
+            for item in node.keywords:
+                self.visit(item.value)
+            outer = self.scope
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            for statement in node.body:
+                self.visit(statement)
+            self.scope = outer
+
+        def visit_comprehension_scope(self, node: ast.AST,
+                                      value_nodes: tuple[ast.AST, ...]) -> None:
+            outer = self.scope
+            generators = node.generators
+            if generators:
+                self.visit(generators[0].iter)
+            scope_parent[node] = outer
+            scope_bindings[node] = {}
+            scope_globals[node] = set()
+            scope_nonlocals[node] = set()
+            self.scope = node
+            for index, generator in enumerate(generators):
+                if index:
+                    self.visit(generator.iter)
+                self.visit(generator.target)
+                for condition in generator.ifs:
+                    self.visit(condition)
+            for value in value_nodes:
+                self.visit(value)
+            self.scope = outer
+
+        def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+            self.visit(node.value)
+            target_scope = self.scope
+            while isinstance(target_scope, (ast.ListComp, ast.SetComp,
+                                             ast.DictComp, ast.GeneratorExp)):
+                target_scope = scope_parent.get(target_scope)
+            if isinstance(node.target, ast.Name):
+                node_scope[node.target] = target_scope
+                bind_store(target_scope, node.target.id)
+            else:
+                outer = self.scope
+                self.scope = target_scope
+                self.visit(node.target)
+                self.scope = outer
+
+        def visit_ListComp(self, node: ast.ListComp) -> None:
+            self.visit_comprehension_scope(node, (node.elt,))
+
+        visit_SetComp = visit_ListComp
+        visit_GeneratorExp = visit_ListComp
+
+        def visit_DictComp(self, node: ast.DictComp) -> None:
+            self.visit_comprehension_scope(node, (node.key, node.value))
+
+    LexicalBindings().visit(tree)
+
+    def enclosing_scope(scope: ast.AST) -> ast.AST | None:
+        """Function-like scopes do not close over an intervening class namespace."""
+        parent = scope_parent.get(scope)
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                              ast.ListComp, ast.SetComp, ast.DictComp,
+                              ast.GeneratorExp)):
+            while isinstance(parent, ast.ClassDef):
+                parent = scope_parent.get(parent)
+        return parent
+
+    def resolve(node: ast.Name) -> tuple[str, str | None]:
+        scope: ast.AST | None = node_scope.get(node, tree)
+        while scope is not None:
+            if node.id in scope_globals.get(scope, set()):
+                scope = tree
+            elif node.id in scope_nonlocals.get(scope, set()):
+                scope = enclosing_scope(scope)
+                while scope is not None and scope is not tree:
+                    records = scope_bindings.get(scope, {}).get(node.id, set())
+                    if records:
+                        return (next(iter(records)) if len(records) == 1
+                                else ("ambiguous", None))
+                    scope = enclosing_scope(scope)
+                return ("unbound", None)
+            records = scope_bindings.get(scope, {}).get(node.id, set())
+            if records:
+                return next(iter(records)) if len(records) == 1 else ("ambiguous", None)
+            scope = enclosing_scope(scope)
+        return ("unbound", None)
+
+    return resolve, scope_bindings
+
+
 def process_shape(text: str) -> dict[str, object]:
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
         return {"boundary_ok": False, "observer_ok": False, "detail": f"syntax:{exc}"}
     owners = owner_map(tree)
+    resolve_binding, scope_bindings = lexical_bindings(tree)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     annotation_nodes: set[ast.AST] = set()
     for candidate in ast.walk(tree):
@@ -354,6 +569,11 @@ def process_shape(text: str) -> dict[str, object]:
         'AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"'
     ).body[0]
     protected_roots={"AUTHORITY_LIB","REPOSITORY_ROOT"}
+    if scope_bindings.get(tree, {}).get("os", set()) != {("module", "os")}:
+        violations.append(("<module>", 0, "exact-os-import-binding"))
+    if any(len(bindings.get("os", set())) > 1
+           for bindings in scope_bindings.values()):
+        violations.append(("<module>", 0, "ambiguous-os-binding"))
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
@@ -554,6 +774,12 @@ def process_shape(text: str) -> dict[str, object]:
                     key = f"{owner}:flock"
                     fcntl_effect_counts[key] = fcntl_effect_counts.get(key, 0) + 1
         if isinstance(node, ast.Name) and node.id == "os" and isinstance(node.ctx, ast.Load):
+            binding_kind, binding_value = resolve_binding(node)
+            if binding_kind == "ambiguous":
+                violations.append((owner, node.lineno, "ambiguous-os-binding"))
+                continue
+            if (binding_kind, binding_value) != ("module", "os"):
+                continue
             parent = parents.get(node)
             safe_getattr = (
                 isinstance(parent, ast.Call)
@@ -875,9 +1101,73 @@ def h031_helper_factory():
     return h031_nested_helper
 h031_helper_factory()(0)
 """.strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_global_direct_helper(fd):
+    global os
+    return os.fstat(fd)
+h031_global_direct_helper(0)
+""".strip()),
         inject_run_codex_prefix(
             source_text,
             "h031_unrelated = next(map(lambda value: value + 1, (1,)))"),
+    ]
+    shadowed_os_positives = [
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_parameter_shadow(os):
+    return os.fstat(1)
+h031_parameter_shadow(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_local_shadow():
+    os = H031LocalOS()
+    return os.fstat(1)
+h031_local_shadow()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+h031_shadowed_values = [os.fstat for os in (H031LocalOS(),)]
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031ShadowError(Exception):
+    def fstat(self, value):
+        return value
+def h031_exception_shadow_control():
+    try:
+        raise H031ShadowError()
+    except H031ShadowError as os:
+        return os.fstat(1)
+h031_exception_shadow_control()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_local_sort_shadow(os):
+    values = [1]
+    values.sort(key=os.fstat)
+    return values
+h031_local_sort_shadow(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+def h031_nonlocal_shadow_control():
+    os = H031LocalOS()
+    def h031_nested_nonlocal():
+        nonlocal os
+        return os.fstat(1)
+    return h031_nested_nonlocal()
+h031_nonlocal_shadow_control()
+""".strip()),
     ]
     protected_fstat_transfer_mutants = [
         inject_run_codex_prefix(source_text, """
@@ -919,6 +1209,33 @@ class H031Box:
 h031_box = H031Box()
 h031_box.probe = os.fstat
 """.strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassShadow:
+    os = object()
+    def h031_bad_method(self):
+        return os.fstat
+""".strip()),
+    ]
+    os_binding_mutants = [
+        source_text + "\n\nos = object()\n",
+        inject_run_codex_prefix(source_text, """
+def h031_bad_global_rebind():
+    global os
+    os = object()
+h031_bad_global_rebind()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_bad_ambiguous_local():
+    import os
+    os = object()
+    return os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+def h031_bad_global_walrus():
+    global os
+    [(os := object()) for _ in (0,)]
+h031_bad_global_walrus()
+""".strip()),
     ]
     profile_visibility_mutants = [
         source_text + "\n\nh031_profile_visible = sys.getprofile()\n",
@@ -927,11 +1244,19 @@ h031_box.probe = os.fstat
     direct_fstat_source_ok = all(
         process_shape(candidate).get("boundary_ok") is True
         for candidate in direct_fstat_positives)
+    shadowed_os_shapes = [process_shape(candidate) for candidate in shadowed_os_positives]
+    shadowed_os_source_ok = all(
+        item.get("boundary_ok") is True for item in shadowed_os_shapes)
     protected_fstat_transfers_rejected = all(
         process_shape(candidate).get("boundary_ok") is False
         and "protected-fstat-not-direct-call"
             in str(process_shape(candidate).get("detail"))
         for candidate in protected_fstat_transfer_mutants)
+    imported_os_rebinding_rejected = all(
+        process_shape(candidate).get("boundary_ok") is False
+        and any(reason in str(process_shape(candidate).get("detail"))
+                for reason in ("exact-os-import-binding", "ambiguous-os-binding"))
+        for candidate in os_binding_mutants)
     profile_invisible_to_admitted_source = all(
         process_shape(candidate).get("boundary_ok") is False
         for candidate in profile_visibility_mutants)
@@ -940,15 +1265,22 @@ h031_box.probe = os.fstat
     check("K_REQUIRED_API", required_api_ok,
           f"present={sorted(required_api & shape['funcs'])}")
     check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"])
-          and direct_fstat_source_ok and protected_fstat_transfers_rejected
+          and direct_fstat_source_ok and shadowed_os_source_ok
+          and protected_fstat_transfers_rejected
+          and imported_os_rebinding_rejected
           and profile_invisible_to_admitted_source,
           f"{shape['detail']} direct_fstat_source={direct_fstat_source_ok} "
+          f"shadowed_os_source={shadowed_os_source_ok} "
+          f"shadowed_os_shapes={[item.get('detail') for item in shadowed_os_shapes]} "
           f"protected_fstat_transfers_rejected={protected_fstat_transfers_rejected} "
+          f"imported_os_rebinding_rejected={imported_os_rebinding_rejected} "
           f"profile_visibility_rejected={profile_invisible_to_admitted_source}")
     check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
     if (not h031_static or not h032_static or not required_api_ok
             or not shape["boundary_ok"] or not direct_fstat_source_ok
+            or not shadowed_os_source_ok
             or not protected_fstat_transfers_rejected
+            or not imported_os_rebinding_rejected
             or not profile_invisible_to_admitted_source or not shape["observer_ok"]):
         raise ProductFailure("static contract rejected before upstream or subject import")
 
