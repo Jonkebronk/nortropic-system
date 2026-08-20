@@ -2212,7 +2212,7 @@ def run_codex(sink, canonical, invocation, run, role):
     post_retained_discovery = None; post_retained_effects: list[str] = []
     post_retained_cases = {}; post_retained_omission_caught = False
     r59_repeated_fstat_connected = True; r59_zero_effect_reorder_connected = True
-    r60_captured_fstat_connected = True; r60_captured_helper_connected = True
+    r62_direct_helper_connected = True
     r59_variant_detail = {"skipped": True}
     if kernel_structure_ok and kernel_integration_structure_ok \
             and hasattr(module, "consume_private_result"):
@@ -2284,7 +2284,6 @@ def run_codex(sink, canonical, invocation, run, role):
             setup_spawn_faults_ok = (fixed_faults_ok and discovery_ok
                                      and post_matrix_ok and post_retained_omission_caught)
 
-            variant_preexec_observations = {}
             def schedule_variant_case(variant_text: str, label: str,
                                       *, inject_ordinal: int | None = None):
                 global module
@@ -2296,45 +2295,20 @@ def run_codex(sink, canonical, invocation, run, role):
                 variant_module = importlib.util.module_from_spec(variant_spec)
                 variant_module.__file__ = str(source)
                 sys.modules[variant_name] = variant_module
-                variant_profile_state = [None]
-                preexec_observed = [False]
-                previous_variant_profile = sys.getprofile()
-                def variant_profile_router(frame, event, arg):
-                    callback = variant_profile_state[0]
-                    if callback is not None:
-                        callback(frame, event, arg)
-                def preexec_profile(frame, event, arg):
-                    if (event == "call"
-                            and frame.f_globals.get("__name__") == variant_name):
-                        preexec_observed[0] = True
-                # Installed before exec: captured defaults and aliases cannot
-                # predate the actual-call identity observer used during run_codex.
-                variant_profile_state[0] = preexec_profile
-                sys.setprofile(variant_profile_router)
                 saved_module = module
                 try:
                     exec(compile(variant_text, str(source), "exec"),
                          variant_module.__dict__)
-                    if not preexec_observed[0]:
-                        raise RuntimeError("R60 pre-exec identity observer did not run")
-                    variant_preexec_observations[label] = True
-                    variant_profile_state[0] = None
                     variant_module.now_id = fixture_now_id
                     module = variant_module
                     if inject_ordinal is None:
                         return setup_spawn_fault_case(
                             "discover_post_retained", result_root_ordinal,
-                            effect_tree=variant_tree,
-                            profile_state=variant_profile_state,
-                            profile_preinstalled=True)
+                            effect_tree=variant_tree)
                     return setup_spawn_fault_case(
                         "post_retained_setup_effect", result_root_ordinal,
-                        effect_tree=variant_tree, post_effect_target=inject_ordinal,
-                        profile_state=variant_profile_state,
-                        profile_preinstalled=True)
+                        effect_tree=variant_tree, post_effect_target=inject_ordinal)
                 finally:
-                    variant_profile_state[0] = None
-                    sys.setprofile(previous_variant_profile)
                     module = saved_module
                     sys.modules.pop(variant_name, None)
 
@@ -2363,57 +2337,29 @@ def run_codex(sink, canonical, invocation, run, role):
             run_signature = (
                 "def run_codex(repo: Path, wt: Path, role: str, prompt: str)"
                 " -> dict[str, Any]:")
-            captured_signature = (
-                "def run_codex(repo: Path, wt: Path, role: str, prompt: str, "
-                "captured_fstat=os.fstat) -> dict[str, Any]:")
-            captured_text = source_text.replace(run_signature, captured_signature, 1)
-            captured_text = captured_text.replace(
-                retained_line, retained_line + "        captured_fstat(sink_fd)\n", 1)
-            captured_shape_ok = (
-                captured_text != source_text
-                and captured_text.count(captured_signature) == 1
-                and captured_text.count("captured_fstat(sink_fd)") == 1)
-            captured_discovery = (schedule_variant_case(
-                captured_text, "captured_fstat_discovery") if captured_shape_ok else None)
-            captured_injection = (schedule_variant_case(
-                captured_text, "captured_fstat_injection", inject_ordinal=0)
-                if captured_discovery is not None
-                and captured_discovery[5][:1] == ["os.fstat"] else None)
-            r60_captured_fstat_connected = bool(
-                captured_discovery is not None and captured_injection is not None
-                and captured_discovery[0][1].get("_gate_profile_sink_fstats")
-                    == [("retained", "os.fstat"), ("post_retained", "os.fstat")]
-                and captured_injection[1]
-                and captured_injection[5] == ["os.fstat"]
-                and captured_injection[0][1].get("_gate_profile_sink_fstats")
-                    == [("retained", "os.fstat"), ("post_retained", "os.fstat")]
-                and rejected_clean(captured_injection[0], expected_process_starts=0,
-                                   expected_output_paths=1,
-                                   expected_journal_starts=(0, 1)))
-
             helper_definition = (
-                "def r60_captured_helper(fd: int):\n"
+                "def _fstat(fd: int):\n"
                 "    return os.fstat(fd)\n\n\n")
             helper_text = source_text.replace(
-                run_signature,
-                helper_definition + run_signature.replace(
-                    ") ->", ", captured_helper=r60_captured_helper) ->"), 1)
+                run_signature, helper_definition + run_signature, 1)
             helper_text = helper_text.replace(
-                retained_line, retained_line + "        captured_helper(sink_fd)\n", 1)
+                retained_line,
+                retained_line + "        helper_alias = _fstat\n"
+                "        helper_alias(sink_fd)\n", 1)
             helper_shape_ok = (
                 helper_text != source_text
-                and helper_text.count("def r60_captured_helper") == 1
-                and helper_text.count("captured_helper(sink_fd)") == 1)
+                and helper_text.count("def _fstat") == 1
+                and helper_text.count("helper_alias(sink_fd)") == 1)
             helper_discovery = (schedule_variant_case(
-                helper_text, "captured_helper_discovery") if helper_shape_ok else None)
+                helper_text, "direct_helper_discovery") if helper_shape_ok else None)
             helper_injections = {}
             if helper_discovery is not None and helper_discovery[5][:2] == [
-                    "helper.r60_captured_helper", "os.fstat"]:
+                    "helper._fstat", "os.fstat"]:
                 for helper_ordinal in range(2):
                     helper_injections[helper_ordinal] = schedule_variant_case(
-                        helper_text, f"captured_helper_injection_{helper_ordinal}",
+                        helper_text, f"direct_helper_injection_{helper_ordinal}",
                         inject_ordinal=helper_ordinal)
-            r60_captured_helper_connected = bool(
+            r62_direct_helper_connected = bool(
                 helper_discovery is not None
                 and helper_discovery[0][1].get("_gate_profile_sink_fstats")
                     == [("retained", "os.fstat"), ("post_retained", "os.fstat")]
@@ -2463,17 +2409,10 @@ def run_codex(sink, canonical, invocation, run, role):
                 "repeated_discovered": (repeated_discovery[5]
                                         if repeated_discovery is not None else None),
                 "repeated_injected": r59_repeated_fstat_connected,
-                "captured_shape": captured_shape_ok,
-                "captured_discovered": (captured_discovery[5]
-                                         if captured_discovery is not None else None),
-                "captured_sink_fstats": (captured_discovery[0][1].get(
-                    "_gate_profile_sink_fstats") if captured_discovery is not None else None),
-                "captured_injected": r60_captured_fstat_connected,
                 "helper_shape": helper_shape_ok,
                 "helper_discovered": (helper_discovery[5]
                                        if helper_discovery is not None else None),
-                "helper_injected": r60_captured_helper_connected,
-                "preexec_observed": dict(variant_preexec_observations),
+                "helper_injected": r62_direct_helper_connected,
                 "reordered_shape": reordered_shape_ok,
                 "reordered_discovered": (reordered_discovery[5]
                                          if reordered_discovery is not None else None),
@@ -2481,8 +2420,7 @@ def run_codex(sink, canonical, invocation, run, role):
             }
             setup_spawn_faults_ok = (setup_spawn_faults_ok
                                      and r59_repeated_fstat_connected
-                                     and r60_captured_fstat_connected
-                                     and r60_captured_helper_connected
+                                     and r62_direct_helper_connected
                                      and r59_zero_effect_reorder_connected)
 
     journal_write = os.write; journal_fsync = os.fsync
@@ -2754,8 +2692,7 @@ def run_codex(sink, canonical, invocation, run, role):
                            and r59_post_retained_dynamic_positive
                            and r59_empty_interval_positive
                            and r59_repeated_fstat_connected
-                           and r60_captured_fstat_connected
-                           and r60_captured_helper_connected
+                           and r62_direct_helper_connected
                            and r59_zero_effect_reorder_connected
                            and r58_distinct_popen_trace_positive
                            and all(r57_zero_start_mutants))

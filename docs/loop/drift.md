@@ -1465,3 +1465,31 @@ laundering reject with the exact protected-callback finding. Thus H032's existin
 no H032 instrumentation, production, provider authority, G20, H017 or live-model
 behavior changes. H031 remains bound to the final unchanged H032 gate bytes and its
 prebuilder result remains 94 PASS / 2 FAIL solely for the structured-result product gap.
+
+### 2026-08-20 — H032/H031 R62 direct protected-fstat reset
+
+Independent review found that R61's narrow-looking provenance graph was neither
+complete nor precise: valid sibling values could inherit a container taint, while
+`*args`, `**kwargs`, lambda defaults, comprehensions and several C callback surfaces
+could still transfer the genuine `os.fstat` callable outside the observable ordinal
+router. Owner R62 expressly supersedes the R60/R61 captured-C and transfer-legitimacy
+clauses instead of extending that graph.
+
+The closed replacement is one local source rule over the complete H031 autopilot
+source envelope. Every actual unaliased `os.fstat` Attribute must itself be the direct
+`Call.func` in `os.fstat(...)`. Capturing the C callable in a default or lambda,
+assigning, returning, storing, passing, expanding through `*`/`**`, comprehending or
+supplying it to `map`, `sort` or another callback therefore rejects at the origin.
+The existing exact unaliased `os` import, proxy and reflection restrictions remain the
+module-identity boundary. No replacement dataflow or control-flow interpreter exists.
+
+Python helpers and closures remain ordinary refactoring surfaces when their body
+directly invokes `os.fstat`; aliases of those Python callables do not transfer the C
+capability. Connected controls place direct, helper, helper-alias and nested-helper
+positives in the actual `run_codex` body, alongside unrelated `map`/`next`, and place
+default/map/sort/star/keyword/lambda/container/return/comprehension/object-store
+negatives in that same body. H032 removes the captured-C connected case and retains
+only direct C events plus Python helper-frame/internal-effect ordinals. After H032
+bytes are final, H031 alone binds their exact digest. Production, provider authority,
+G20, H017 and live-model behavior remain untouched; the structured-result boundary
+remains the sole intended product RED.

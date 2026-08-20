@@ -318,259 +318,6 @@ def owner_map(tree: ast.Module) -> dict[ast.AST, str]:
     return owners
 
 
-def protected_callback_transfers(tree: ast.Module) -> list[tuple[int, str]]:
-    """Reject an unobservable C-to-C transfer of the retained-fd probe.
-
-    H032 can observe a captured C callable when Python invokes it directly and can
-    observe every Python helper/closure frame.  CPython does not emit the nested
-    c_call when a C executor such as map invokes another captured C callable.  This
-    deliberately small graph follows only the protected os.fstat capability; it is
-    not a Python control-flow interpreter and unrelated higher-order code is inert.
-    """
-    scope_parent: dict[ast.AST, ast.AST | None] = {tree: None}
-    node_scope: dict[ast.AST, ast.AST] = {}
-    scopes: list[ast.AST] = [tree]
-
-    def mark(node: ast.AST, scope: ast.AST) -> None:
-        node_scope[node] = scope
-        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
-            scope_parent[node] = scope
-            scopes.append(node)
-            for generator in node.generators:
-                mark(generator.iter, node)
-                mark(generator.target, node)
-                for condition in generator.ifs:
-                    mark(condition, node)
-            if isinstance(node, ast.DictComp):
-                mark(node.key, node)
-                mark(node.value, node)
-            else:
-                mark(node.elt, node)
-            return
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for decorator in node.decorator_list:
-                    mark(decorator, scope)
-                for default in (*node.args.defaults,
-                                *(item for item in node.args.kw_defaults if item is not None)):
-                    mark(default, scope)
-                if node.returns is not None:
-                    mark(node.returns, scope)
-            scope_parent[node] = scope
-            scopes.append(node)
-            for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
-                node_scope[arg] = node
-            if node.args.vararg is not None:
-                node_scope[node.args.vararg] = node
-            if node.args.kwarg is not None:
-                node_scope[node.args.kwarg] = node
-            body = node.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else [node.body]
-            for child in body:
-                mark(child, node)
-            return
-        for child in ast.iter_child_nodes(node):
-            mark(child, scope)
-
-    mark(tree, tree)
-    local_names: dict[ast.AST, set[str]] = {scope: set() for scope in scopes}
-    function_bindings: dict[tuple[str, int, str], ast.AST] = {}
-
-    def variable(scope: ast.AST, name: str) -> tuple[str, int, str]:
-        return ("var", id(scope), name)
-
-    for scope in scopes:
-        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            local_names[scope].update(
-                arg.arg for arg in (*scope.args.posonlyargs, *scope.args.args,
-                                    *scope.args.kwonlyargs))
-            if scope.args.vararg is not None:
-                local_names[scope].add(scope.args.vararg.arg)
-            if scope.args.kwarg is not None:
-                local_names[scope].add(scope.args.kwarg.arg)
-    for node in ast.walk(tree):
-        scope = node_scope.get(node, tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            local_names[scope].add(node.id)
-        elif isinstance(node, ast.Import):
-            local_names[scope].update(alias.asname or alias.name.split(".", 1)[0]
-                                      for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            local_names[scope].update(alias.asname or alias.name for alias in node.names)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            defining_scope = node_scope.get(node, tree)
-            local_names[defining_scope].add(node.name)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                function_bindings[variable(defining_scope, node.name)] = node
-        elif isinstance(node, ast.ExceptHandler) and isinstance(node.name, str):
-            local_names[scope].add(node.name)
-
-    def resolve(scope: ast.AST, name: str) -> tuple[str, int, str]:
-        current: ast.AST | None = scope
-        while current is not None:
-            if name in local_names[current]:
-                return variable(current, name)
-            current = scope_parent.get(current)
-        return variable(tree, name)
-
-    edges: dict[tuple[object, ...], set[tuple[object, ...]]] = {}
-    protected: set[tuple[object, ...]] = set()
-    c_executors: set[tuple[object, ...]] = set()
-    python_functions: dict[tuple[object, ...], set[ast.AST]] = {
-        binding: {function} for binding, function in function_bindings.items()
-    }
-    containers: list[ast.AST] = []
-    object_stores: list[tuple[ast.AST, tuple[object, ...]]] = []
-    calls: list[ast.Call] = []
-
-    def expression(node: ast.AST) -> tuple[object, ...]:
-        return ("expr", id(node))
-
-    def returned(function: ast.AST) -> tuple[object, ...]:
-        return ("return", id(function))
-
-    def add_edge(target: tuple[object, ...], source: tuple[object, ...]) -> bool:
-        sources = edges.setdefault(target, set())
-        before = len(sources)
-        sources.add(source)
-        return len(sources) != before
-
-    def is_unbound_builtin(scope: ast.AST, name: str) -> bool:
-        current: ast.AST | None = scope
-        while current is not None:
-            if name in local_names[current]:
-                return False
-            current = scope_parent.get(current)
-        return True
-
-    def target_edges(target: ast.AST, source: tuple[object, ...]) -> None:
-        if isinstance(target, ast.Name):
-            add_edge(resolve(node_scope.get(target, tree), target.id), source)
-        elif isinstance(target, (ast.Tuple, ast.List)):
-            for item in target.elts:
-                target_edges(item, source)
-        elif isinstance(target, ast.Starred):
-            target_edges(target.value, source)
-        elif isinstance(target, (ast.Attribute, ast.Subscript)):
-            object_stores.append((target, source))
-            if isinstance(target.value, ast.Name):
-                add_edge(resolve(node_scope.get(target.value, tree), target.value.id), source)
-            else:
-                add_edge(expression(target.value), source)
-
-    module_os = variable(tree, "os")
-    for node in ast.walk(tree):
-        scope = node_scope.get(node, tree)
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            add_edge(expression(node), resolve(scope, node.id))
-            if (node.id in {"map", "filter", "sorted", "min", "max"}
-                    and is_unbound_builtin(scope, node.id)):
-                c_executors.add(expression(node))
-        elif (isinstance(node, ast.Attribute) and node.attr == "fstat"
-              and isinstance(node.value, ast.Name)
-              and resolve(scope, node.value.id) == module_os):
-            protected.add(expression(node))
-        elif isinstance(node, ast.Attribute):
-            add_edge(expression(node), expression(node.value))
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                target_edges(target, expression(node.value))
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            target_edges(node.target, expression(node.value))
-        elif isinstance(node, ast.NamedExpr):
-            target_edges(node.target, expression(node.value))
-            add_edge(expression(node), expression(node.value))
-        elif isinstance(node, (ast.Tuple, ast.List, ast.Set)):
-            containers.append(node)
-            for item in node.elts:
-                add_edge(expression(node), expression(item))
-        elif isinstance(node, ast.Dict):
-            containers.append(node)
-            for item in (*node.keys, *node.values):
-                if item is not None:
-                    add_edge(expression(node), expression(item))
-        elif isinstance(node, ast.Subscript):
-            add_edge(expression(node), expression(node.value))
-        elif isinstance(node, (ast.IfExp, ast.BoolOp)):
-            values = node.values if isinstance(node, ast.BoolOp) else [node.body, node.orelse]
-            for item in values:
-                add_edge(expression(node), expression(item))
-        elif isinstance(node, ast.Return) and node.value is not None:
-            function = scope if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)) else None
-            if function is not None:
-                add_edge(returned(function), expression(node.value))
-        elif isinstance(node, ast.Lambda):
-            add_edge(returned(node), expression(node.body))
-            python_functions.setdefault(expression(node), set()).add(node)
-        elif isinstance(node, ast.Call):
-            calls.append(node)
-            function = None
-            if isinstance(node.func, ast.Name):
-                function = function_bindings.get(resolve(scope, node.func.id))
-            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                positional = [*function.args.posonlyargs, *function.args.args]
-                for formal, actual in zip(positional, node.args):
-                    if not isinstance(actual, ast.Starred):
-                        add_edge(variable(function, formal.arg), expression(actual))
-                formal_names = {arg.arg: arg for arg in (*positional, *function.args.kwonlyargs)}
-                for keyword in node.keywords:
-                    if keyword.arg in formal_names:
-                        add_edge(variable(function, keyword.arg), expression(keyword.value))
-                add_edge(expression(node), returned(function))
-
-    for function in [scope for scope in scopes
-                     if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-        positional = [*function.args.posonlyargs, *function.args.args]
-        default_formals = positional[len(positional) - len(function.args.defaults):]
-        for formal, default in zip(default_formals, function.args.defaults):
-            add_edge(variable(function, formal.arg), expression(default))
-        for formal, default in zip(function.args.kwonlyargs, function.args.kw_defaults):
-            if default is not None:
-                add_edge(variable(function, formal.arg), expression(default))
-
-    changed = True
-    while changed:
-        changed = False
-        for target, sources in edges.items():
-            if target not in protected and any(source in protected for source in sources):
-                protected.add(target)
-                changed = True
-            if target not in c_executors and any(source in c_executors for source in sources):
-                c_executors.add(target)
-                changed = True
-            inherited = set().union(*(python_functions.get(source, set()) for source in sources))
-            if inherited - python_functions.get(target, set()):
-                python_functions.setdefault(target, set()).update(inherited)
-                changed = True
-        for call in calls:
-            for function in python_functions.get(expression(call.func), set()):
-                if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-                    continue
-                positional = [*function.args.posonlyargs, *function.args.args]
-                for formal, actual in zip(positional, call.args):
-                    if not isinstance(actual, ast.Starred):
-                        changed |= add_edge(variable(function, formal.arg), expression(actual))
-                formal_names = {arg.arg: arg for arg in (*positional, *function.args.kwonlyargs)}
-                for keyword in call.keywords:
-                    if keyword.arg in formal_names:
-                        changed |= add_edge(variable(function, keyword.arg), expression(keyword.value))
-                changed |= add_edge(expression(call), returned(function))
-
-    findings: list[tuple[int, str]] = []
-    for container in containers:
-        if expression(container) in protected:
-            findings.append((getattr(container, "lineno", 0), "protected-callback-container"))
-    for target, source in object_stores:
-        if source in protected:
-            findings.append((getattr(target, "lineno", 0), "protected-callback-container"))
-    for call in calls:
-        transferred = [item for item in call.args if expression(item) in protected]
-        transferred.extend(keyword.value for keyword in call.keywords
-                           if expression(keyword.value) in protected)
-        if transferred and expression(call.func) in c_executors:
-            findings.append((getattr(call, "lineno", 0), "protected-callback-c-executor"))
-    return sorted(set(findings))
-
-
 def process_shape(text: str) -> dict[str, object]:
     try:
         tree = ast.parse(text)
@@ -607,9 +354,6 @@ def process_shape(text: str) -> dict[str, object]:
         'AUTHORITY_LIB = Path(__file__).resolve().parents[1] / "controller/authority"'
     ).body[0]
     protected_roots={"AUTHORITY_LIB","REPOSITORY_ROOT"}
-    protected_callback_findings = protected_callback_transfers(tree)
-    violations.extend(("<capability>", line, reason)
-                      for line, reason in protected_callback_findings)
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
@@ -824,6 +568,12 @@ def process_shape(text: str) -> dict[str, object]:
                 if parent.attr not in ALLOWED_OS_ATTRS and parent.attr not in PROCESS_ATTRS["os"]:
                     violations.append((owner, node.lineno,
                                        f"unapproved-os-attribute:os.{parent.attr}"))
+                if parent.attr == "fstat":
+                    effect_parent = parents.get(parent)
+                    if not (isinstance(effect_parent, ast.Call)
+                            and effect_parent.func is parent):
+                        violations.append((owner, node.lineno,
+                                           "protected-fstat-not-direct-call"))
                 if parent.attr == "environ":
                     environ_parent = parents.get(parent)
                     environ_grandparent = parents.get(environ_parent)
@@ -1092,7 +842,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "82a76c2c9476a2207ae42970dea62cc78a8e0ccf11ca63ea2715810dc7a65fd2")
+                       == "a767e95990f145acad2cf807b17820dec91199660497fdf915765099f15e0f0a")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
@@ -1105,119 +855,83 @@ try:
         print("H031_GATE_RESULT=FAIL")
         raise SystemExit(1)
     shape = process_shape(source_text)
-    captured_capability_positives = [
+    direct_fstat_positives = [
+        inject_run_codex_prefix(source_text, "os.fstat(0)"),
         inject_run_codex_prefix(source_text, """
-def h031_direct_captured(fd, probe=os.fstat):
-    return probe(fd)
-h031_direct_captured(0)
-""".strip()),
-        inject_run_codex_prefix(source_text, """
-def h031_python_helper(fd):
+def _fstat(fd):
     return os.fstat(fd)
-def h031_helper_captured(fd, probe=h031_python_helper):
-    return probe(fd)
-h031_helper_captured(0)
+_fstat(0)
 """.strip()),
         inject_run_codex_prefix(source_text, """
-def h031_closure_factory(probe=os.fstat):
-    def h031_closure(fd):
-        return probe(fd)
-    return h031_closure
-h031_closure_factory()(0)
+def h031_aliased_python_helper(fd):
+    return os.fstat(fd)
+h031_helper_alias = h031_aliased_python_helper
+h031_helper_alias(0)
 """.strip()),
         inject_run_codex_prefix(source_text, """
-def h031_python_relay(callback, fd):
-    alias = callback
-    return alias(fd)
-def h031_relay_captured(fd, probe=os.fstat):
-    relay_alias = h031_python_relay
-    return relay_alias(probe, fd)
-h031_relay_captured(0)
+def h031_helper_factory():
+    def h031_nested_helper(fd):
+        return os.fstat(fd)
+    return h031_nested_helper
+h031_helper_factory()(0)
 """.strip()),
         inject_run_codex_prefix(
             source_text,
             "h031_unrelated = next(map(lambda value: value + 1, (1,)))"),
-        inject_run_codex_prefix(source_text, """
-def map(callback, items):
-    return callback(items[0])
-def h031_shadowed_map(fd, probe=os.fstat):
-    return map(probe, (fd,))
-h031_shadowed_map(0)
-""".strip()),
     ]
-    hidden_c_callback_mutants = [
+    protected_fstat_transfer_mutants = [
         inject_run_codex_prefix(source_text, """
-def h031_hidden_c_dispatch(fd, captured_fstat=os.fstat):
-    return next(map(captured_fstat, (fd,)))
-h031_hidden_c_dispatch(0)
+def h031_bad_default(fd, probe=os.fstat):
+    return probe(fd)
+h031_bad_default(0)
+""".strip()),
+        inject_run_codex_prefix(source_text,
+                                "next(map(os.fstat, (0,)))"),
+        inject_run_codex_prefix(source_text, """
+h031_items = [0]
+h031_items.sort(key=os.fstat)
 """.strip()),
         inject_run_codex_prefix(source_text, """
-def h031_hidden_alias(fd, captured_fstat=os.fstat):
-    callback = captured_fstat
-    executor = map
-    return next(executor(callback, (fd,)))
-h031_hidden_alias(0)
+h031_args = (os.fstat, (0,))
+next(map(*h031_args))
 """.strip()),
         inject_run_codex_prefix(source_text, """
-def h031_hidden_executor_container(fd, captured_fstat=os.fstat):
-    executors = {"run": map}
-    return next(executors["run"](captured_fstat, (fd,)))
-h031_hidden_executor_container(0)
+def h031_bad_kwargs(*, function, iterable):
+    return next(map(function, iterable))
+h031_bad_kwargs(**{"function": os.fstat, "iterable": (0,)})
 """.strip()),
         inject_run_codex_prefix(source_text, """
-class H031ExecutorBox:
+h031_bad_lambda = lambda fd, probe=os.fstat: probe(fd)
+h031_bad_lambda(0)
+""".strip()),
+        inject_run_codex_prefix(source_text,
+                                "h031_callbacks = {\"probe\": os.fstat}"),
+        inject_run_codex_prefix(source_text, """
+def h031_bad_return():
+    return os.fstat
+h031_bad_return()(0)
+""".strip()),
+        inject_run_codex_prefix(source_text,
+                                "h031_callbacks = [os.fstat for _ in (0,)]"),
+        inject_run_codex_prefix(source_text, """
+class H031Box:
     pass
-def h031_hidden_executor_attribute(fd, captured_fstat=os.fstat):
-    holder = H031ExecutorBox()
-    holder.run = map
-    return next(holder.run(captured_fstat, (fd,)))
-h031_hidden_executor_attribute(0)
-""".strip()),
-        inject_run_codex_prefix(source_text, """
-def h031_hidden_container(fd, captured_fstat=os.fstat):
-    callbacks = {"probe": captured_fstat}
-    return callbacks["probe"](fd)
-h031_hidden_container(0)
-""".strip()),
-        inject_run_codex_prefix(source_text, """
-class H031CallbackBox:
-    pass
-def h031_hidden_attribute(fd, captured_fstat=os.fstat):
-    holder = H031CallbackBox()
-    holder.probe = captured_fstat
-    return holder.probe(fd)
-h031_hidden_attribute(0)
-""".strip()),
-        inject_run_codex_prefix(source_text, """
-def h031_hidden_return(captured_fstat=os.fstat):
-    return captured_fstat
-next(map(h031_hidden_return(), (0,)))
-""".strip()),
-        inject_run_codex_prefix(source_text, """
-def h031_hidden_filter(fd, captured_fstat=os.fstat):
-    return next(filter(captured_fstat, (fd,)))
-h031_hidden_filter(0)
-""".strip()),
-        inject_run_codex_prefix(source_text, """
-def h031_hidden_key(fd, captured_fstat=os.fstat):
-    return sorted((fd,), key=captured_fstat)
-h031_hidden_key(0)
+h031_box = H031Box()
+h031_box.probe = os.fstat
 """.strip()),
     ]
     profile_visibility_mutants = [
         source_text + "\n\nh031_profile_visible = sys.getprofile()\n",
         source_text + "\n\ndef h031_profile_default(probe=sys.getprofile):\n    return probe\n",
     ]
-    captured_capability_shapes = [process_shape(candidate)
-                                  for candidate in captured_capability_positives]
-    hidden_c_callback_shapes = [process_shape(candidate)
-                                for candidate in hidden_c_callback_mutants]
-    captured_capability_source_ok = all(
-        item.get("boundary_ok") is True for item in captured_capability_shapes)
-    hidden_c_callback_rejected = all(
-        item.get("boundary_ok") is False
-        and "protected-callback-" in str(item.get("detail"))
-        for item in hidden_c_callback_shapes)
+    direct_fstat_source_ok = all(
+        process_shape(candidate).get("boundary_ok") is True
+        for candidate in direct_fstat_positives)
+    protected_fstat_transfers_rejected = all(
+        process_shape(candidate).get("boundary_ok") is False
+        and "protected-fstat-not-direct-call"
+            in str(process_shape(candidate).get("detail"))
+        for candidate in protected_fstat_transfer_mutants)
     profile_invisible_to_admitted_source = all(
         process_shape(candidate).get("boundary_ok") is False
         for candidate in profile_visibility_mutants)
@@ -1226,15 +940,15 @@ h031_hidden_key(0)
     check("K_REQUIRED_API", required_api_ok,
           f"present={sorted(required_api & shape['funcs'])}")
     check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"])
-          and captured_capability_source_ok and hidden_c_callback_rejected
+          and direct_fstat_source_ok and protected_fstat_transfers_rejected
           and profile_invisible_to_admitted_source,
-          f"{shape['detail']} captured_capability_source={captured_capability_source_ok} "
-          f"hidden_c_callback_rejected={hidden_c_callback_rejected} "
+          f"{shape['detail']} direct_fstat_source={direct_fstat_source_ok} "
+          f"protected_fstat_transfers_rejected={protected_fstat_transfers_rejected} "
           f"profile_visibility_rejected={profile_invisible_to_admitted_source}")
     check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
     if (not h031_static or not h032_static or not required_api_ok
-            or not shape["boundary_ok"] or not captured_capability_source_ok
-            or not hidden_c_callback_rejected
+            or not shape["boundary_ok"] or not direct_fstat_source_ok
+            or not protected_fstat_transfers_rejected
             or not profile_invisible_to_admitted_source or not shape["observer_ok"]):
         raise ProductFailure("static contract rejected before upstream or subject import")
 
