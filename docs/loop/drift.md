@@ -1355,3 +1355,26 @@ residue, absent staging/helper roots and zero remaining sink fd aliases. Metamor
 allocation and journal schedules prove that reordering remains admissible. This changes no
 production or H017/G20 authority and keeps the absent structured-result implementation as
 the sole actual-product RED.
+
+### 2026-08-20 — H032 R58 attempt-scoped journal and distinct effect fault
+
+R57's journal helper caught JSON errors and discarded non-object lines before counting
+AGENT_START. A malformed append could therefore coexist with one valid route record and
+still satisfy the count. R58 snapshots the pre-attempt `events.jsonl` by no-follow opened
+object identity and bounded stable bytes, then parses exactly the appended suffix. The
+suffix must be complete newline-terminated UTF-8; every line is duplicate-free strict JSON
+and an event object; an AGENT_START has the full frozen route shape. Malformed unrelated,
+non-object, truncated, valid-plus-truncated, duplicate-valid, invalid-UTF8, replaced-object
+and changed-prefix controls reject. Legitimate prior history remains the identical prefix
+and only the current append contributes to the attempt count.
+
+R58 also separates the two final zero-start cleanup intervals. Once the product has
+returned and validated a live read-only sink capability, one injector fires at the first
+subsequent observed fallible non-Popen setup effect. The other fires only at the actual
+Popen boundary before delegation. Their traces and effects are disjoint, while both bind
+the sink dev/inode/access mode and require `injected=true`, zero provider processes, no fd
+aliases and no staging/helper/result residue. Metamorphic effect labels and order remain
+admitted; no provider helper name or AGENT_START chronology is verdict authority. The
+partial-builder host diagnostic produced `post_retained:Path.iterdir` versus
+`popen_before_delegate`, and all five connected journal corruptions rejected cleanly.
+Production, H017, G20 and provider authority remain unchanged.
