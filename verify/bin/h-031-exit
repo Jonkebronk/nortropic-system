@@ -823,7 +823,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "9c00ce30f899c93f8c0f45f98df2f4ee78ec658a12a5e5f24048930b8ffd3b87")
+                       == "82a76c2c9476a2207ae42970dea62cc78a8e0ccf11ca63ea2715810dc7a65fd2")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
@@ -836,13 +836,32 @@ try:
         print("H031_GATE_RESULT=FAIL")
         raise SystemExit(1)
     shape = process_shape(source_text)
+    captured_capability_positives = [
+        source_text + "\n\ndef h031_captured_fstat_positive(probe=os.fstat):\n    return probe\n",
+        source_text + "\n\ndef h031_capture_target():\n    return None\n\ndef h031_captured_helper_positive(probe=h031_capture_target):\n    return probe\n",
+    ]
+    profile_visibility_mutants = [
+        source_text + "\n\nh031_profile_visible = sys.getprofile()\n",
+        source_text + "\n\ndef h031_profile_default(probe=sys.getprofile):\n    return probe\n",
+    ]
+    captured_capability_source_ok = all(
+        process_shape(candidate).get("boundary_ok") is True
+        for candidate in captured_capability_positives)
+    profile_invisible_to_admitted_source = all(
+        process_shape(candidate).get("boundary_ok") is False
+        for candidate in profile_visibility_mutants)
     required_api = {"run", "run_codex", "status", "watch", "roadmap_status", "journal_root"}
     required_api_ok = required_api <= shape["funcs"]
     check("K_REQUIRED_API", required_api_ok,
           f"present={sorted(required_api & shape['funcs'])}")
-    check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"]), str(shape["detail"]))
+    check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"])
+          and captured_capability_source_ok and profile_invisible_to_admitted_source,
+          f"{shape['detail']} captured_capability_source={captured_capability_source_ok} "
+          f"profile_visibility_rejected={profile_invisible_to_admitted_source}")
     check("K_OBSERVERS_MODEL_FREE", bool(shape["observer_ok"]), f"hits={shape['observer_hits']}")
-    if not h031_static or not h032_static or not required_api_ok or not shape["boundary_ok"] or not shape["observer_ok"]:
+    if (not h031_static or not h032_static or not required_api_ok
+            or not shape["boundary_ok"] or not captured_capability_source_ok
+            or not profile_invisible_to_admitted_source or not shape["observer_ok"]):
         raise ProductFailure("static contract rejected before upstream or subject import")
 
     shape_mutants = {

@@ -1406,3 +1406,35 @@ was admitted until the separately injected Popen boundary. These are connected e
 not literal trace claims. Production, H017, G20 and H031 remain unchanged; the owner
 baseline stays 131 PASS / 1 FAIL solely for
 `STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT`, and no live model call runs while RED.
+
+### 2026-08-20 — H032/H031 R60 captured capabilities and dependent-gate rebind
+
+R59's ordinal replay covered every effect that entered its wrappers, but those wrappers
+were installed after a connected variant had executed. A default such as
+`captured_fstat=os.fstat` therefore retained the genuine C callable: its second sink
+validation executed while the source-spelling matrix saw only the first direct call.
+The same gap applied to a project helper retained through a default or alias.
+
+R60 resolves the capability actually entered. An invocation-local `sys.setprofile`
+router is installed before the complete connected variant is executed, remains inert
+until the measured run, and is armed only after the first successful retained read-only
+sink validation. C-call object identity and Python code identity cover direct wrappers,
+captured genuine callables, captured project helpers and their admitted internal
+filesystem capabilities without depending on a Name/Attribute spelling. The hook is
+removed in `finally`; no environment, fixture mode or provider claim selects it. H031's
+same source audit admits genuine `os.fstat`/helper capture but rejects `sys.getprofile`
+and default-captured observer access, so the judge mechanism cannot become a product
+branch input.
+
+The connected partial-builder run observed 27 actual base ordinals and injected all 27
+with zero starts and no descriptor/staging/helper residue. The captured-fstat variant
+recorded both the retained and post-retained sink fstats and rejected when the latter was
+injected before its syscall. The captured-helper variant separately observed helper
+entry followed by its internal fstat and rejected both connected injections. Direct
+repeated-fstat and the legitimate empty interval remain admitted.
+
+R59 also left H031 pinned to the previous H032 bytes, causing a 9/2 static abort. R60
+updates that binding only after the final H032 gate hash is fixed; the required H031
+baseline is the complete 94-control execution with only `K_H032_FRESH_UPSTREAM` and
+`K_PRODUCT_EXECUTION` failing for the unchanged structured-result product gap. No
+production, provider authority, G20, H017 or live-model behavior changes.
