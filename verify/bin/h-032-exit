@@ -99,6 +99,23 @@ GIT_CLOSED_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_TERMINAL_PROMPT": "0",
 }
+GIT_CONTROL_PREFIX = "GIT_"
+
+def without_caller_git_controls(environment: dict[str, str]) -> dict[str, str]:
+    """Return a fresh environment with no caller-selected Git controls."""
+    return {key: value for key, value in environment.items()
+            if not key.startswith(GIT_CONTROL_PREFIX)}
+
+# The owner gate itself is a composed execution boundary: imported product,
+# disposable helpers and the nested H-033 gate must not inherit a caller's
+# repository selector.  Preserve only judge evidence about the original names,
+# then close the real process environment before any product import or Git use.
+CALLER_GIT_CONTROL_NAMES = tuple(sorted(
+    key for key in os.environ if key.startswith(GIT_CONTROL_PREFIX)))
+_gate_environment = without_caller_git_controls(dict(os.environ))
+os.environ.clear()
+os.environ.update(_gate_environment)
+del _gate_environment
 
 def check(key: str, ok: bool, detail: str) -> None:
     checks.append((key, ok, detail))
@@ -271,7 +288,45 @@ def git_repository_head(cwd: Path) -> str:
         raise RuntimeError(f"Git HEAD identity failed: {head.stderr}")
     return strict_git_commit_output(head.stdout, head.stderr)
 
+def git_repository_common_dir(cwd: Path) -> Path:
+    common = subprocess.run(
+        [GIT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=cwd, env=dict(GIT_CLOSED_ENV), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if common.returncode:
+        raise RuntimeError(f"Git common-dir identity failed: {common.stderr}")
+    return strict_git_root_output(common.stdout, common.stderr).resolve()
+
+def exact_tree_snapshot(root: Path) -> tuple[tuple[object, ...], ...]:
+    """Snapshot an exact tree without following links or interpreting contents."""
+    if not root.exists() and not root.is_symlink():
+        return ((".", "absent"),)
+    records: list[tuple[object, ...]] = []
+    def visit(path: Path, relative: str) -> None:
+        observed = path.lstat()
+        mode = stat.S_IMODE(observed.st_mode)
+        if stat.S_ISLNK(observed.st_mode):
+            records.append((relative, "symlink", mode, os.readlink(path)))
+            return
+        if stat.S_ISREG(observed.st_mode):
+            records.append((relative, "file", mode, observed.st_size, sha256(path)))
+            return
+        if stat.S_ISDIR(observed.st_mode):
+            records.append((relative, "dir", mode))
+            with os.scandir(path) as entries:
+                children = sorted(entries, key=lambda entry: entry.name)
+            for entry in children:
+                child_relative = entry.name if relative == "." else relative + "/" + entry.name
+                visit(Path(entry.path), child_relative)
+            return
+        records.append((relative, "other", mode, stat.S_IFMT(observed.st_mode)))
+    visit(root, ".")
+    return tuple(records)
+
 repo_head = git_repository_head(repo)
+authoritative_control_root = (
+    git_repository_common_dir(repo) / "nortropic-codex-autopilot")
+authoritative_control_before = exact_tree_snapshot(authoritative_control_root)
 
 try:
     git_decoy = work / "r68-git-environment-decoy"
@@ -350,6 +405,20 @@ try:
           and set(ambient_git_results) == set(ambient_cases)
           and all(value == repo_head for value in ambient_git_results.values()),
           f"candidate={repo_head} decoy={decoy_head} inherited_dir={inherited_dir_probe.stdout.strip()} trace_stderr={bool(inherited_trace_probe.stderr)} ambient={ambient_git_results} malformed_reject={malformed_git_outputs_reject}")
+    synthetic_gate_environment = without_caller_git_controls({
+        "PATH": "/judge/path", "HOME": "/judge/home", "H032_UNRELATED": "kept",
+        "GIT_DIR": str(git_decoy / ".git"), "GIT_WORK_TREE": str(git_decoy),
+        "GIT_COMMON_DIR": str(git_decoy / ".git"), "GIT_TRACE": "1",
+        "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.worktree",
+        "GIT_CONFIG_VALUE_0": str(git_decoy),
+    })
+    check("J_COMPOSED_GATE_GIT_ENVIRONMENT_CLOSURE",
+          not any(key.startswith(GIT_CONTROL_PREFIX) for key in os.environ)
+          and not any(key.startswith(GIT_CONTROL_PREFIX)
+                      for key in synthetic_gate_environment)
+          and synthetic_gate_environment.get("H032_UNRELATED") == "kept",
+          f"caller_names={CALLER_GIT_CONTROL_NAMES} active_git_names="
+          f"{sorted(key for key in os.environ if key.startswith(GIT_CONTROL_PREFIX))}")
 
     # Current-authority lifecycle. Historical h-032 candidates are design
     # evidence only; this exact row must follow the published h-033 chain.
@@ -565,7 +634,7 @@ elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
 parent_stat=out.parent.lstat() if out.parent.exists() else None
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,'is_symlink':out.parent.is_symlink(),'entries':sorted(p.name for p in out.parent.iterdir())} if parent_stat else None}))
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,'git_control_env':sorted(key for key in os.environ if key.startswith('GIT_')),'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,'is_symlink':out.parent.is_symlink(),'entries':sorted(p.name for p in out.parent.iterdir())} if parent_stat else None}))
 thread='h032'
 if mode == 'wrong_thread': thread='foreign-thread'
 if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
@@ -3220,6 +3289,71 @@ def run_codex(sink, canonical, invocation, run, role):
         except Exception as exc:
             physical_hostile_case=(False,f"{type(exc).__name__}:{exc}")
         physical_hostile_capture=safe_capture()
+
+        # A caller-selected Git repository is exercised through the complete
+        # product run, not merely through the judge helper.  Both repositories
+        # are disposable.  A conforming controller keeps every Git subprocess
+        # and the launched provider on physical_repo/physical_wt while leaving
+        # the hostile repository byte-for-byte untouched.
+        physical_second_id = physical_module.now_id()
+        physical_clock_deadline=time.monotonic()+2.0
+        while physical_module.now_id()==physical_second_id \
+                and time.monotonic()<physical_clock_deadline:
+            time.sleep(.01)
+        product_git_decoy=work/"isolated-product-git-decoy"
+        product_git_decoy.mkdir()
+        sh(GIT,"init","-q",cwd=product_git_decoy)
+        sh(GIT,"config","user.name","h032-product-git-decoy",cwd=product_git_decoy)
+        sh(GIT,"config","user.email","h032-product-git@nortropic.invalid",cwd=product_git_decoy)
+        (product_git_decoy/"anchor").write_text("hostile Git authority\n",encoding="utf-8")
+        sh(GIT,"add",".",cwd=product_git_decoy)
+        sh(GIT,"commit","-qm","hostile caller Git authority",cwd=product_git_decoy)
+        product_git_decoy_common=git_repository_common_dir(product_git_decoy)
+        product_git_decoy_control=product_git_decoy_common/"nortropic-codex-autopilot"
+        product_git_decoy_before=exact_tree_snapshot(product_git_decoy_control)
+        physical_git_runs_before=(set(physical_runs_root.iterdir())
+                                  if physical_runs_root.is_dir() else set())
+        physical_git_common=git_repository_common_dir(physical_repo)
+        physical_git_events=physical_git_common/"nortropic-codex-autopilot"/"events.jsonl"
+        physical_git_events_before=(physical_git_events.read_bytes()
+                                    if physical_git_events.is_file() else b"")
+        product_git_changes={
+            "GIT_DIR":str(product_git_decoy_common),
+            "GIT_WORK_TREE":str(product_git_decoy),
+        }
+        product_git_prior={key:os.environ.get(key) for key in product_git_changes}
+        launch_mode[0]="valid"
+        try:
+            os.environ.update(product_git_changes)
+            try:
+                physical_git_run=physical_module.run_codex(
+                    physical_repo,physical_wt,"TEST_AUTHOR","H032-GIT-ENVIRONMENT")
+                physical_git_case=(True,"ADMITTED")
+            except Exception as exc:
+                physical_git_case=(False,f"{type(exc).__name__}:{exc}")
+            physical_git_capture=safe_capture()
+        finally:
+            for key,value in product_git_prior.items():
+                if value is None: os.environ.pop(key,None)
+                else: os.environ[key]=value
+        product_git_decoy_after=exact_tree_snapshot(product_git_decoy_control)
+        physical_git_runs_after=(set(physical_runs_root.iterdir())
+                                 if physical_runs_root.is_dir() else set())
+        physical_git_new_runs=sorted(physical_git_runs_after-physical_git_runs_before)
+        physical_git_events_after=(physical_git_events.read_bytes()
+                                   if physical_git_events.is_file() else b"")
+        physical_git_records=[];physical_git_journal_ok=False
+        if (physical_git_events_after.startswith(physical_git_events_before)
+                and len(physical_git_events_after)>len(physical_git_events_before)):
+            suffix=physical_git_events_after[len(physical_git_events_before):]
+            try:
+                if suffix.endswith(b"\n"):
+                    physical_git_records=[strict_json(line.decode("utf-8"))
+                                          for line in suffix.splitlines()]
+                    physical_git_journal_ok=all(isinstance(item,dict)
+                                                for item in physical_git_records)
+            except Exception:
+                physical_git_records=[];physical_git_journal_ok=False
     finally:
         launch_mode[0] = "valid"
         if prior_trust_root is None: os.environ.pop("NORTROPIC_TRUST_ROOT",None)
@@ -3242,6 +3376,23 @@ def run_codex(sink, canonical, invocation, run, role):
             "global_events","envelope","sibling_run","refs",
             "config","hooks","source","trust"}
         and all(value!=0 for value in physical_hostile_capture.get("live_attacks",{}).values()))
+    physical_git_output=Path(physical_git_capture.get(
+        "output_path","/private/tmp/h032-missing-git-output"))
+    physical_git_environment_ok=(
+        physical_git_case[0]
+        and product_git_decoy_after==product_git_decoy_before
+        and len(physical_git_new_runs)==1
+        and physical_git_journal_ok and len(physical_git_records)==1
+        and physical_git_records[0].get("event")=="AGENT_START"
+        and physical_git_records[0].get("head")==git_repository_head(physical_wt)
+        and physical_git_records[0].get("worktree")==str(physical_wt)
+        and physical_git_capture.get("git_control_env")==[]
+        and physical_git_common/"nortropic-codex-autopilot"/"runs" \
+            in (physical_git_new_runs[0]/"result.json").parents
+        and (physical_git_new_runs[0]/"result.json").is_file()
+        and physical_git_common not in physical_git_output.parents
+        and product_git_decoy_common not in physical_git_output.parents
+        and not physical_git_output.exists())
     staging = cap.get("output_parent") or {}
     staging_ok = (
         staging.get("uid") == os.getuid()
@@ -4682,7 +4833,8 @@ class CraftedConcretePath(type(Path())):
         kernel_structure_ok and kernel_integration_structure_ok and integration_dynamic_ok
         and kernel_direct_ok and product_fresh_ok
         and valid[0] and valid_schema and valid_publication_lifecycle_ok
-        and physical_topology_ok and physical_hostile_ok and staging_ok
+        and physical_topology_ok and physical_hostile_ok
+        and physical_git_environment_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
         and r12_real_boundary_ok
@@ -4781,7 +4933,7 @@ class CraftedConcretePath(type(Path())):
           and r55_complete_residue_oracle_ok and r56_setup_oracle_ok,
           f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r59_post_retained_dynamic_positive,r59_empty_interval_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary,r59_post_retained_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_capture.get('git_control_env'),physical_git_records,physical_git_new_runs,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
@@ -5776,7 +5928,8 @@ class CraftedConcretePath(type(Path())):
     # may create one-time protected H-033 evidence while a nested sandbox is
     # expected to report ODÖMBART.
     h033_odom = False
-    h033_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    h033_env = without_caller_git_controls(dict(os.environ))
+    h033_env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         h033_result = subprocess.run(
             [str(h033_gate)], cwd=repo, env=h033_env, text=True,
@@ -5796,6 +5949,12 @@ class CraftedConcretePath(type(Path())):
     except subprocess.TimeoutExpired:
         h033_odom = True
         check("K_H033_FRESH_UPSTREAM_PROVENANCE", False, "timeout/cleanup authority unavailable")
+
+    authoritative_control_after = exact_tree_snapshot(authoritative_control_root)
+    check("J_AUTHORITATIVE_LIVE_GIT_UNCHANGED",
+          authoritative_control_after == authoritative_control_before,
+          f"root={authoritative_control_root} before_entries="
+          f"{len(authoritative_control_before)} after_entries={len(authoritative_control_after)}")
 
     passed = sum(ok for _, ok, _ in checks)
     failed = {key for key, ok, _detail in checks if not ok}

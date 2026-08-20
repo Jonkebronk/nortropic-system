@@ -1634,3 +1634,34 @@ must all still return the candidate SHA through the closed primitive; malformed,
 multiline, uppercase/nonhex or stderr-bearing output rejects, while unrelated caller
 environment remains harmless. H031 binds the finalized H032 digest. No production,
 provider, result, G20 or live-call gating behavior changes.
+
+### 2026-08-21 — H032/H031 R69 composed Git-environment boundary
+
+Independent R68 review proved that a closed identity helper was insufficient at the
+composed boundary. With an outer `GIT_DIR` selecting an older builder worktree, the
+helper still returned R68's exact commit, but imported production and the nested H033
+gate inherited the hostile selector. Product AGENT_START records bound the old commit,
+H033 passed self-consistently against it, and 36 run directories plus malformed test
+history escaped into authoritative `.git/nortropic-codex-autopilot` before H032 became
+ODÖMBART. Those unversioned effects are preserved as incident evidence; TEST_AUTHOR
+has no authority to decide which pre-existing history is safe to delete.
+
+R69 separates judge containment from product acceptance. At Python entry, before any
+candidate observation or product import, the gate rebuilds its actual process
+environment without any caller `GIT_*` key. H033 receives only that closed environment;
+judge Git continues to use its smaller R68 allowlist. A synthetic hostile map proves
+Git controls are removed without dropping unrelated environment. The exact existing
+authoritative autopilot subtree is snapshotted without following links and must be
+byte/type/mode identical after the complete run. This is read-only incident containment,
+not recovery or rollback.
+
+The product requirement remains independently connected and RED. A full production
+run gets hostile `GIT_DIR`/`GIT_WORK_TREE` pointing to a committed disposable decoy,
+while its intended controller repository and linked worker have a different disposable
+common Git. Controller Git subprocesses must construct a caller-Git-free environment;
+the provider/launcher environment must also exclude caller `GIT_*` state while keeping
+unrelated credential/runtime values. Only one AGENT_START and canonical result in the
+intended common Git, the intended exact HEAD/worktree, an untouched decoy and no private
+sink satisfy the control. All attack targets live under gate-owned WORK, so the owner
+gate never repeats the authoritative mutation. H031 keeps its one-run/one-Popen route
+and merely admits this bounded environment construction after rebinding H032's hash.
