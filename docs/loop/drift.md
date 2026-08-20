@@ -1515,3 +1515,29 @@ and its direct-C/Python-helper ordinal router are byte-identical at the frozen d
 The expected owner result remains H032 131 PASS / 1 FAIL and H031 94 PASS / 2 FAIL,
 solely for the absent structured-result production boundary. Production, provider
 authority, G20, H017 and live execution remain untouched.
+
+### 2026-08-20 — H032/H031 R64 declaration routing and class-body ambiguity
+
+R63's lexical model correctly distinguished ordinary shadows from the imported
+module, but three non-Name binding forms still bypassed declaration routing:
+exception targets and function or class definition names. A `global os` declaration
+could therefore leave one of those stores looking local rather than conflicting with
+the protected module binding. R64 routes every visited binding construct through the
+same global/nonlocal-aware operation.
+
+Class bodies need a separate conservative rule. Python executes them sequentially
+with `LOAD_NAME` fallback, so a set-only lexical inventory cannot soundly decide a
+load before a later assignment, a load after deletion, or a conditionally executed
+binding. R64 does not introduce a class control-flow interpreter: every direct
+class-body load, bind, delete, global declaration or nonlocal declaration involving
+the protected spelling `os` rejects fail closed. R51's ordinary-scope list covered
+parameters, locals, comprehensions, exceptions and nonlocals but did not promise
+class-body `LOAD_NAME` behavior, so this is an explicit compatible amendment. Nested
+method, lambda and comprehension scopes remain ordinary lexical scopes.
+
+Connected controls reject later, deleted and conditional class bindings and global
+exception/function/class rebinding. An ordinary class and class-method parameter,
+local and comprehension shadows pass alongside all six R63 shadow positives; every
+R62 protected-callable transfer negative remains rejected. H032 stays byte-identical,
+no R61 graph or generic dataflow/control-flow interpreter returns, and production,
+provider authority, G20, H017 and live execution remain untouched.

@@ -327,15 +327,19 @@ def lexical_bindings(tree: ast.Module):
     node_scope: dict[ast.AST, ast.AST] = {}
     scope_globals: dict[ast.AST, set[str]] = {tree: set()}
     scope_nonlocals: dict[ast.AST, set[str]] = {tree: set()}
+    class_os_ambiguities: set[tuple[int, str]] = set()
 
     def bind(scope: ast.AST, name: str, kind: str, value: str | None = None) -> None:
         scope_bindings.setdefault(scope, {}).setdefault(name, set()).add((kind, value))
 
-    def bind_store(scope: ast.AST, name: str) -> None:
+    def bind_target(scope: ast.AST, name: str, kind: str = "local",
+                    value: str | None = None, node: ast.AST | None = None) -> None:
+        if isinstance(scope, ast.ClassDef) and name == "os":
+            class_os_ambiguities.add((getattr(node, "lineno", 0), kind))
         if name in scope_globals.get(scope, set()):
-            bind(tree, name, "local")
+            bind(tree, name, kind, value)
         elif name not in scope_nonlocals.get(scope, set()):
-            bind(scope, name, "local")
+            bind(scope, name, kind, value)
 
     def bind_arguments(scope: ast.AST, args: ast.arguments) -> None:
         for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
@@ -354,20 +358,26 @@ def lexical_bindings(tree: ast.Module):
             return super().visit(node)
 
         def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(self.scope, ast.ClassDef) and node.id == "os":
+                class_os_ambiguities.add((node.lineno, type(node.ctx).__name__))
             if isinstance(node.ctx, (ast.Store, ast.Del)):
-                bind_store(self.scope, node.id)
+                bind_target(self.scope, node.id, node=node)
 
         def visit_Global(self, node: ast.Global) -> None:
             scope_globals.setdefault(self.scope, set()).update(node.names)
+            if isinstance(self.scope, ast.ClassDef) and "os" in node.names:
+                class_os_ambiguities.add((node.lineno, "Global"))
 
         def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
             scope_nonlocals.setdefault(self.scope, set()).update(node.names)
+            if isinstance(self.scope, ast.ClassDef) and "os" in node.names:
+                class_os_ambiguities.add((node.lineno, "Nonlocal"))
 
         def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
             if node.type is not None:
                 self.visit(node.type)
             if isinstance(node.name, str):
-                bind(self.scope, node.name, "local")
+                bind_target(self.scope, node.name, node=node)
             for statement in node.body:
                 self.visit(statement)
 
@@ -375,24 +385,25 @@ def lexical_bindings(tree: ast.Module):
             node_name = type(node).__name__
             if (node_name in {"MatchAs", "MatchStar"}
                     and isinstance(getattr(node, "name", None), str)):
-                bind(self.scope, node.name, "local")
+                bind_target(self.scope, node.name, node=node)
             if (node_name == "MatchMapping"
                     and isinstance(getattr(node, "rest", None), str)):
-                bind(self.scope, node.rest, "local")
+                bind_target(self.scope, node.rest, node=node)
             return super().generic_visit(node)
 
         def visit_Import(self, node: ast.Import) -> None:
             for alias in node.names:
                 root = alias.name.split(".", 1)[0]
-                bind(self.scope, alias.asname or root, "module", alias.name)
+                bind_target(self.scope, alias.asname or root, "module", alias.name,
+                            node)
 
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             for alias in node.names:
-                bind(self.scope, alias.asname or alias.name, "member",
-                     f"{node.module}.{alias.name}")
+                bind_target(self.scope, alias.asname or alias.name, "member",
+                            f"{node.module}.{alias.name}", node)
 
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            bind(self.scope, node.name, "local")
+            bind_target(self.scope, node.name, node=node)
             for item in node.decorator_list:
                 self.visit(item)
             for item in (*node.args.defaults, *node.args.kw_defaults):
@@ -435,7 +446,7 @@ def lexical_bindings(tree: ast.Module):
             self.scope = outer
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
-            bind(self.scope, node.name, "local")
+            bind_target(self.scope, node.name, node=node)
             for item in node.decorator_list:
                 self.visit(item)
             for item in node.bases:
@@ -481,7 +492,7 @@ def lexical_bindings(tree: ast.Module):
                 target_scope = scope_parent.get(target_scope)
             if isinstance(node.target, ast.Name):
                 node_scope[node.target] = target_scope
-                bind_store(target_scope, node.target.id)
+                bind_target(target_scope, node.target.id, node=node.target)
             else:
                 outer = self.scope
                 self.scope = target_scope
@@ -529,7 +540,7 @@ def lexical_bindings(tree: ast.Module):
             scope = enclosing_scope(scope)
         return ("unbound", None)
 
-    return resolve, scope_bindings
+    return resolve, scope_bindings, sorted(class_os_ambiguities)
 
 
 def process_shape(text: str) -> dict[str, object]:
@@ -538,7 +549,7 @@ def process_shape(text: str) -> dict[str, object]:
     except SyntaxError as exc:
         return {"boundary_ok": False, "observer_ok": False, "detail": f"syntax:{exc}"}
     owners = owner_map(tree)
-    resolve_binding, scope_bindings = lexical_bindings(tree)
+    resolve_binding, scope_bindings, class_os_ambiguities = lexical_bindings(tree)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     annotation_nodes: set[ast.AST] = set()
     for candidate in ast.walk(tree):
@@ -574,6 +585,9 @@ def process_shape(text: str) -> dict[str, object]:
     if any(len(bindings.get("os", set())) > 1
            for bindings in scope_bindings.values()):
         violations.append(("<module>", 0, "ambiguous-os-binding"))
+    for line, binding_kind in class_os_ambiguities:
+        violations.append(("<class-body>", line,
+                           f"class-body-os-ambiguous:{binding_kind}"))
 
     for node in ast.walk(tree):
         owner = owners.get(node, "<module>")
@@ -1169,6 +1183,65 @@ def h031_nonlocal_shadow_control():
 h031_nonlocal_shadow_control()
 """.strip()),
     ]
+    class_scope_positives = [
+        inject_run_codex_prefix(source_text, """
+class H031OrdinaryClass:
+    value = 1
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031MethodParameter:
+    def probe(self, os):
+        return os.fstat(1)
+H031MethodParameter().probe(H031LocalOS())
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031MethodLocal:
+    def probe(self):
+        os = H031LocalOS()
+        return os.fstat(1)
+H031MethodLocal().probe()
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031LocalOS:
+    def fstat(self, value):
+        return value
+class H031MethodComprehension:
+    def probe(self):
+        return [os.fstat for os in (H031LocalOS(),)]
+H031MethodComprehension().probe()
+""".strip()),
+    ]
+    class_body_ambiguity_mutants = [
+        inject_run_codex_prefix(source_text, """
+class H031BadClassOrder:
+    captured = os.fstat
+    os = object()
+H031BadClassOrder.captured(0)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassDelete:
+    os = object()
+    del os
+    captured = os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassConditional:
+    if False:
+        os = object()
+    captured = os.fstat
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+class H031BadClassDeclaration:
+    global os
+    captured = os.fstat
+""".strip()),
+    ]
     protected_fstat_transfer_mutants = [
         inject_run_codex_prefix(source_text, """
 def h031_bad_default(fd, probe=os.fstat):
@@ -1236,6 +1309,25 @@ def h031_bad_global_walrus():
     [(os := object()) for _ in (0,)]
 h031_bad_global_walrus()
 """.strip()),
+        inject_run_codex_prefix(source_text, """
+class H031GlobalShadowError(Exception):
+    pass
+global os
+try:
+    raise H031GlobalShadowError()
+except H031GlobalShadowError as os:
+    os.fstat(1)
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+global os
+def os():
+    return None
+""".strip()),
+        inject_run_codex_prefix(source_text, """
+global os
+class os:
+    pass
+""".strip()),
     ]
     profile_visibility_mutants = [
         source_text + "\n\nh031_profile_visible = sys.getprofile()\n",
@@ -1247,6 +1339,14 @@ h031_bad_global_walrus()
     shadowed_os_shapes = [process_shape(candidate) for candidate in shadowed_os_positives]
     shadowed_os_source_ok = all(
         item.get("boundary_ok") is True for item in shadowed_os_shapes)
+    class_scope_shapes = [process_shape(candidate) for candidate in class_scope_positives]
+    class_scope_source_ok = all(
+        item.get("boundary_ok") is True for item in class_scope_shapes)
+    class_body_ambiguity_rejected = all(
+        process_shape(candidate).get("boundary_ok") is False
+        and "class-body-os-ambiguous"
+            in str(process_shape(candidate).get("detail"))
+        for candidate in class_body_ambiguity_mutants)
     protected_fstat_transfers_rejected = all(
         process_shape(candidate).get("boundary_ok") is False
         and "protected-fstat-not-direct-call"
@@ -1266,12 +1366,16 @@ h031_bad_global_walrus()
           f"present={sorted(required_api & shape['funcs'])}")
     check("K_PROCESS_BOUNDARY_SOURCE_FORM", bool(shape["boundary_ok"])
           and direct_fstat_source_ok and shadowed_os_source_ok
+          and class_scope_source_ok and class_body_ambiguity_rejected
           and protected_fstat_transfers_rejected
           and imported_os_rebinding_rejected
           and profile_invisible_to_admitted_source,
           f"{shape['detail']} direct_fstat_source={direct_fstat_source_ok} "
           f"shadowed_os_source={shadowed_os_source_ok} "
           f"shadowed_os_shapes={[item.get('detail') for item in shadowed_os_shapes]} "
+          f"class_scope_source={class_scope_source_ok} "
+          f"class_scope_shapes={[item.get('detail') for item in class_scope_shapes]} "
+          f"class_body_ambiguity_rejected={class_body_ambiguity_rejected} "
           f"protected_fstat_transfers_rejected={protected_fstat_transfers_rejected} "
           f"imported_os_rebinding_rejected={imported_os_rebinding_rejected} "
           f"profile_visibility_rejected={profile_invisible_to_admitted_source}")
@@ -1279,6 +1383,7 @@ h031_bad_global_walrus()
     if (not h031_static or not h032_static or not required_api_ok
             or not shape["boundary_ok"] or not direct_fstat_source_ok
             or not shadowed_os_source_ok
+            or not class_scope_source_ok or not class_body_ambiguity_rejected
             or not protected_fstat_transfers_rejected
             or not imported_os_rebinding_rejected
             or not profile_invisible_to_admitted_source or not shape["observer_ok"]):
