@@ -1760,3 +1760,28 @@ production. They prove that the frozen environment criterion admits the required
 topology, never grant product credit and are cleaned with the disposable staging root.
 R70-R72 capture, decoy and environment controls remain intact; H031 gains no process or
 route and binds only the final R73 H032 digest.
+
+### 2026-08-21 — H032/H031 R74 current-run intended environment binding
+
+R73 validated an envelope under an intended-looking `runs` directory but did not prove
+that it belonged to the one run created by the current invocation. Its environment
+controls also still built exact rewritten copies of obsolete product source, and their
+positive topology inherited assumptions from the hostile decoy attempt. That allowed a
+current output to be paired with stale controller state and made harmless environment
+construction refactors an owner-gate failure.
+
+R74 snapshots the disposable candidate repository's intended common-Git run set and
+strict journal bytes immediately before each attempt. At the real provider boundary it
+requires exactly one new run, exactly one appended current `AGENT_START` for the bound
+worktree and HEAD, and the argv envelope inside that exact run. The result sink remains
+a separate private 0700 root with one leaf. Current-output plus a prior-run envelope or
+an envelope under the hostile decoy rejects causally.
+
+The complete environment matrix now runs unchanged product bytes. Its judge-private
+Popen transform starts from the actual current child mapping, introduces hostile Git
+selectors only there, and tests exact preservation plus drop/length/prefix/fixed/extra
+mutants. The controller itself therefore journals in the intended candidate common Git;
+the separate exact hostile product attempt remains the sole product RED. All obsolete
+source replacements and anchor counts are removed. R70-R73 full decoy/current-capture
+controls and the authoritative 179-entry read-only observation remain intact. H031 gains
+no process or route and binds only the final R74 H032 digest.
