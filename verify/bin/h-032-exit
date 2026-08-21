@@ -1311,10 +1311,67 @@ def run_codex(sink, canonical, invocation, run, role):
     launch_mode = ["valid"]
     launch_extra: dict[str, str] = {}
     provider_process_starts = [0]
+    launch_output_override: list[Path | None] = [None]
+    launch_expected_context: list[dict[str, Path] | None] = [None]
+    launch_observations: dict[str, dict[str, object]] = {}
     system_popen = module.subprocess.Popen
+    def observe_launcher_argv(flat: list[object], child_env: dict[str, str]) -> dict[str, object]:
+        context=launch_expected_context[0]
+        observation: dict[str, object]={"valid":False}
+        try:
+            values=[str(item) for item in flat]
+            separators=[index for index,value in enumerate(values) if value=="--"]
+            if context is None or separators != [8]: return observation
+            provider_argv=values[9:]
+            output_indexes=[index for index,value in enumerate(provider_argv) if value=="-o"]
+            worktree_indexes=[index for index,value in enumerate(provider_argv) if value=="-C"]
+            if output_indexes != [len(provider_argv)-3] or worktree_indexes != [1]:
+                return observation
+            output=Path(provider_argv[output_indexes[0]+1])
+            envelope_raw=Path(values[6]);worktree=Path(values[5])
+            launcher=Path(values[3]);python=Path(values[0])
+            envelope_stat=envelope_raw.lstat()
+            envelope=envelope_raw.resolve(strict=True)
+            expected_repo=context["repo"].resolve(strict=True)
+            expected_worktree=context["worktree"].resolve(strict=True)
+            expected_runs=(context["journal_common"].resolve(strict=True)
+                           /"nortropic-codex-autopilot"/"runs")
+            trust_root=Path(child_env["NORTROPIC_TRUST_ROOT"])
+            checks={
+                "python_flags":values[1:3]==["-I","-S"],
+                "launcher":launcher==expected_repo/"controller/launch/cli"
+                    and launcher.is_file() and not launcher.is_symlink(),
+                "run":values[4]=="run",
+                "worktree":worktree==expected_worktree,
+                "envelope_object":envelope_raw.is_absolute() and envelope_raw==envelope
+                    and stat.S_ISREG(envelope_stat.st_mode) and not envelope_raw.is_symlink(),
+                "envelope_name":envelope.name=="provider-envelope.json",
+                "envelope_journal":envelope.parent.parent==expected_runs,
+                "timeout":values[7]=="86400",
+                "provider":provider_argv[0]==str(trust_root/"provider"),
+                "provider_worktree":provider_argv[2]==str(expected_worktree),
+                "output":output.is_absolute(),
+                "python":python==trust_root/"python3.12",
+            }
+            syntax_ok=all(checks.values())
+            observation={
+                "valid":syntax_ok,"output":str(output),"envelope":str(envelope),
+                "worktree":str(worktree),"timeout":values[7],"separator":separators[0],
+                "provider_output_count":len(output_indexes),
+                "provider_worktree_count":len(worktree_indexes),
+                "checks":checks,
+            }
+        except (KeyError,OSError,ValueError,IndexError):
+            pass
+        return observation
     def fixture_popen(argv, *args, **kwargs):
         flat = list(argv)
         if "-o" in flat:
+            if launch_output_override[0] is not None:
+                output_indexes=[index for index,value in enumerate(flat) if value=="-o"]
+                if len(output_indexes)==1 and output_indexes[0]+1<len(flat):
+                    flat[output_indexes[0]+1]=str(launch_output_override[0])
+                    argv=flat
             active = audit_active[0]
             if isinstance(active, dict):
                 try:
@@ -1341,6 +1398,9 @@ def run_codex(sink, canonical, invocation, run, role):
                 **launch_extra,
             })
             kwargs["env"] = child_env
+            observation=observe_launcher_argv(flat,child_env)
+            output=observation.get("output")
+            if isinstance(output,str): launch_observations[output]=observation
         process = system_popen(argv, *args, **kwargs)
         if "-o" in flat:
             provider_process_starts[0] += 1
@@ -3421,6 +3481,8 @@ def run_codex(sink, canonical, invocation, run, role):
         physical_git_starts_before=provider_process_starts[0]
         launch_mode[0]="valid"
         launch_extra["H032_CAPTURE_COMPLETE_ENV"]="1"
+        launch_expected_context[0]={"repo":physical_repo,"worktree":physical_wt,
+                                    "journal_common":physical_git_common}
         try:
             os.environ.update(product_git_changes)
             physical_git_incoming_environment=dict(os.environ)
@@ -3432,11 +3494,14 @@ def run_codex(sink, canonical, invocation, run, role):
                 physical_git_case=(False,f"{type(exc).__name__}:{exc}")
             physical_git_capture=safe_capture()
         finally:
+            launch_expected_context[0]=None
             for key,value in product_git_prior.items():
                 if value is None: os.environ.pop(key,None)
                 else: os.environ[key]=value
             launch_extra.pop("H032_CAPTURE_COMPLETE_ENV",None)
         physical_git_start_delta=provider_process_starts[0]-physical_git_starts_before
+        physical_git_launch_observation=launch_observations.get(
+            str(physical_git_capture.get("output_path","")),{"valid":False})
         product_git_decoy_after=exact_tree_snapshot(product_git_decoy)
         physical_git_runs_after=(set(physical_runs_root.iterdir())
                                  if physical_runs_root.is_dir() else set())
@@ -3494,7 +3559,8 @@ def run_codex(sink, canonical, invocation, run, role):
              if key.startswith("H032_") or key in {r72_fixed_names}}}''',
         "extra":f'''\n        env[{r72_extra_key!r}]={r72_extra_value!r}''',
     }
-    def run_r72_environment_variant(name: str, suffix: str) -> dict[str, object]:
+    def run_r72_environment_variant(name: str, suffix: str,
+                                    hostile_git: bool = True) -> dict[str, object]:
         variant_repo=work/f"r72-environment-{name}-repo"
         shutil.copytree(physical_repo,variant_repo,
                         ignore=shutil.ignore_patterns(".git","__pycache__"))
@@ -3520,14 +3586,24 @@ def run_codex(sink, canonical, invocation, run, role):
         variant_module=importlib.util.module_from_spec(variant_spec)
         sys.modules[variant_spec.name]=variant_module
         variant_spec.loader.exec_module(variant_module)
-        prior={key:os.environ.get(key) for key in product_git_changes}
+        environment_changes=(product_git_changes if hostile_git
+                             else dict(r72_unrelated_environment))
+        prior={key:os.environ.get(key) for key in environment_changes}
         prior_trust=os.environ.get("NORTROPIC_TRUST_ROOT")
+        split_root=work/f"r73-private-result-{name}"
+        split_root.mkdir(mode=0o700)
+        split_sink=split_root/"result.json"
         if capture.exists(): capture.unlink()
         starts_before=provider_process_starts[0]
         launch_mode[0]="valid"
         launch_extra["H032_CAPTURE_COMPLETE_ENV"]="1"
+        launch_expected_context[0]={
+            "repo":variant_repo,"worktree":variant_wt,
+            "journal_common":(product_git_decoy_common if hostile_git
+                              else git_repository_common_dir(variant_repo))}
+        launch_output_override[0]=split_sink
         try:
-            os.environ.update(product_git_changes)
+            os.environ.update(environment_changes)
             incoming=dict(os.environ)
             os.environ["NORTROPIC_TRUST_ROOT"]=str(variant_repo)
             try:
@@ -3539,18 +3615,30 @@ def run_codex(sink, canonical, invocation, run, role):
             observed=safe_capture()
         finally:
             launch_mode[0]="valid"
+            launch_output_override[0]=None
+            launch_expected_context[0]=None
             launch_extra.pop("H032_CAPTURE_COMPLETE_ENV",None)
             for key,value in prior.items():
                 if value is None: os.environ.pop(key,None)
                 else: os.environ[key]=value
             if prior_trust is None: os.environ.pop("NORTROPIC_TRUST_ROOT",None)
             else: os.environ["NORTROPIC_TRUST_ROOT"]=prior_trust
+        output_parent=observed.get("output_parent") if isinstance(observed,dict) else None
+        observation=launch_observations.get(
+            str(observed.get("output_path","")) if isinstance(observed,dict) else "",
+            {"valid":False})
+        split_residue=sorted(path.name for path in split_root.iterdir())
+        shutil.rmtree(split_root)
         return {"case":case,"capture":observed,"incoming":incoming,
-                "starts":provider_process_starts[0]-starts_before}
+                "starts":provider_process_starts[0]-starts_before,
+                "launch":observation,"split_root":str(split_root),
+                "split_sink":str(split_sink),"split_entries":split_residue,
+                "output_parent":output_parent,"split_clean":not split_root.exists()}
     r72_environment_variants={
         name:run_r72_environment_variant(name,suffix)
         for name,suffix in r72_variant_suffixes.items()
     }
+    r73_split_variant=run_r72_environment_variant("split","",hostile_git=False)
 
     physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
     physical_canonical = (physical_new_runs[0]/"result.json" if len(physical_new_runs)==1
@@ -3586,18 +3674,34 @@ def run_codex(sink, canonical, invocation, run, role):
             and isinstance(identity.get("digest"),str)
             and len(identity.get("digest"))==64
             and set(identity.get("digest"))<=set("0123456789abcdef"))
-    def expected_provider_environment(incoming, observed) -> dict[str,str]:
+    def launcher_observation_admits(observation, observed) -> bool:
+        return (isinstance(observation,dict)
+            and set(observation)=={"valid","output","envelope","worktree",
+                                   "timeout","separator","provider_output_count",
+                                   "provider_worktree_count","checks"}
+            and observation.get("valid") is True
+            and isinstance(observation.get("checks"),dict)
+            and all(observation["checks"].values())
+            and observation.get("output")==observed.get("output_path")
+            and isinstance(observation.get("envelope"),str)
+            and Path(observation["envelope"]).is_absolute()
+            and observation.get("timeout")=="86400"
+            and observation.get("separator")==8
+            and observation.get("provider_output_count")==1
+            and observation.get("provider_worktree_count")==1)
+    def expected_provider_environment(incoming, observed, launch_observation):
+        if not launcher_observation_admits(launch_observation,observed):
+            return None
         expected={key:value for key,value in incoming.items()
                   if not key.startswith("GIT_")
                   and not key.startswith("DYLD_")
                   and key not in {"LD_PRELOAD","LD_LIBRARY_PATH",
                                   "__PYVENV_LAUNCHER__"}
                   and not key.startswith(("GH_","GITHUB_","SLACK_"))}
-        output=Path(observed.get("output_path","/private/tmp/h032-missing-output"))
         expected.update({
             "NORTROPIC_TRUST_ROOT":str(Path(observed.get(
                 "argv0","/private/tmp/h032-missing-provider")).parent),
-            "NORTROPIC_KUVERT":str(output.with_name("provider-envelope.json")),
+            "NORTROPIC_KUVERT":str(launch_observation["envelope"]),
             "H032_RESULT_MODE":"valid",
             "H032_CAPTURE":str(capture),
             "H032_LOCKED_SOURCE":str(provider),
@@ -3623,7 +3727,8 @@ def run_codex(sink, canonical, invocation, run, role):
     physical_git_capture_bound=current_provider_capture_binding_admits(
         physical_git_capture,physical_git_start_delta,stale_capture_output)
     physical_git_expected_environment=expected_provider_environment(
-        physical_git_incoming_environment,physical_git_capture)
+        physical_git_incoming_environment,physical_git_capture,
+        physical_git_launch_observation)
     physical_git_environment_relation=(
         physical_git_capture.get("complete_environment")
         ==physical_git_expected_environment)
@@ -3651,17 +3756,59 @@ def run_codex(sink, canonical, invocation, run, role):
     r72_variant_observations={}
     for variant_name,variant in r72_environment_variants.items():
         observed=variant["capture"]
-        expected=expected_provider_environment(variant["incoming"],observed)
+        expected=expected_provider_environment(
+            variant["incoming"],observed,variant["launch"])
         r72_variant_observations[variant_name]={
             "starts":variant["starts"],
             "binding":current_provider_capture_binding_admits(
                 observed,variant["starts"],None),
             "git_empty":observed.get("git_control_env")==[],
             "relation":observed.get("complete_environment")==expected,
+            "launcher":variant["launch"].get("valid") is True,
+            "split":(variant["launch"].get("envelope")
+                     not in {None,str(Path(variant["split_sink"]).with_name(
+                         "provider-envelope.json"))}
+                     and variant["split_entries"]==["result.json"]
+                     and variant["split_clean"] is True),
             "observed_fingerprint":environment_fingerprint(
                 observed.get("complete_environment")),
             "expected_fingerprint":environment_fingerprint(expected),
         }
+    r73_exact_variant=r73_split_variant
+    r73_exact_capture=r73_exact_variant["capture"]
+    r73_exact_launch=r73_exact_variant["launch"]
+    r73_exact_expected=expected_provider_environment(
+        r73_exact_variant["incoming"],r73_exact_capture,r73_exact_launch)
+    r73_sibling_assumption=(dict(r73_exact_expected)
+                            if isinstance(r73_exact_expected,dict) else {})
+    r73_sibling_assumption["NORTROPIC_KUVERT"]=str(
+        Path(r73_exact_variant["split_sink"]).with_name("provider-envelope.json"))
+    r73_wrong_envelope=dict(r73_exact_launch)
+    r73_wrong_envelope["envelope"]=r73_sibling_assumption["NORTROPIC_KUVERT"]
+    r73_wrong_syntax=dict(r73_exact_launch);r73_wrong_syntax["timeout"]="3600"
+    r73_stale_launch_rejects=(
+        expected_provider_environment(r73_exact_variant["incoming"],r73_exact_capture,
+                                      physical_git_launch_observation) is None)
+    r73_wrong_envelope_rejects=(
+        r73_exact_capture.get("complete_environment")
+        !=expected_provider_environment(r73_exact_variant["incoming"],
+                                       r73_exact_capture,r73_wrong_envelope))
+    r73_wrong_syntax_rejects=(
+        expected_provider_environment(r73_exact_variant["incoming"],r73_exact_capture,
+                                      r73_wrong_syntax) is None)
+    r73_split_topology_ok=(
+        launcher_observation_admits(r73_exact_launch,r73_exact_capture)
+        and r73_exact_launch.get("worktree")==str(
+            Path(r73_exact_variant["launch"]["worktree"]).resolve(strict=True))
+        and r73_exact_launch.get("output")==r73_exact_variant["split_sink"]
+        and r73_exact_launch.get("envelope")
+            !=r73_sibling_assumption["NORTROPIC_KUVERT"]
+        and Path(r73_exact_launch["envelope"]).name=="provider-envelope.json"
+        and Path(r73_exact_launch["envelope"]).parent.parent.name=="runs"
+        and r73_exact_variant["output_parent"].get("mode")==0o700
+        and r73_exact_variant["output_parent"].get("entries")==["result.json"]
+        and r73_exact_variant["split_entries"]==["result.json"]
+        and r73_exact_variant["split_clean"] is True)
     physical_git_canonical_valid=False
     if len(physical_git_new_runs)==1:
         physical_git_canonical=physical_git_new_runs[0]/"result.json"
@@ -3700,6 +3847,19 @@ def run_codex(sink, canonical, invocation, run, role):
           f"actual_observed={environment_fingerprint(physical_git_capture.get('complete_environment'))} "
           f"actual_expected={environment_fingerprint(physical_git_expected_environment)} "
           f"variants={r72_variant_observations}")
+    check("J_R73_LAUNCHER_ENVELOPE_ENVIRONMENT_BINDING",
+          r73_split_topology_ok
+          and r73_exact_capture.get("complete_environment")==r73_exact_expected
+          and r73_exact_capture.get("complete_environment")!=r73_sibling_assumption
+          and r73_stale_launch_rejects and r73_wrong_envelope_rejects
+          and r73_wrong_syntax_rejects,
+          f"split={r73_split_topology_ok} "
+          f"checks={r73_exact_launch.get('checks')} "
+          f"observed={environment_fingerprint(r73_exact_capture.get('complete_environment'))} "
+          f"expected={environment_fingerprint(r73_exact_expected)} "
+          f"sibling={r73_exact_capture.get('complete_environment')!=r73_sibling_assumption} "
+          f"stale={r73_stale_launch_rejects} wrong_envelope={r73_wrong_envelope_rejects} "
+          f"wrong_syntax={r73_wrong_syntax_rejects}")
     physical_git_environment_ok=(
         physical_git_case[0]
         and product_git_decoy_after==product_git_decoy_before

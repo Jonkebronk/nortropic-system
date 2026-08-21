@@ -1738,3 +1738,25 @@ two fixture fields before capture. Imported product cannot observe that normaliz
 The exact product attempt remains the sole structured-result RED; complete decoy/current
 capture and the authoritative 179-entry read-only observation are unchanged. H031 gains
 no process or route and binds only the final R72 H032 digest.
+
+### 2026-08-21 — H032/H031 R73 launcher-envelope environment binding
+
+R72 compared complete provider environments, but calculated `NORTROPIC_KUVERT`
+as a sibling of the provider `-o` path. That happens to describe the current insecure
+product while contradicting the frozen result boundary: the accepted sink must be the
+only leaf in a private staging root outside live Git, while the controller envelope
+remains journal state.
+
+R73 derives the expected value from the actual current outer launcher argv. The gate
+binds its private Python snapshot, `-I -S`, exact launcher, `run`, current worktree,
+regular journal envelope, timeout, separator and the provider family's `-C`/`-o` shape.
+A connected candidate keeps the envelope under the intended common-Git run journal but
+substitutes a gate-owned private 0700 one-leaf result sink. Exact complete environment
+equality passes after one current provider start. A sink-sibling assumption, a stale
+launch observation, a wrong envelope and wrong launcher timeout each reject.
+
+The output substitution and observation are judge-private and unavailable to imported
+production. They prove that the frozen environment criterion admits the required split
+topology, never grant product credit and are cleaned with the disposable staging root.
+R70-R72 capture, decoy and environment controls remain intact; H031 gains no process or
+route and binds only the final R73 H032 digest.
