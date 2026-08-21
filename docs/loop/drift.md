@@ -1785,3 +1785,28 @@ the separate exact hostile product attempt remains the sole product RED. All obs
 source replacements and anchor counts are removed. R70-R73 full decoy/current-capture
 controls and the authoritative 179-entry read-only observation remain intact. H031 gains
 no process or route and binds only the final R74 H032 digest.
+
+### 2026-08-21 — H032/H031 R75 owner-live binding totality
+
+The first authorized run against the implemented R74 result kernel passed the complete
+deterministic product matrix and entered the exact owner provider phase. After the
+provider phase, the frozen gate evaluated its live identity expression and raised
+`NameError` because `h032_gate` had never been assigned. The failure therefore belongs
+to the owner gate. It was not an authentication, network or product failure, and the
+TEST_AUTHOR remediation does not perform a second live call.
+
+R75 creates one candidate identity record before the conditional owner-live branch. It
+binds the exact disposable/candidate repository, closed-observed HEAD and tree, source,
+spec and current `verify/bin/h-032-exit` paths and digests, plus the frozen provider and
+host paths and digests. The live clone check consumes only that record; it never reaches
+for a name introduced later by the G20 evidence block.
+
+An unconditional no-live control validates the exact record and rejects deletion of
+each required field, a stale gate digest, the wrong H031 gate path and the wrong HEAD.
+This is a bounded data-record validator, not a whole-Python control-flow interpreter or
+source-spelling contract. A gate-only `--skip-owner-live` ceremony permits TEST_AUTHOR
+to execute the complete deterministic matrix without another model call. It exits
+ODÖMBART with `OWNER_LIVE_PHASE_NOT_RUN` when live is the only remaining phase and can
+never grant PASS. H031 may forward that exact mode for its deterministic regression but
+also exits ODÖMBART; normal invocation still requires H032 exit zero. R74 and production
+semantics are unchanged, and H031 binds only the finalized R75 H032 digest.

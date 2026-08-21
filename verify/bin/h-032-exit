@@ -47,15 +47,19 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 G20_EMIT=""
+OWNER_LIVE_MODE="run"
 if [[ $# -gt 0 ]]; then
-  [[ $# -eq 2 && "$1" == "--emit-g20-evidence" ]] || {
-    echo "ODÖMBART K0 — användning: h-032-exit [--emit-g20-evidence <path>]"
-    exit 2
-  }
-  G20_EMIT="$2"
+  case "$1:$#" in
+    --emit-g20-evidence:2) G20_EMIT="$2" ;;
+    --skip-owner-live:1) OWNER_LIVE_MODE="skip" ;;
+    *)
+      echo "ODÖMBART K0 — användning: h-032-exit [--emit-g20-evidence <path> | --skip-owner-live]"
+      exit 2
+      ;;
+  esac
 fi
 
-/usr/bin/python3 -I -S - "$SOURCE" "$RESULT_KERNEL" "$AUTHORITY" "$SCHEMA" "$WORK" "$G20_EMIT" <<'PY'
+/usr/bin/python3 -I -S - "$SOURCE" "$RESULT_KERNEL" "$AUTHORITY" "$SCHEMA" "$WORK" "$G20_EMIT" "$OWNER_LIVE_MODE" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -80,9 +84,13 @@ import selectors
 
 source, result_kernel, authority_source, schema_source, work = map(Path, sys.argv[1:6])
 g20_emit_path = Path(sys.argv[6]) if sys.argv[6] else None
+owner_live_mode = sys.argv[7]
+if owner_live_mode not in {"run", "skip"}:
+    raise SystemExit("invalid owner live mode")
 repo = source.parents[1]
 task_spec = repo / "specs/tasks.spec.json"
 h033_gate = repo / "verify/bin/h-033-exit"
+h032_gate = repo / "verify/bin/h-032-exit"
 checks: list[tuple[str, bool, str]] = []
 EXPECTED_PROVIDER_PATH = Path("/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex")
 EXPECTED_PROVIDER_SHA256 = "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37"
@@ -297,6 +305,61 @@ def git_repository_common_dir(cwd: Path) -> Path:
         raise RuntimeError(f"Git common-dir identity failed: {common.stderr}")
     return strict_git_root_output(common.stdout, common.stderr).resolve()
 
+OWNER_LIVE_BINDING_KEYS = {
+    "candidate_repo", "candidate_head", "candidate_tree", "candidate_source", "source_sha256",
+    "candidate_spec", "spec_sha256", "candidate_gate", "gate_sha256",
+    "provider_path", "provider_sha256", "host_path", "host_sha256",
+}
+
+def owner_live_binding_valid(binding) -> bool:
+    """Validate every input consumed by the late owner-live identity check."""
+    try:
+        if not isinstance(binding, dict) or set(binding) != OWNER_LIVE_BINDING_KEYS:
+            return False
+        candidate_repo = binding["candidate_repo"]
+        candidate_source = binding["candidate_source"]
+        candidate_spec = binding["candidate_spec"]
+        candidate_gate = binding["candidate_gate"]
+        provider_path = binding["provider_path"]
+        host_path = binding["host_path"]
+        if not all(isinstance(path, Path) for path in (
+                candidate_repo, candidate_source, candidate_spec, candidate_gate,
+                provider_path, host_path)):
+            return False
+        if (candidate_source != candidate_repo/"scripts/nortropic-codex-autopilot.py"
+                or candidate_spec != candidate_repo/"specs/tasks.spec.json"
+                or candidate_gate != candidate_repo/"verify/bin/h-032-exit"):
+            return False
+        if (not all(path.is_file() and not path.is_symlink()
+                    for path in (candidate_source, candidate_spec, candidate_gate,
+                                 provider_path, host_path))
+                or not os.access(provider_path, os.X_OK)
+                or not os.access(host_path, os.X_OK)):
+            return False
+        head = binding["candidate_head"]
+        tree = binding["candidate_tree"]
+        digests = [binding[key] for key in (
+            "source_sha256", "spec_sha256", "gate_sha256",
+            "provider_sha256", "host_sha256")]
+        if (not isinstance(head, str) or len(head) != 40
+                or any(char not in "0123456789abcdef" for char in head)
+                or not isinstance(tree, str) or len(tree) != 40
+                or any(char not in "0123456789abcdef" for char in tree)
+                or not all(isinstance(value, str) and len(value) == 64
+                           and not any(char not in "0123456789abcdef" for char in value)
+                           for value in digests)):
+            return False
+        return (git_repository_head(candidate_repo) == head
+            and strict_git_commit_output(
+                sh(GIT,"rev-parse","HEAD^{tree}",cwd=candidate_repo),"") == tree
+            and sha256(candidate_source) == binding["source_sha256"]
+            and sha256(candidate_spec) == binding["spec_sha256"]
+            and sha256(candidate_gate) == binding["gate_sha256"]
+            and sha256(provider_path) == binding["provider_sha256"]
+            and sha256(host_path) == binding["host_sha256"])
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+        return False
+
 def exact_tree_snapshot(root: Path) -> tuple[tuple[object, ...], ...]:
     """Snapshot an exact tree without following links or interpreting contents."""
     if not root.exists() and not root.is_symlink():
@@ -494,6 +557,49 @@ try:
         and os.access(host_path, os.X_OK) and sha256(host_path) == host_digest
     )
     check("K0", authority_ok, f"shape={shape_detail} provider={authority.get('provider')} path={apath} host={host_path} main_hash_match={apath.is_file() and sha256(apath) == digest} host_hash_match={host_path.is_file() and sha256(host_path) == host_digest}")
+
+    # The owner-live phase consumes one record built before the conditional
+    # branch.  Its gate path is the current owner gate itself, never a later
+    # G20-local variable.  This unconditional lane remains no-live.
+    owner_live_binding = {
+        "candidate_repo": repo,
+        "candidate_head": repo_head,
+        "candidate_tree": strict_git_commit_output(
+            sh(GIT,"rev-parse","HEAD^{tree}",cwd=repo),""),
+        "candidate_source": source,
+        "source_sha256": sha256(source),
+        "candidate_spec": task_spec,
+        "spec_sha256": sha256(task_spec),
+        "candidate_gate": h032_gate,
+        "gate_sha256": sha256(h032_gate),
+        "provider_path": apath,
+        "provider_sha256": digest,
+        "host_path": host_path,
+        "host_sha256": host_digest,
+    }
+    owner_live_missing_rejects = all(
+        not owner_live_binding_valid({key:value for key,value in owner_live_binding.items()
+                                      if key != missing})
+        for missing in OWNER_LIVE_BINDING_KEYS)
+    owner_live_stale_gate = dict(owner_live_binding)
+    owner_live_stale_gate["gate_sha256"] = "0" * 64
+    owner_live_wrong_gate = dict(owner_live_binding)
+    owner_live_wrong_gate["candidate_gate"] = repo/"verify/bin/h-031-exit"
+    owner_live_wrong_gate["gate_sha256"] = sha256(owner_live_wrong_gate["candidate_gate"])
+    owner_live_wrong_head = dict(owner_live_binding)
+    owner_live_wrong_head["candidate_head"] = "0" * 40
+    owner_live_binding_rig_ok = (owner_live_binding_valid(owner_live_binding)
+        and owner_live_missing_rejects
+        and not owner_live_binding_valid(owner_live_stale_gate)
+        and not owner_live_binding_valid(owner_live_wrong_gate)
+        and not owner_live_binding_valid(owner_live_wrong_head))
+    check("J_R75_OWNER_LIVE_BINDING_TOTALITY",
+          owner_live_binding_rig_ok,
+          f"exact={owner_live_binding_valid(owner_live_binding)} "
+          f"missing={owner_live_missing_rejects} "
+          f"stale={not owner_live_binding_valid(owner_live_stale_gate)} "
+          f"wrong_gate={not owner_live_binding_valid(owner_live_wrong_gate)} "
+          f"wrong_head={not owner_live_binding_valid(owner_live_wrong_head)}")
 
     base = work / "base"; base.mkdir()
     sh(GIT, "init", "-q", cwd=base)
@@ -5404,11 +5510,13 @@ class CraftedConcretePath(type(Path())):
         and not valid_output.exists() and valid_canonical.is_file()
         and all(rejected_clean(case) for case in negative_cases.values()))
     exact_owner_live_ok = False
-    exact_owner_live_detail = "SKIPPED_DETERMINISTIC_RED"
-    if deterministic_result_ok:
+    exact_owner_live_detail = ("SKIPPED_OWNER_TEST_AUTHOR"
+                               if owner_live_mode == "skip"
+                               else "SKIPPED_DETERMINISTIC_RED")
+    if deterministic_result_ok and owner_live_mode == "run":
         live_repo = work / "r14-exact-owner-live-clone"
         sh(GIT,"clone","-q","--no-hardlinks",str(repo),str(live_repo))
-        sh(GIT,"checkout","-q",repo_head,cwd=live_repo)
+        sh(GIT,"checkout","-q",owner_live_binding["candidate_head"],cwd=live_repo)
         live_wt=work/"r14-exact-owner-live-worker"
         sh(GIT,"worktree","add","-q","--detach",str(live_wt),"HEAD",cwd=live_repo)
         live_source=live_repo/"scripts/nortropic-codex-autopilot.py"
@@ -5453,17 +5561,24 @@ class CraftedConcretePath(type(Path())):
             and live_transitions[0].get("dev")==before.st_dev
             and live_transitions[0].get("ino")==before.st_ino
             and not live_sink.exists() and not live_sink.parent.exists()
-            and sha256(apath)==digest and sha256(host_path)==host_digest
-            and git_repository_head(live_repo)==repo_head
-            and sh(GIT,"rev-parse","HEAD^{tree}",cwd=live_repo).strip()
-                == sh(GIT,"rev-parse","HEAD^{tree}",cwd=repo).strip()
-            and sha256(live_source)==sha256(source)
+            and sha256(owner_live_binding["provider_path"])
+                ==owner_live_binding["provider_sha256"]
+            and sha256(owner_live_binding["host_path"])
+                ==owner_live_binding["host_sha256"]
+            and git_repository_head(live_repo)==owner_live_binding["candidate_head"]
+            and strict_git_commit_output(
+                sh(GIT,"rev-parse","HEAD^{tree}",cwd=live_repo),"")
+                ==owner_live_binding["candidate_tree"]
+            and sha256(live_source)==owner_live_binding["source_sha256"]
             and live_wt.resolve()!=live_repo.resolve()
             and module.common_git_dir(live_wt).resolve()==module.common_git_dir(live_repo).resolve()
-            and sha256(live_repo/"specs/tasks.spec.json")==sha256(task_spec)
-            and sha256(live_repo/"verify/bin/h-032-exit")==sha256(h032_gate)
-            and h032_gate.is_file())
-        exact_owner_live_detail=(repo_head,hashlib.sha256(raw).hexdigest(),
+            and sha256(live_repo/"specs/tasks.spec.json")
+                ==owner_live_binding["spec_sha256"]
+            and sha256(live_repo/"verify/bin/h-032-exit")
+                ==owner_live_binding["gate_sha256"]
+            and owner_live_binding["candidate_gate"].is_file())
+        exact_owner_live_detail=(owner_live_binding["candidate_head"],
+                                 hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     print("R60_BOUND_EVIDENCE=" + json.dumps({
@@ -6515,17 +6630,24 @@ class CraftedConcretePath(type(Path())):
     print(f"SAMMANFATTNING {passed} PASS / {len(checks)-passed} FAIL")
     material_failed = failed - ({"K_G20_NAMESPACE"} if g20_odom else set()) \
                              - ({"K_H033_FRESH_UPSTREAM_PROVENANCE"} if h033_odom else set())
-    if material_failed == {"K_STRUCTURED_RESULT_DELIVERY_BOUNDARY"}:
+    owner_live_skip_expected = (owner_live_mode == "skip"
+        and deterministic_result_ok
+        and material_failed == {"K_STRUCTURED_RESULT_DELIVERY_BOUNDARY"})
+    if owner_live_skip_expected:
+        print("CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN")
+    elif material_failed == {"K_STRUCTURED_RESULT_DELIVERY_BOUNDARY"}:
         print("CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT")
     elif material_failed == {"K_CODE_MODE_HOST_IDENTITY_BOUNDARY"}:
         print("CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
     elif material_failed:
         print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(material_failed)))
-    if g20_odom or h033_odom:
+    if g20_odom or h033_odom or owner_live_skip_expected:
         if g20_odom:
             print("ODÖMBART K_G20_NAMESPACE — nested sandbox-exec förbjuden; candidate-bound owner-runner evidence required")
         if h033_odom:
             print("ODÖMBART K_H033_FRESH_UPSTREAM_PROVENANCE — protected owner runner unavailable")
+        if owner_live_skip_expected:
+            print("ODÖMBART K_OWNER_LIVE_PHASE_NOT_RUN — explicit owner TEST_AUTHOR no-live mode; deterministic product controls passed")
         raise SystemExit(2)
     raise SystemExit(0 if passed == len(checks) else 1)
 except SystemExit:
