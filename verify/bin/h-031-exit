@@ -378,6 +378,40 @@ def sha256_bytes(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def repository_import_transition(before, after, repository_root: Path) -> bool:
+    return (
+        isinstance(before, tuple)
+        and len(before) == 2
+        and isinstance(before[0], list)
+        and isinstance(before[1], bool)
+        and isinstance(after, tuple)
+        and len(after) == 2
+        and isinstance(after[0], list)
+        and after[0] == [str(repository_root)] + before[0]
+        and after[1] is True
+    )
+
+
+def complete_route_report(role: str) -> dict:
+    return {
+        "role": role,
+        "outcome": "READY",
+        "summary": "H031 route fixture completed",
+        "changed_files": [],
+        "blocking_findings": [],
+        "tests": [],
+        "allowed_write_violation": False,
+        "frozen_artifacts_modified": False,
+        "production_files_modified": False,
+        "frozen_gate_ready": True,
+        "baseline_red_for_right_reason": False,
+        "owner_decision_required": False,
+        "stop_reason": "",
+        "next_action": None,
+        "next_task_id": None,
+    }
+
+
 def task_row_valid(rows) -> bool:
     hits = [row for row in rows if isinstance(row, dict) and row.get("id") == "h-031"]
     if len(hits) != 1:
@@ -2004,6 +2038,18 @@ subprocess = object()
     check("J_H032_OWNER_LIVE_SKIP_PENDING_DOMINATES_PRODUCT",
           h031_terminal_exit(True, {"K_PRODUCT_EXECUTION"}) == 2,
           "pending owner ODÖMBART remains exit 2 after deterministic product findings")
+    import_transition_before = (["/private/tmp/h031-existing"], False)
+    import_transition_current = ([str(root), "/private/tmp/h031-existing"], True)
+    import_transition_old = ([str(root / "controller/authority"),
+                              "/private/tmp/h031-existing"], True)
+    check("J_REPOSITORY_ROOT_IMPORT_TRANSITION_POSITIVE",
+          repository_import_transition(import_transition_before,
+                                       import_transition_current, root),
+          "exact repository root inserted once and bytecode disabled")
+    check("J_OLD_AUTHORITY_IMPORT_TRANSITION_REJECT",
+          not repository_import_transition(import_transition_before,
+                                           import_transition_old, root),
+          "legacy controller/authority insertion cannot satisfy result-kernel topology")
 
     upstream_skip_verdict = exclusive_h032_owner_live_skip(upstream.returncode, upstream.stdout)
     upstream_skip_ok = owner_live_mode == "skip" and upstream_skip_verdict[0]
@@ -2044,7 +2090,9 @@ self_path=pathlib.Path(sys.argv[0]); argv=sys.argv[1:]
 record={'argv0':str(self_path),'sha256':hashlib.sha256(self_path.read_bytes()).hexdigest(),'argv':argv,'codex_home':os.environ.get('CODEX_HOME')}
 with pathlib.Path(os.environ['H031_CAPTURE']).open('a',encoding='utf-8') as handle: handle.write(json.dumps(record,sort_keys=True)+'\\n')
 joined=' '.join(argv); match=re.search(r'H031_GATE_ROLE=([A-Z_]+)',joined); role=match.group(1) if match else 'OVERIFIERAT'
-out=pathlib.Path(argv[argv.index('-o')+1]); out.write_text(json.dumps({'role':role,'outcome':'READY','owner_decision_required':False,'blocking_findings':[]}))
+report={'role':role,'outcome':'READY','summary':'H031 route fixture completed','changed_files':[],'blocking_findings':[],'tests':[],'allowed_write_violation':False,'frozen_artifacts_modified':False,'production_files_modified':False,'frozen_gate_ready':True,'baseline_red_for_right_reason':False,'owner_decision_required':False,'stop_reason':'','next_action':None,'next_task_id':None}
+if 'H031_GATE_PARTIAL_REPORT' in joined: report={'role':role,'outcome':'READY','owner_decision_required':False,'blocking_findings':[]}
+out=pathlib.Path(argv[argv.index('-o')+1]); out.write_text(json.dumps(report,separators=(',',':')))
 print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
 """, encoding="utf-8")
     provider.chmod(0o700)
@@ -2099,9 +2147,7 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
             restore_effect_guards(import_guards)
         import_after = (os.getcwd(), dict(os.environ), measure_umask())
         import_sys_after = (list(sys.path), sys.dont_write_bytecode)
-        expected_authority_path = str(root / "controller/authority")
-        import_sys_ok = (import_sys_after[0] == [expected_authority_path] + import_sys_before[0]
-                         and import_sys_after[1] is True)
+        import_sys_ok = repository_import_transition(import_sys_before, import_sys_after, root)
         os.chdir(import_before[0])
         os.environ.clear()
         os.environ.update(import_before[1])
@@ -2130,20 +2176,32 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
                   "reasoning_effort": "ultra", "model_routing_source": "USER_CONFIG"}
         journal_file.write_text(json.dumps(legacy, sort_keys=True) + "\n", encoding="utf-8")
         errors = []
+        accepted_reports = []
         muted = io.StringIO()
         for role in EXPECTED:
             try:
                 with contextlib.redirect_stdout(muted):
-                    module.run_codex(repo, repo, role, f"H031_GATE_ROLE={role}")
+                    accepted = module.run_codex(repo, repo, role, f"H031_GATE_ROLE={role}")
+                accepted_reports.append(accepted)
             except Exception as exc:
                 errors.append(f"{role}:{type(exc).__name__}:{exc}")
         captures = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()
                     if line.strip()] if capture.exists() else []
         route_details = [route_observation(item.get("argv", [])) for item in captures]
-        routes_ok = (not errors and len(captures) == len(EXPECTED)
+        accepted_reports_ok = (
+            len(accepted_reports) == len(EXPECTED)
+            and all(isinstance(accepted, dict)
+                    and set(accepted) == {"schema_version", "invocation_id", "run_id", "role",
+                                         "result_sha256", "report"}
+                    and accepted.get("role") == role
+                    and accepted.get("report") == complete_route_report(role)
+                    for accepted, role in zip(accepted_reports, EXPECTED))
+        )
+        routes_ok = (not errors and accepted_reports_ok and len(captures) == len(EXPECTED)
                      and all(route_ok(record["argv"], EXPECTED[role])
                              for record, role in zip(captures, EXPECTED)))
-        check("K_ROLE_ROUTE_MATRIX", routes_ok, f"routes={route_details} errors={errors}")
+        check("K_ROLE_ROUTE_MATRIX", routes_ok,
+              f"routes={route_details} accepted={accepted_reports_ok} errors={errors}")
         provider_effect_ok = (len(captures) == len(EXPECTED)
                               and all(record.get("sha256") == provider_hash
                                       and Path(record.get("argv0", "")).is_absolute()
@@ -2168,6 +2226,34 @@ print(json.dumps({'type':'thread.started','thread_id':'h031-'+role.lower()}))
         check("K_LEGACY_ROUTING_NONAUTHORITATIVE", records[0] == legacy
               and all(record.get("reasoning_effort") != "ultra" for record in starts),
               f"legacy_preserved={records[0] == legacy}")
+
+        partial_capture_before = len(captures)
+        partial_runs_before = set(path.name for path in (module.journal_root(repo) / "runs").iterdir())
+        partial_error = None
+        try:
+            with contextlib.redirect_stdout(muted):
+                module.run_codex(repo, repo, "ARCHITECT",
+                                 "H031_GATE_ROLE=ARCHITECT H031_GATE_PARTIAL_REPORT")
+        except Exception as exc:
+            partial_error = f"{type(exc).__name__}:{exc}"
+        partial_captures = [json.loads(line) for line in capture.read_text(encoding="utf-8").splitlines()
+                            if line.strip()]
+        partial_runs_after = set(path.name for path in (module.journal_root(repo) / "runs").iterdir())
+        partial_new_runs = partial_runs_after - partial_runs_before
+        partial_residue = [
+            str(path.relative_to(repo))
+            for name in partial_new_runs
+            for path in (module.journal_root(repo) / "runs" / name).rglob("result.json")
+        ]
+        partial_ok = (
+            partial_error is not None
+            and len(partial_captures) == partial_capture_before + 1
+            and len(partial_new_runs) == 1
+            and not partial_residue
+        )
+        check("K_PARTIAL_RESULT_SCHEMA_REJECT", partial_ok,
+              f"error={partial_error} capture_delta={len(partial_captures) - partial_capture_before} "
+              f"new_runs={len(partial_new_runs)} result_residue={partial_residue}")
 
         runs_dir = module.journal_root(repo) / "runs"
         before = (capture.read_bytes() if capture.exists() else b"",
