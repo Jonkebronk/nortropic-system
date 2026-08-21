@@ -89,6 +89,33 @@ EXPECTED_PROVIDER_SHA256 = "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e274
 EXPECTED_CODE_MODE_HOST_PATH = EXPECTED_PROVIDER_PATH.with_name("codex-code-mode-host")
 EXPECTED_CODE_MODE_HOST_SHA256 = "a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d"
 GIT = "/usr/bin/git"
+GIT_CLOSED_ENV = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/var/empty",
+    "TMPDIR": "/private/tmp",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+GIT_CONTROL_PREFIX = "GIT_"
+
+def without_caller_git_controls(environment: dict[str, str]) -> dict[str, str]:
+    """Return a fresh environment with no caller-selected Git controls."""
+    return {key: value for key, value in environment.items()
+            if not key.startswith(GIT_CONTROL_PREFIX)}
+
+# The owner gate itself is a composed execution boundary: imported product,
+# disposable helpers and the nested H-033 gate must not inherit a caller's
+# repository selector.  Preserve only judge evidence about the original names,
+# then close the real process environment before any product import or Git use.
+CALLER_GIT_CONTROL_NAMES = tuple(sorted(
+    key for key in os.environ if key.startswith(GIT_CONTROL_PREFIX)))
+_gate_environment = without_caller_git_controls(dict(os.environ))
+os.environ.clear()
+os.environ.update(_gate_environment)
+del _gate_environment
 
 def check(key: str, ok: bool, detail: str) -> None:
     checks.append((key, ok, detail))
@@ -223,12 +250,176 @@ def authority_shape(raw: str) -> tuple[bool, str]:
 def sh(*argv: str, cwd: Path | None = None) -> str:
     if not argv or argv[0] != GIT:
         raise RuntimeError("judge helper permits only exact system Git")
-    p = subprocess.run(argv, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.run(argv, cwd=cwd, env=dict(GIT_CLOSED_ENV), text=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if p.returncode:
-        raise RuntimeError(f"rc={p.returncode}: {' '.join(argv)}\n{p.stdout}")
+        raise RuntimeError(
+            f"rc={p.returncode}: {' '.join(argv)}\nstdout={p.stdout}\nstderr={p.stderr}")
     return p.stdout
 
+def strict_git_commit_output(stdout: str, stderr: str) -> str:
+    line = stdout[:-1] if stdout.endswith("\n") else ""
+    if (stderr or stdout != line + "\n" or len(line) != 40
+            or any(char not in "0123456789abcdef" for char in line)):
+        raise RuntimeError("Git commit output is not one exact lowercase SHA-1 line")
+    return line
+
+def strict_git_root_output(stdout: str, stderr: str) -> Path:
+    line = stdout[:-1] if stdout.endswith("\n") else ""
+    if stderr or stdout != line + "\n" or not line or not Path(line).is_absolute():
+        raise RuntimeError("Git worktree output is not one exact absolute line")
+    return Path(line)
+
+def git_repository_head(cwd: Path) -> str:
+    root = subprocess.run(
+        [GIT, "rev-parse", "--show-toplevel"], cwd=cwd,
+        env=dict(GIT_CLOSED_ENV), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if root.returncode:
+        raise RuntimeError(f"Git worktree identity failed: {root.stderr}")
+    observed_root = strict_git_root_output(root.stdout, root.stderr)
+    if observed_root.resolve() != cwd.resolve():
+        raise RuntimeError("Git worktree identity does not match requested repository")
+    head = subprocess.run(
+        [GIT, "rev-parse", "--verify", "HEAD"], cwd=cwd,
+        env=dict(GIT_CLOSED_ENV), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if head.returncode:
+        raise RuntimeError(f"Git HEAD identity failed: {head.stderr}")
+    return strict_git_commit_output(head.stdout, head.stderr)
+
+def git_repository_common_dir(cwd: Path) -> Path:
+    common = subprocess.run(
+        [GIT, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=cwd, env=dict(GIT_CLOSED_ENV), text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if common.returncode:
+        raise RuntimeError(f"Git common-dir identity failed: {common.stderr}")
+    return strict_git_root_output(common.stdout, common.stderr).resolve()
+
+def exact_tree_snapshot(root: Path) -> tuple[tuple[object, ...], ...]:
+    """Snapshot an exact tree without following links or interpreting contents."""
+    if not root.exists() and not root.is_symlink():
+        return ((".", "absent"),)
+    records: list[tuple[object, ...]] = []
+    def visit(path: Path, relative: str) -> None:
+        observed = path.lstat()
+        mode = stat.S_IMODE(observed.st_mode)
+        if stat.S_ISLNK(observed.st_mode):
+            records.append((relative, "symlink", mode, os.readlink(path)))
+            return
+        if stat.S_ISREG(observed.st_mode):
+            records.append((relative, "file", mode, observed.st_size, sha256(path)))
+            return
+        if stat.S_ISDIR(observed.st_mode):
+            records.append((relative, "dir", mode))
+            with os.scandir(path) as entries:
+                children = sorted(entries, key=lambda entry: entry.name)
+            for entry in children:
+                child_relative = entry.name if relative == "." else relative + "/" + entry.name
+                visit(Path(entry.path), child_relative)
+            return
+        records.append((relative, "other", mode, stat.S_IFMT(observed.st_mode)))
+    visit(root, ".")
+    return tuple(records)
+
+repo_head = git_repository_head(repo)
+authoritative_control_root = (
+    git_repository_common_dir(repo) / "nortropic-codex-autopilot")
+authoritative_control_before = exact_tree_snapshot(authoritative_control_root)
+
 try:
+    git_decoy = work / "r68-git-environment-decoy"
+    git_decoy.mkdir()
+    sh(GIT, "init", "-q", cwd=git_decoy)
+    sh(GIT, "config", "user.name", "h032-r68", cwd=git_decoy)
+    sh(GIT, "config", "user.email", "h032-r68@nortropic.invalid", cwd=git_decoy)
+    (git_decoy / "decoy").write_text("not the candidate\n", encoding="utf-8")
+    sh(GIT, "add", ".", cwd=git_decoy)
+    sh(GIT, "commit", "-qm", "decoy", cwd=git_decoy)
+    decoy_head = git_repository_head(git_decoy)
+    inherited_dir_env = dict(GIT_CLOSED_ENV, GIT_DIR=str(git_decoy / ".git"))
+    inherited_dir_probe = subprocess.run(
+        [GIT, "rev-parse", "--verify", "HEAD"], cwd=repo, env=inherited_dir_env,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    inherited_trace_env = dict(GIT_CLOSED_ENV, GIT_TRACE="1")
+    inherited_trace_probe = subprocess.run(
+        [GIT, "rev-parse", "--verify", "HEAD"], cwd=repo, env=inherited_trace_env,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    ambient_git_results = {}
+    ambient_cases = {
+        "git_dir": {"GIT_DIR": str(git_decoy / ".git")},
+        "git_work_tree": {
+            "GIT_DIR": str(git_decoy / ".git"),
+            "GIT_WORK_TREE": str(git_decoy),
+        },
+        "git_trace": {"GIT_TRACE": "1", "GIT_TRACE_SETUP": "1"},
+        "git_storage_controls": {
+            "GIT_COMMON_DIR": str(git_decoy / ".git"),
+            "GIT_INDEX_FILE": str(git_decoy / ".git/index"),
+            "GIT_OBJECT_DIRECTORY": str(git_decoy / ".git/objects"),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(git_decoy / ".git/objects"),
+        },
+        "git_config": {
+            "GIT_CONFIG_SYSTEM": str(git_decoy / "hostile-system-config"),
+            "GIT_CONFIG_GLOBAL": str(git_decoy / "hostile-global-config"),
+            "GIT_CONFIG_NOSYSTEM": "0",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.worktree",
+            "GIT_CONFIG_VALUE_0": str(git_decoy),
+        },
+        "unrelated": {"H032_R68_UNRELATED": "preserved-only-outside-git"},
+    }
+    for case_name, changes in ambient_cases.items():
+        prior = {key: os.environ.get(key) for key in changes}
+        try:
+            os.environ.update(changes)
+            ambient_git_results[case_name] = git_repository_head(repo)
+        finally:
+            for key, value in prior.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+    malformed_git_outputs_reject = True
+    for bad_stdout, bad_stderr in (
+        (repo_head, ""),
+        (repo_head + "\nextra\n", ""),
+        (repo_head.upper() + "\n", ""),
+        (repo_head + "\n", "trace: hostile inherited diagnostic\n"),
+        ("g" * 40 + "\n", ""),
+    ):
+        try:
+            strict_git_commit_output(bad_stdout, bad_stderr)
+            malformed_git_outputs_reject = False
+        except RuntimeError:
+            pass
+    check("J_ENVIRONMENT_CLOSED_CANDIDATE_HEAD",
+          decoy_head != repo_head
+          and inherited_dir_probe.returncode == 0
+          and inherited_dir_probe.stdout == decoy_head + "\n"
+          and inherited_trace_probe.returncode == 0
+          and bool(inherited_trace_probe.stderr)
+          and strict_git_commit_output(repo_head + "\n", "") == repo_head
+          and malformed_git_outputs_reject
+          and set(ambient_git_results) == set(ambient_cases)
+          and all(value == repo_head for value in ambient_git_results.values()),
+          f"candidate={repo_head} decoy={decoy_head} inherited_dir={inherited_dir_probe.stdout.strip()} trace_stderr={bool(inherited_trace_probe.stderr)} ambient={ambient_git_results} malformed_reject={malformed_git_outputs_reject}")
+    synthetic_gate_environment = without_caller_git_controls({
+        "PATH": "/judge/path", "HOME": "/judge/home", "H032_UNRELATED": "kept",
+        "GIT_DIR": str(git_decoy / ".git"), "GIT_WORK_TREE": str(git_decoy),
+        "GIT_COMMON_DIR": str(git_decoy / ".git"), "GIT_TRACE": "1",
+        "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.worktree",
+        "GIT_CONFIG_VALUE_0": str(git_decoy),
+    })
+    check("J_COMPOSED_GATE_GIT_ENVIRONMENT_CLOSURE",
+          not any(key.startswith(GIT_CONTROL_PREFIX) for key in os.environ)
+          and not any(key.startswith(GIT_CONTROL_PREFIX)
+                      for key in synthetic_gate_environment)
+          and synthetic_gate_environment.get("H032_UNRELATED") == "kept",
+          f"caller_names={CALLER_GIT_CONTROL_NAMES} active_git_names="
+          f"{sorted(key for key in os.environ if key.startswith(GIT_CONTROL_PREFIX))}")
+
     # Current-authority lifecycle. Historical h-032 candidates are design
     # evidence only; this exact row must follow the published h-033 chain.
     spec_document = strict_json(task_spec.read_text(encoding="utf-8"))
@@ -313,11 +504,63 @@ try:
     (base / "anchor").write_text("h032\n", encoding="utf-8")
     sh(GIT, "add", ".", cwd=base); sh(GIT, "commit", "-qm", "fixture", cwd=base)
 
+    # The complete environment relation is primary.  These varied disposable
+    # entries are chosen only after candidate bytes are fixed and strengthen
+    # the causal filter mutants; no name, length or prefix grants credit.
+    r72_candidate_source_digest = sha256(source)
+    r72_candidate_source_text = source.read_text(encoding="utf-8")
+    r72_gate_source = (repo / "verify/bin/h-032-exit").read_text(encoding="utf-8")
+    r72_env_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+    def fresh_r72_env_key(length: int) -> str:
+        while True:
+            random_bytes = os.urandom(length)
+            candidate = chr(ord("A") + random_bytes[0] % 26) + "".join(
+                r72_env_alphabet[value % len(r72_env_alphabet)]
+                for value in random_bytes[1:])
+            if (candidate not in os.environ and candidate not in r72_gate_source
+                    and candidate not in r72_candidate_source_text
+                    and not candidate.startswith(("GIT_","DYLD_","GH_",
+                                                  "GITHUB_","SLACK_","H032_",
+                                                  "NORTROPIC_"))
+                    and candidate not in {"LD_PRELOAD","LD_LIBRARY_PATH",
+                                          "__PYVENV_LAUNCHER__"}):
+                return candidate
+    def fresh_r72_env_value(length: int) -> str:
+        while True:
+            candidate=os.urandom(length).hex()
+            if (candidate not in r72_gate_source
+                    and candidate not in r72_candidate_source_text):
+                return candidate
+    r72_env_lengths=[]
+    while len(r72_env_lengths)<3:
+        candidate_length=11+(os.urandom(1)[0] % 37)
+        if candidate_length not in r72_env_lengths:
+            r72_env_lengths.append(candidate_length)
+    r72_env_keys=[fresh_r72_env_key(length) for length in r72_env_lengths]
+    r72_unrelated_environment={
+        key:fresh_r72_env_value(19+index*7)
+        for index,key in enumerate(r72_env_keys)
+    }
+    r72_extra_key=fresh_r72_env_key(17)
+    while r72_extra_key in r72_unrelated_environment:
+        r72_extra_key=fresh_r72_env_key(17)
+    r72_extra_value=fresh_r72_env_value(29)
+
     provider_dir = work / "providers"; provider_dir.mkdir()
     provider = provider_dir / "totally-renamed-agent"
     capture = work / "capture.json"
-    provider.write_text("""#!/usr/bin/env python3
+    # The synthetic provider uses the host's fixed system Python in isolated,
+    # no-site mode.  Apple's Python prepends developer manpaths before script
+    # execution, so the judge-private launcher fixture also carries the exact
+    # pre-interpreter MANPATH value; the provider restores it and removes both
+    # fixture-only fields before observing the complete environment.
+    provider.write_text("""#!/usr/bin/python3 -IS
 import hashlib,json,os,pathlib,signal,subprocess,sys,time
+_manpath_present=os.environ.pop('H032_FIXTURE_MANPATH_PRESENT')
+_manpath_value=os.environ.pop('H032_FIXTURE_MANPATH_VALUE')
+if _manpath_present == '1': os.environ['MANPATH']=_manpath_value
+elif _manpath_present == '0': os.environ.pop('MANPATH',None)
+else: raise RuntimeError('invalid fixture MANPATH presence')
 self_path=pathlib.Path(sys.argv[0]); root=self_path.parent
 host_path=root/'codex-code-mode-host'
 before=hashlib.sha256(self_path.read_bytes()).hexdigest()
@@ -443,7 +686,22 @@ elif mode == 'disconnected_writer':
     subprocess.run([sys.executable,'-c','import pathlib,sys;pathlib.Path(sys.argv[1]).write_text(sys.argv[2])',str(out),encoded],check=True)
 elif mode != 'missing': out.write_text(encoded)
 parent_stat=out.parent.lstat() if out.parent.exists() else None
-pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({'argv0':str(self_path),'sha256':before,'host_path':str(host_path),'host_sha256':host_before,'attacks':attacks,'output_path':str(out),'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,'is_symlink':out.parent.is_symlink(),'entries':sorted(p.name for p in out.parent.iterdir())} if parent_stat else None}))
+output_stat=out.lstat() if out.is_file() and not out.is_symlink() else None
+output_digest=hashlib.sha256(out.read_bytes()).hexdigest() if output_stat else None
+pathlib.Path(os.environ['H032_CAPTURE']).write_text(json.dumps({
+ 'argv0':str(self_path),'sha256':before,'host_path':str(host_path),
+ 'host_sha256':host_before,'attacks':attacks,'output_path':str(out),
+ 'output_identity':{'dev':output_stat.st_dev,'ino':output_stat.st_ino,
+                    'size':output_stat.st_size,'mode':output_stat.st_mode & 0o777,
+                    'digest':output_digest} if output_stat else None,
+ 'mode':mode,'hostile_error':hostile_error,'live_attacks':live_attacks,
+ 'git_control_env':sorted(key for key in os.environ if key.startswith('GIT_')),
+ 'complete_environment':dict(os.environ)
+     if os.environ.get('H032_CAPTURE_COMPLETE_ENV') == '1' else None,
+ 'output_parent':{'uid':parent_stat.st_uid,'mode':parent_stat.st_mode & 0o777,
+                  'is_symlink':out.parent.is_symlink(),
+                  'entries':sorted(p.name for p in out.parent.iterdir())}
+                 if parent_stat else None}))
 thread='h032'
 if mode == 'wrong_thread': thread='foreign-thread'
 if mode != 'missing_thread': print(json.dumps({'type':'thread.started','thread_id':thread}))
@@ -1057,10 +1315,117 @@ def run_codex(sink, canonical, invocation, run, role):
     launch_mode = ["valid"]
     launch_extra: dict[str, str] = {}
     provider_process_starts = [0]
+    launch_output_override: list[Path | None] = [None]
+    launch_expected_context: list[dict[str, object] | None] = [None]
+    launch_observations: dict[str, dict[str, object]] = {}
+    launch_environment_mode: list[str | None] = [None]
+    launch_environment_additions: list[dict[str, str]] = [{}]
+    launch_environment_inputs: dict[str, dict[str, str]] = {}
+    def fixture_provider_environment(mode: str, incoming: dict[str,str]) -> dict[str,str]:
+        env={key:value for key,value in incoming.items()
+             if not key.startswith("GIT_")
+             and not key.startswith("DYLD_")
+             and key not in {"LD_PRELOAD","LD_LIBRARY_PATH","__PYVENV_LAUNCHER__"}}
+        if mode=="drop_one": env.pop(r72_env_keys[0],None)
+        elif mode=="length":
+            lengths=set(map(len,r72_unrelated_environment))
+            env={key:value for key,value in env.items()
+                 if key.startswith(("H032_","NORTROPIC_"))
+                 or key in {"PATH","HOME","TMPDIR"} or len(key) in lengths}
+        elif mode=="prefix":
+            prefixes=tuple(key[:4] for key in r72_unrelated_environment)
+            env={key:value for key,value in env.items()
+                 if key.startswith(("H032_","NORTROPIC_",*prefixes))
+                 or key in {"PATH","HOME","TMPDIR"}}
+        elif mode=="fixed":
+            fixed=set(r72_unrelated_environment)|{
+                "PATH","HOME","TMPDIR","NORTROPIC_TRUST_ROOT",
+                "NORTROPIC_OPAQUE_RUNTIME_SENTINEL"}
+            env={key:value for key,value in env.items()
+                 if key.startswith("H032_") or key in fixed}
+        elif mode=="extra": env[r72_extra_key]=r72_extra_value
+        elif mode!="exact": raise RuntimeError(f"unknown fixture environment mode: {mode}")
+        return env
     system_popen = module.subprocess.Popen
+    def observe_launcher_argv(flat: list[object], child_env: dict[str, str]) -> dict[str, object]:
+        context=launch_expected_context[0]
+        observation: dict[str, object]={"valid":False}
+        try:
+            values=[str(item) for item in flat]
+            separators=[index for index,value in enumerate(values) if value=="--"]
+            if context is None or separators != [8]: return observation
+            provider_argv=values[9:]
+            output_indexes=[index for index,value in enumerate(provider_argv) if value=="-o"]
+            worktree_indexes=[index for index,value in enumerate(provider_argv) if value=="-C"]
+            if output_indexes != [len(provider_argv)-3] or worktree_indexes != [1]:
+                return observation
+            output=Path(provider_argv[output_indexes[0]+1])
+            envelope_raw=Path(values[6]);worktree=Path(values[5])
+            launcher=Path(values[3]);python=Path(values[0])
+            envelope_stat=envelope_raw.lstat()
+            envelope=envelope_raw.resolve(strict=True)
+            expected_repo=Path(context["repo"]).resolve(strict=True)
+            expected_worktree=Path(context["worktree"]).resolve(strict=True)
+            expected_runs=(Path(context["journal_common"]).resolve(strict=True)
+                           /"nortropic-codex-autopilot"/"runs")
+            runs_before=set(context["runs_before"])
+            current_runs=sorted(set(expected_runs.iterdir())-runs_before)
+            current_run=(current_runs[0] if len(current_runs)==1 else None)
+            journal_path=expected_runs.parent/"events.jsonl"
+            journal_before=context["journal_before"]
+            journal_after=journal_path.read_bytes() if journal_path.is_file() else b""
+            journal_current=False
+            if (isinstance(journal_before,bytes)
+                    and journal_after.startswith(journal_before)
+                    and len(journal_after)>len(journal_before)):
+                suffix=journal_after[len(journal_before):]
+                if suffix.endswith(b"\n"):
+                    records=[strict_json(line.decode("utf-8"))
+                             for line in suffix.splitlines()]
+                    journal_current=(len(records)==1 and isinstance(records[0],dict)
+                        and records[0].get("event")=="AGENT_START"
+                        and records[0].get("role")=="TEST_AUTHOR"
+                        and records[0].get("worktree")==str(expected_worktree)
+                        and records[0].get("head")==git_repository_head(expected_worktree))
+            trust_root=Path(child_env["NORTROPIC_TRUST_ROOT"])
+            checks={
+                "python_flags":values[1:3]==["-I","-S"],
+                "launcher":launcher==expected_repo/"controller/launch/cli"
+                    and launcher.is_file() and not launcher.is_symlink(),
+                "run":values[4]=="run",
+                "worktree":worktree==expected_worktree,
+                "envelope_object":envelope_raw.is_absolute() and envelope_raw==envelope
+                    and stat.S_ISREG(envelope_stat.st_mode) and not envelope_raw.is_symlink(),
+                "envelope_name":envelope.name=="provider-envelope.json",
+                "envelope_journal":envelope.parent.parent==expected_runs,
+                "current_run":current_run is not None and envelope.parent==current_run,
+                "current_journal":journal_current,
+                "timeout":values[7]=="86400",
+                "provider":provider_argv[0]==str(trust_root/"provider"),
+                "provider_worktree":provider_argv[2]==str(expected_worktree),
+                "output":output.is_absolute(),
+                "python":python==trust_root/"python3.12",
+            }
+            syntax_ok=all(checks.values())
+            observation={
+                "valid":syntax_ok,"output":str(output),"envelope":str(envelope),
+                "worktree":str(worktree),"timeout":values[7],"separator":separators[0],
+                "provider_output_count":len(output_indexes),
+                "provider_worktree_count":len(worktree_indexes),
+                "checks":checks,
+                "current_run":str(current_run) if current_run is not None else None,
+            }
+        except (KeyError,OSError,ValueError,IndexError):
+            pass
+        return observation
     def fixture_popen(argv, *args, **kwargs):
         flat = list(argv)
         if "-o" in flat:
+            if launch_output_override[0] is not None:
+                output_indexes=[index for index,value in enumerate(flat) if value=="-o"]
+                if len(output_indexes)==1 and output_indexes[0]+1<len(flat):
+                    flat[output_indexes[0]+1]=str(launch_output_override[0])
+                    argv=flat
             active = audit_active[0]
             if isinstance(active, dict):
                 try:
@@ -1074,15 +1439,28 @@ def run_codex(sink, canonical, invocation, run, role):
                 except (OSError, ValueError):
                     pass
             kwargs = dict(kwargs); child_env = dict(kwargs.get("env") or {})
+            child_env.update(launch_environment_additions[0])
+            if launch_environment_mode[0] is not None:
+                output_key=str(flat[flat.index("-o")+1])
+                launch_environment_inputs[output_key]=dict(child_env)
+                child_env=fixture_provider_environment(
+                    launch_environment_mode[0],child_env)
+            fixture_manpath_present="1" if "MANPATH" in child_env else "0"
+            fixture_manpath_value=child_env.get("MANPATH","")
             child_env.update({
                 "H032_RESULT_MODE": launch_mode[0],
                 "H032_CAPTURE": str(capture),
                 "H032_LOCKED_SOURCE": str(provider),
                 "H032_SAFE_ATTACK_ROOT": str(work),
                 "H032_HOST_DIRECT_MARKER": str(work / "HOST_DIRECT_EXECUTED"),
+                "H032_FIXTURE_MANPATH_PRESENT":fixture_manpath_present,
+                "H032_FIXTURE_MANPATH_VALUE":fixture_manpath_value,
                 **launch_extra,
             })
             kwargs["env"] = child_env
+            observation=observe_launcher_argv(flat,child_env)
+            output=observation.get("output")
+            if isinstance(output,str): launch_observations[output]=observation
         process = system_popen(argv, *args, **kwargs)
         if "-o" in flat:
             provider_process_starts[0] += 1
@@ -3098,10 +3476,199 @@ def run_codex(sink, canonical, invocation, run, role):
         except Exception as exc:
             physical_hostile_case=(False,f"{type(exc).__name__}:{exc}")
         physical_hostile_capture=safe_capture()
+
+        # A caller-selected Git repository is exercised through the complete
+        # product run, not merely through the judge helper.  Both repositories
+        # are disposable.  A conforming controller keeps every Git subprocess
+        # and the launched provider on physical_repo/physical_wt while leaving
+        # the hostile repository byte-for-byte untouched.
+        physical_second_id = physical_module.now_id()
+        physical_clock_deadline=time.monotonic()+2.0
+        while physical_module.now_id()==physical_second_id \
+                and time.monotonic()<physical_clock_deadline:
+            time.sleep(.01)
+        product_git_decoy=work/"isolated-product-git-decoy"
+        product_git_decoy.mkdir()
+        sh(GIT,"init","-q",cwd=product_git_decoy)
+        sh(GIT,"config","user.name","h032-product-git-decoy",cwd=product_git_decoy)
+        sh(GIT,"config","user.email","h032-product-git@nortropic.invalid",cwd=product_git_decoy)
+        (product_git_decoy/"anchor").write_text("hostile Git authority\n",encoding="utf-8")
+        sh(GIT,"add",".",cwd=product_git_decoy)
+        sh(GIT,"commit","-qm","hostile caller Git authority",cwd=product_git_decoy)
+        product_git_decoy_common=git_repository_common_dir(product_git_decoy)
+        product_git_decoy_before=exact_tree_snapshot(product_git_decoy)
+        # Prove the full-tree oracle sees mutations outside the autopilot
+        # subtree: worktree, config, index, refs and arbitrary object siblings.
+        product_git_snapshot_mutants={}
+        decoy_mutation_paths={
+            "worktree":product_git_decoy/"anchor",
+            "config":product_git_decoy_common/"config",
+            "index":product_git_decoy_common/"index",
+            "ref":next((product_git_decoy_common/"refs"/"heads").iterdir()),
+        }
+        for mutation_name,mutation_path in decoy_mutation_paths.items():
+            original_bytes=mutation_path.read_bytes()
+            mutation_path.write_bytes(original_bytes+b"\nR70-MUTATION\n")
+            product_git_snapshot_mutants[mutation_name]=(
+                exact_tree_snapshot(product_git_decoy)!=product_git_decoy_before)
+            mutation_path.write_bytes(original_bytes)
+        object_mutant=product_git_decoy_common/"objects"/"r70-review-mutant"
+        object_mutant.write_bytes(b"object mutation\n")
+        product_git_snapshot_mutants["object"]=(
+            exact_tree_snapshot(product_git_decoy)!=product_git_decoy_before)
+        object_mutant.unlink()
+        product_git_decoy_restored=(
+            exact_tree_snapshot(product_git_decoy)==product_git_decoy_before)
+        physical_git_runs_before=(set(physical_runs_root.iterdir())
+                                  if physical_runs_root.is_dir() else set())
+        physical_git_common=git_repository_common_dir(physical_repo)
+        physical_git_events=physical_git_common/"nortropic-codex-autopilot"/"events.jsonl"
+        physical_git_events_before=(physical_git_events.read_bytes()
+                                    if physical_git_events.is_file() else b"")
+        product_git_changes={
+            "GIT_DIR":str(product_git_decoy_common),
+            "GIT_WORK_TREE":str(product_git_decoy),
+            **r72_unrelated_environment,
+        }
+        product_git_prior={key:os.environ.get(key) for key in product_git_changes}
+        # A stale capture from the preceding physical attempt is deliberately
+        # present and then removed before this invocation. Only a new provider
+        # child can recreate it.
+        capture_was_stale=capture.is_file()
+        stale_capture_output=(safe_capture().get("output_path") if capture_was_stale else None)
+        if capture.exists(): capture.unlink()
+        capture_absent_before=not capture.exists()
+        physical_git_starts_before=provider_process_starts[0]
+        launch_mode[0]="valid"
+        launch_extra["H032_CAPTURE_COMPLETE_ENV"]="1"
+        launch_expected_context[0]={"repo":physical_repo,"worktree":physical_wt,
+                                    "journal_common":physical_git_common,
+                                    "runs_before":frozenset(physical_git_runs_before),
+                                    "journal_before":physical_git_events_before}
+        try:
+            os.environ.update(product_git_changes)
+            physical_git_incoming_environment=dict(os.environ)
+            try:
+                physical_git_run=physical_module.run_codex(
+                    physical_repo,physical_wt,"TEST_AUTHOR","H032-GIT-ENVIRONMENT")
+                physical_git_case=(True,"ADMITTED")
+            except Exception as exc:
+                physical_git_case=(False,f"{type(exc).__name__}:{exc}")
+            physical_git_capture=safe_capture()
+        finally:
+            launch_expected_context[0]=None
+            for key,value in product_git_prior.items():
+                if value is None: os.environ.pop(key,None)
+                else: os.environ[key]=value
+            launch_extra.pop("H032_CAPTURE_COMPLETE_ENV",None)
+        physical_git_start_delta=provider_process_starts[0]-physical_git_starts_before
+        physical_git_launch_observation=launch_observations.get(
+            str(physical_git_capture.get("output_path","")),{"valid":False})
+        product_git_decoy_after=exact_tree_snapshot(product_git_decoy)
+        physical_git_runs_after=(set(physical_runs_root.iterdir())
+                                 if physical_runs_root.is_dir() else set())
+        physical_git_new_runs=sorted(physical_git_runs_after-physical_git_runs_before)
+        physical_git_events_after=(physical_git_events.read_bytes()
+                                   if physical_git_events.is_file() else b"")
+        physical_git_records=[];physical_git_journal_ok=False
+        if (physical_git_events_after.startswith(physical_git_events_before)
+                and len(physical_git_events_after)>len(physical_git_events_before)):
+            suffix=physical_git_events_after[len(physical_git_events_before):]
+            try:
+                if suffix.endswith(b"\n"):
+                    physical_git_records=[strict_json(line.decode("utf-8"))
+                                          for line in suffix.splitlines()]
+                    physical_git_journal_ok=all(isinstance(item,dict)
+                                                for item in physical_git_records)
+            except Exception:
+                physical_git_records=[];physical_git_journal_ok=False
     finally:
         launch_mode[0] = "valid"
         if prior_trust_root is None: os.environ.pop("NORTROPIC_TRUST_ROOT",None)
         else: os.environ["NORTROPIC_TRUST_ROOT"]=prior_trust_root
+
+    # R74 environment controls never rewrite or anchor candidate source.  A
+    # judge-private Popen transform starts from the exact current child mapping,
+    # then exercises the complete relation at the same bound provider launch.
+    # Hostile Git selectors enter only that child mapping, so every positive
+    # journal/envelope remains independently rooted in the intended repository.
+    r74_intended_common=git_repository_common_dir(physical_repo)
+    r74_runs_root=r74_intended_common/"nortropic-codex-autopilot"/"runs"
+    r74_runs_root.mkdir(parents=True,exist_ok=True)
+    r74_prior_run=r74_runs_root/"r74-preexisting-prior-run"
+    r74_prior_run.mkdir()
+    r74_prior_envelope=r74_prior_run/"provider-envelope.json"
+    r74_prior_envelope.write_text('{"prior":true}\n',encoding="utf-8")
+    r74_last_clock_id=[None]
+    def run_r74_environment_oracle(name: str) -> dict[str,object]:
+        # The product's frozen run identifier is second-granular.  Keep every
+        # oracle invocation a genuinely new attempt instead of letting a fast
+        # matrix collide with the preceding run directory.
+        clock_deadline=time.monotonic()+2.0
+        while (physical_module.now_id()==r74_last_clock_id[0]
+                and time.monotonic()<clock_deadline):
+            time.sleep(.01)
+        current_clock_id=physical_module.now_id()
+        r74_last_clock_id[0]=current_clock_id
+        runs_before=frozenset(r74_runs_root.iterdir())
+        journal_path=r74_runs_root.parent/"events.jsonl"
+        journal_before=journal_path.read_bytes() if journal_path.is_file() else b""
+        split_root=work/f"r74-private-result-{name}"
+        split_root.mkdir(mode=0o700)
+        split_sink=split_root/"result.json"
+        if capture.exists(): capture.unlink()
+        starts_before=provider_process_starts[0]
+        prior_trust=os.environ.get("NORTROPIC_TRUST_ROOT")
+        launch_mode[0]="valid"
+        launch_extra["H032_CAPTURE_COMPLETE_ENV"]="1"
+        launch_environment_mode[0]=name
+        launch_environment_additions[0]=dict(product_git_changes)
+        launch_expected_context[0]={
+            "repo":physical_repo,"worktree":physical_wt,
+            "journal_common":r74_intended_common,
+            "runs_before":runs_before,"journal_before":journal_before}
+        launch_output_override[0]=split_sink
+        try:
+            os.environ["NORTROPIC_TRUST_ROOT"]=str(physical_repo)
+            try:
+                physical_module.run_codex(
+                    physical_repo,physical_wt,"TEST_AUTHOR",f"H032-R74-{name.upper()}")
+                case=(True,"ADMITTED")
+            except Exception as exc:
+                case=(False,f"{type(exc).__name__}:{exc}")
+            observed=safe_capture()
+        finally:
+            launch_mode[0]="valid"
+            launch_output_override[0]=None
+            launch_expected_context[0]=None
+            launch_environment_mode[0]=None
+            launch_environment_additions[0]={}
+            launch_extra.pop("H032_CAPTURE_COMPLETE_ENV",None)
+            if prior_trust is None: os.environ.pop("NORTROPIC_TRUST_ROOT",None)
+            else: os.environ["NORTROPIC_TRUST_ROOT"]=prior_trust
+        output=str(observed.get("output_path","")) if isinstance(observed,dict) else ""
+        incoming=launch_environment_inputs.pop(output,{})
+        observation=launch_observations.get(output,{"valid":False})
+        runs_after=set(r74_runs_root.iterdir())
+        current_runs=sorted(runs_after-set(runs_before))
+        split_entries=sorted(path.name for path in split_root.iterdir())
+        output_parent=observed.get("output_parent") if isinstance(observed,dict) else None
+        shutil.rmtree(split_root)
+        return {"case":case,"capture":observed,"incoming":incoming,
+                "starts":provider_process_starts[0]-starts_before,
+                "launch":observation,"split_root":str(split_root),
+                "split_sink":str(split_sink),"split_entries":split_entries,
+                "output_parent":output_parent,"split_clean":not split_root.exists(),
+                "current_runs":[str(path) for path in current_runs],
+                "intended_common":str(r74_intended_common)}
+    r74_decoy_before_environment_oracles=exact_tree_snapshot(product_git_decoy)
+    r72_environment_variants={
+        name:run_r74_environment_oracle(name)
+        for name in ("exact","drop_one","length","prefix","fixed","extra")
+    }
+    r74_decoy_after_environment_oracles=exact_tree_snapshot(product_git_decoy)
+    r73_split_variant=r72_environment_variants["exact"]
+
     physical_output = Path(physical_capture.get("output_path", "/private/tmp/h032-missing-physical-output"))
     physical_canonical = (physical_new_runs[0]/"result.json" if len(physical_new_runs)==1
                           else Path("/private/tmp/h032-missing-physical-canonical"))
@@ -3120,6 +3687,264 @@ def run_codex(sink, canonical, invocation, run, role):
             "global_events","envelope","sibling_run","refs",
             "config","hooks","source","trust"}
         and all(value!=0 for value in physical_hostile_capture.get("live_attacks",{}).values()))
+    physical_git_output=Path(physical_git_capture.get(
+        "output_path","/private/tmp/h032-missing-git-output"))
+    def current_provider_capture_binding_admits(observed, start_delta,
+                                                prior_output) -> bool:
+        identity=observed.get("output_identity") if isinstance(observed,dict) else None
+        output=observed.get("output_path") if isinstance(observed,dict) else None
+        return (start_delta==1 and observed.get("mode")=="valid"
+            and isinstance(output,str) and bool(output) and Path(output).is_absolute()
+            and output!=prior_output and isinstance(identity,dict)
+            and set(identity)=={"dev","ino","size","mode","digest"}
+            and type(identity.get("dev")) is int and type(identity.get("ino")) is int
+            and type(identity.get("size")) is int and identity.get("size",0)>0
+            and identity.get("mode")==0o600
+            and isinstance(identity.get("digest"),str)
+            and len(identity.get("digest"))==64
+            and set(identity.get("digest"))<=set("0123456789abcdef"))
+    def launcher_observation_admits(observation, observed) -> bool:
+        if not (isinstance(observation,dict)
+                and set(observation)=={"valid","output","envelope","worktree",
+                                       "timeout","separator","provider_output_count",
+                                       "provider_worktree_count","checks","current_run"}):
+            return False
+        envelope=observation.get("envelope")
+        current_run=observation.get("current_run")
+        return (isinstance(envelope,str) and isinstance(current_run,str)
+            and Path(envelope).is_absolute() and Path(current_run).is_absolute()
+            and Path(envelope).parent==Path(current_run)
+            and observation.get("valid") is True
+            and isinstance(observation.get("checks"),dict)
+            and all(observation["checks"].values())
+            and observation.get("output")==observed.get("output_path")
+            and observation.get("timeout")=="86400"
+            and observation.get("separator")==8
+            and observation.get("provider_output_count")==1
+            and observation.get("provider_worktree_count")==1)
+    def expected_provider_environment(incoming, observed, launch_observation):
+        if not launcher_observation_admits(launch_observation,observed):
+            return None
+        expected={key:value for key,value in incoming.items()
+                  if not key.startswith("GIT_")
+                  and not key.startswith("DYLD_")
+                  and key not in {"LD_PRELOAD","LD_LIBRARY_PATH",
+                                  "__PYVENV_LAUNCHER__"}
+                  and not key.startswith(("GH_","GITHUB_","SLACK_"))}
+        expected.update({
+            "NORTROPIC_TRUST_ROOT":str(Path(observed.get(
+                "argv0","/private/tmp/h032-missing-provider")).parent),
+            "NORTROPIC_KUVERT":str(launch_observation["envelope"]),
+            "H032_RESULT_MODE":"valid",
+            "H032_CAPTURE":str(capture),
+            "H032_LOCKED_SOURCE":str(provider),
+            "H032_SAFE_ATTACK_ROOT":str(work),
+            "H032_HOST_DIRECT_MARKER":str(work/"HOST_DIRECT_EXECUTED"),
+            "H032_CAPTURE_COMPLETE_ENV":"1",
+        })
+        return expected
+    def environment_fingerprint(mapping) -> dict[str,object]:
+        valid=(isinstance(mapping,dict)
+               and all(isinstance(key,str) and isinstance(value,str)
+                       for key,value in mapping.items()))
+        if not valid:
+            return {"valid":False,"count":-1,"keyset_sha256":None,
+                    "mapping_sha256":None}
+        keys=json.dumps(sorted(mapping),ensure_ascii=True,
+                        separators=(",",":")).encode("utf-8")
+        encoded=json.dumps(mapping,sort_keys=True,ensure_ascii=True,
+                           separators=(",",":")).encode("utf-8")
+        return {"valid":True,"count":len(mapping),
+                "keyset_sha256":hashlib.sha256(keys).hexdigest(),
+                "mapping_sha256":hashlib.sha256(encoded).hexdigest()}
+    physical_git_capture_bound=current_provider_capture_binding_admits(
+        physical_git_capture,physical_git_start_delta,stale_capture_output)
+    physical_git_expected_environment=expected_provider_environment(
+        physical_git_incoming_environment,physical_git_capture,
+        physical_git_launch_observation)
+    physical_git_environment_relation=(
+        physical_git_capture.get("complete_environment")
+        ==physical_git_expected_environment)
+    stale_capture_mutant=dict(physical_git_capture)
+    wrong_mode_mutant=dict(physical_git_capture);wrong_mode_mutant["mode"]="missing"
+    repeated_output_mutant=dict(physical_git_capture)
+    repeated_output_mutant["output_path"]=stale_capture_output
+    capture_binding_mutants_reject=(
+        not current_provider_capture_binding_admits(
+            stale_capture_mutant,0,stale_capture_output)
+        and not current_provider_capture_binding_admits(
+            wrong_mode_mutant,1,stale_capture_output)
+        and not current_provider_capture_binding_admits(
+            repeated_output_mutant,1,stale_capture_output))
+    r72_dynamic_literals_absent=(
+        sha256(source)==r72_candidate_source_digest
+        and all(key not in r72_gate_source and value not in r72_gate_source
+                and key not in r72_candidate_source_text
+                and value not in r72_candidate_source_text
+                and key not in provider.read_text(encoding="utf-8")
+                and value not in provider.read_text(encoding="utf-8")
+                for key,value in r72_unrelated_environment.items())
+        and r72_extra_key not in r72_candidate_source_text
+        and r72_extra_value not in r72_candidate_source_text)
+    r72_variant_observations={}
+    for variant_name,variant in r72_environment_variants.items():
+        observed=variant["capture"]
+        expected=expected_provider_environment(
+            variant["incoming"],observed,variant["launch"])
+        r72_variant_observations[variant_name]={
+            "starts":variant["starts"],
+            "binding":current_provider_capture_binding_admits(
+                observed,variant["starts"],None),
+            "git_empty":observed.get("git_control_env")==[],
+            "relation":observed.get("complete_environment")==expected,
+            "launcher":variant["launch"].get("valid") is True,
+            "intended":(
+                isinstance(variant["launch"].get("current_run"),str)
+                and Path(variant["launch"]["current_run"]).parent
+                    ==Path(variant["intended_common"])/"nortropic-codex-autopilot"/"runs"
+                and variant["current_runs"]==[variant["launch"]["current_run"]]),
+            "split":(variant["launch"].get("envelope")
+                     not in {None,str(Path(variant["split_sink"]).with_name(
+                         "provider-envelope.json"))}
+                     and variant["split_entries"]==["result.json"]
+                     and variant["split_clean"] is True),
+            "observed_fingerprint":environment_fingerprint(
+                observed.get("complete_environment")),
+            "expected_fingerprint":environment_fingerprint(expected),
+        }
+    r73_exact_variant=r73_split_variant
+    r73_exact_capture=r73_exact_variant["capture"]
+    r73_exact_launch=r73_exact_variant["launch"]
+    r73_exact_expected=expected_provider_environment(
+        r73_exact_variant["incoming"],r73_exact_capture,r73_exact_launch)
+    r73_sibling_assumption=(dict(r73_exact_expected)
+                            if isinstance(r73_exact_expected,dict) else {})
+    r73_sibling_assumption["NORTROPIC_KUVERT"]=str(
+        Path(r73_exact_variant["split_sink"]).with_name("provider-envelope.json"))
+    r73_wrong_envelope=dict(r73_exact_launch)
+    r73_wrong_envelope["envelope"]=r73_sibling_assumption["NORTROPIC_KUVERT"]
+    r73_wrong_syntax=dict(r73_exact_launch);r73_wrong_syntax["timeout"]="3600"
+    r74_stale_envelope_launch=dict(r73_exact_launch)
+    r74_stale_envelope_launch["envelope"]=str(r74_prior_envelope)
+    r74_decoy_envelope_launch=dict(r73_exact_launch)
+    r74_decoy_envelope_launch["envelope"]=str(
+        product_git_decoy_common/"nortropic-codex-autopilot"/"runs"/
+        "decoy-run"/"provider-envelope.json")
+    r73_stale_launch_rejects=(expected_provider_environment(
+        r73_exact_variant["incoming"],r73_exact_capture,
+        physical_git_launch_observation) is None)
+    r74_current_output_stale_envelope_rejects=(expected_provider_environment(
+        r73_exact_variant["incoming"],r73_exact_capture,
+        r74_stale_envelope_launch) is None)
+    r74_current_output_decoy_envelope_rejects=(expected_provider_environment(
+        r73_exact_variant["incoming"],r73_exact_capture,
+        r74_decoy_envelope_launch) is None)
+    r73_wrong_envelope_rejects=(
+        r73_exact_capture.get("complete_environment")
+        !=expected_provider_environment(r73_exact_variant["incoming"],
+                                       r73_exact_capture,r73_wrong_envelope))
+    r73_wrong_syntax_rejects=(
+        expected_provider_environment(r73_exact_variant["incoming"],r73_exact_capture,
+                                      r73_wrong_syntax) is None)
+    r73_split_topology_ok=(
+        launcher_observation_admits(r73_exact_launch,r73_exact_capture)
+        and r73_exact_launch.get("worktree")==str(
+            Path(r73_exact_variant["launch"]["worktree"]).resolve(strict=True))
+        and r73_exact_launch.get("output")==r73_exact_variant["split_sink"]
+        and r73_exact_launch.get("envelope")
+            !=r73_sibling_assumption["NORTROPIC_KUVERT"]
+        and Path(r73_exact_launch["envelope"]).name=="provider-envelope.json"
+        and Path(r73_exact_launch["envelope"]).parent==Path(
+            r73_exact_launch["current_run"])
+        and Path(r73_exact_launch["current_run"]).parent
+            ==r74_intended_common/"nortropic-codex-autopilot"/"runs"
+        and r73_exact_variant["current_runs"]==[r73_exact_launch["current_run"]]
+        and r73_exact_variant["output_parent"].get("mode")==0o700
+        and r73_exact_variant["output_parent"].get("entries")==["result.json"]
+        and r73_exact_variant["split_entries"]==["result.json"]
+        and r73_exact_variant["split_clean"] is True)
+    physical_git_canonical_valid=False
+    if len(physical_git_new_runs)==1:
+        physical_git_canonical=physical_git_new_runs[0]/"result.json"
+        if physical_git_canonical.is_file() and not physical_git_canonical.is_symlink():
+            try:
+                physical_git_canonical_document=strict_json(
+                    physical_git_canonical.read_text(encoding="utf-8"))
+                physical_git_canonical_valid=canonical_result_valid(
+                    physical_git_canonical_document,schema_document,
+                    accepted_digest=physical_git_capture["output_identity"]["digest"])
+            except Exception:
+                physical_git_canonical_valid=False
+    check("J_R70_FULL_DECOY_TREE_MUTATION_ORACLE",
+          product_git_decoy_restored
+          and set(product_git_snapshot_mutants)=={
+              "worktree","config","index","ref","object"}
+          and all(product_git_snapshot_mutants.values()),
+          f"mutants={product_git_snapshot_mutants} restored={product_git_decoy_restored}")
+    check("J_R70_CURRENT_PROVIDER_CAPTURE_ORACLE",
+          capture_was_stale and capture_absent_before
+          and physical_git_capture_bound and capture_binding_mutants_reject,
+          f"stale={capture_was_stale} cleared={capture_absent_before} "
+          f"starts={physical_git_start_delta} capture_bound={physical_git_capture_bound} "
+          f"mutants_reject={capture_binding_mutants_reject}")
+    check("J_R72_COMPLETE_PROVIDER_ENVIRONMENT_RELATION",
+          r72_dynamic_literals_absent and capture_binding_mutants_reject
+          and r72_variant_observations.get("exact",{}).get("relation") is True
+          and all(item.get("starts")==1 and item.get("binding") is True
+                  and item.get("git_empty") is True
+                  for item in r72_variant_observations.values())
+          and all(r72_variant_observations.get(name,{}).get("relation") is False
+                  for name in {"drop_one","length","prefix","fixed","extra"}),
+          f"source_absent={r72_dynamic_literals_absent} "
+          f"binding_mutants={capture_binding_mutants_reject} "
+          f"actual_observed={environment_fingerprint(physical_git_capture.get('complete_environment'))} "
+          f"actual_expected={environment_fingerprint(physical_git_expected_environment)} "
+          f"variants={r72_variant_observations}")
+    check("J_R73_LAUNCHER_ENVELOPE_ENVIRONMENT_BINDING",
+          r73_split_topology_ok
+          and r73_exact_capture.get("complete_environment")==r73_exact_expected
+          and r73_exact_capture.get("complete_environment")!=r73_sibling_assumption
+          and r73_stale_launch_rejects and r73_wrong_envelope_rejects
+          and r73_wrong_syntax_rejects,
+          f"split={r73_split_topology_ok} "
+          f"checks={r73_exact_launch.get('checks')} "
+          f"observed={environment_fingerprint(r73_exact_capture.get('complete_environment'))} "
+          f"expected={environment_fingerprint(r73_exact_expected)} "
+          f"sibling={r73_exact_capture.get('complete_environment')!=r73_sibling_assumption} "
+          f"stale={r73_stale_launch_rejects} wrong_envelope={r73_wrong_envelope_rejects} "
+          f"wrong_syntax={r73_wrong_syntax_rejects}")
+    check("J_R74_CURRENT_RUN_AND_INTENDED_ENVIRONMENT_ORACLE",
+          all(item.get("launcher") is True and item.get("intended") is True
+                  and item.get("split") is True
+              for item in r72_variant_observations.values())
+          and r74_current_output_stale_envelope_rejects
+          and r74_current_output_decoy_envelope_rejects
+          and r74_prior_envelope.is_file()
+          and r74_prior_envelope.parent!=Path(r73_exact_launch["current_run"])
+          and r74_decoy_after_environment_oracles
+              ==r74_decoy_before_environment_oracles,
+          f"variants={r72_variant_observations} "
+          f"stale_current_output={r74_current_output_stale_envelope_rejects} "
+          f"decoy_current_output={r74_current_output_decoy_envelope_rejects} "
+          f"prior={r74_prior_envelope} current={r73_exact_launch.get('current_run')} "
+          f"decoy_unchanged={r74_decoy_after_environment_oracles==r74_decoy_before_environment_oracles}")
+    physical_git_environment_ok=(
+        physical_git_case[0]
+        and product_git_decoy_after==product_git_decoy_before
+        and product_git_decoy_restored
+        and len(physical_git_new_runs)==1
+        and physical_git_journal_ok and len(physical_git_records)==1
+        and physical_git_records[0].get("event")=="AGENT_START"
+        and physical_git_records[0].get("head")==git_repository_head(physical_wt)
+        and physical_git_records[0].get("worktree")==str(physical_wt)
+        and physical_git_capture.get("git_control_env")==[]
+        and physical_git_capture_bound and physical_git_environment_relation
+        and physical_git_canonical_valid
+        and physical_git_common/"nortropic-codex-autopilot"/"runs" \
+            in (physical_git_new_runs[0]/"result.json").parents
+        and physical_git_common not in physical_git_output.parents
+        and product_git_decoy_common not in physical_git_output.parents
+        and not physical_git_output.exists())
     staging = cap.get("output_parent") or {}
     staging_ok = (
         staging.get("uid") == os.getuid()
@@ -4560,7 +5385,8 @@ class CraftedConcretePath(type(Path())):
         kernel_structure_ok and kernel_integration_structure_ok and integration_dynamic_ok
         and kernel_direct_ok and product_fresh_ok
         and valid[0] and valid_schema and valid_publication_lifecycle_ok
-        and physical_topology_ok and physical_hostile_ok and staging_ok
+        and physical_topology_ok and physical_hostile_ok
+        and physical_git_environment_ok and staging_ok
         and stale_rejects and replay_rejects
         and external_replay_ok and read_attacks_ok and reader_variants_ok
         and r12_real_boundary_ok
@@ -4582,7 +5408,7 @@ class CraftedConcretePath(type(Path())):
     if deterministic_result_ok:
         live_repo = work / "r14-exact-owner-live-clone"
         sh(GIT,"clone","-q","--no-hardlinks",str(repo),str(live_repo))
-        sh(GIT,"checkout","-q",sha(repo),cwd=live_repo)
+        sh(GIT,"checkout","-q",repo_head,cwd=live_repo)
         live_wt=work/"r14-exact-owner-live-worker"
         sh(GIT,"worktree","add","-q","--detach",str(live_wt),"HEAD",cwd=live_repo)
         live_source=live_repo/"scripts/nortropic-codex-autopilot.py"
@@ -4628,7 +5454,7 @@ class CraftedConcretePath(type(Path())):
             and live_transitions[0].get("ino")==before.st_ino
             and not live_sink.exists() and not live_sink.parent.exists()
             and sha256(apath)==digest and sha256(host_path)==host_digest
-            and sha(live_repo)==sha(repo)
+            and git_repository_head(live_repo)==repo_head
             and sh(GIT,"rev-parse","HEAD^{tree}",cwd=live_repo).strip()
                 == sh(GIT,"rev-parse","HEAD^{tree}",cwd=repo).strip()
             and sha256(live_source)==sha256(source)
@@ -4637,11 +5463,11 @@ class CraftedConcretePath(type(Path())):
             and sha256(live_repo/"specs/tasks.spec.json")==sha256(task_spec)
             and sha256(live_repo/"verify/bin/h-032-exit")==sha256(h032_gate)
             and h032_gate.is_file())
-        exact_owner_live_detail=(sha(repo),hashlib.sha256(raw).hexdigest(),
+        exact_owner_live_detail=(repo_head,hashlib.sha256(raw).hexdigest(),
                                  before.st_dev,before.st_ino,not live_sink.parent.exists())
     result_delivery_ok = deterministic_result_ok and exact_owner_live_ok
     print("R60_BOUND_EVIDENCE=" + json.dumps({
-        "candidate_sha": sh(GIT, "rev-parse", "HEAD", cwd=repo).strip(),
+        "candidate_sha": git_repository_head(repo),
         "journal_parser_rig_ok": journal_parser_rig_ok,
         "journal_faults": r58_journal_fault_summary,
         "journal_faults_ok": journal_faults_ok,
@@ -4659,7 +5485,7 @@ class CraftedConcretePath(type(Path())):
           and r55_complete_residue_oracle_ok and r56_setup_oracle_ok,
           f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r59_post_retained_dynamic_positive,r59_empty_interval_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary,r59_post_retained_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught}")
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={transient_cleanup, persistent_cleanup, cleanup_error_ok} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_start_delta,physical_git_capture.get('mode'),physical_git_capture.get('git_control_env'),environment_fingerprint(physical_git_capture.get('complete_environment')),environment_fingerprint(physical_git_expected_environment),physical_git_environment_relation,r72_dynamic_literals_absent,r72_variant_observations,physical_git_capture_bound,physical_git_canonical_valid,physical_git_records,physical_git_new_runs,product_git_snapshot_mutants,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
@@ -5433,7 +6259,7 @@ class CraftedConcretePath(type(Path())):
     launcher = source.parents[1] / "controller/launch/cli"
     task_spec = source.parents[1] / "specs/tasks.spec.json"
     gate_path = source.parents[1] / "verify/bin/h-032-exit"
-    candidate_sha = sh(GIT, "rev-parse", "HEAD", cwd=source.parents[1]).strip()
+    candidate_sha = git_repository_head(source.parents[1])
     binding = {"schema_version": 1, "task": "h-032", "candidate_sha": candidate_sha,
                "task_spec_sha256": sha256(task_spec), "h032_gate_sha256": sha256(gate_path),
                "g20_probe_identity": "controller/launch/cli:" + sha256(launcher)}
@@ -5654,7 +6480,8 @@ class CraftedConcretePath(type(Path())):
     # may create one-time protected H-033 evidence while a nested sandbox is
     # expected to report ODÖMBART.
     h033_odom = False
-    h033_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    h033_env = without_caller_git_controls(dict(os.environ))
+    h033_env["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         h033_result = subprocess.run(
             [str(h033_gate)], cwd=repo, env=h033_env, text=True,
@@ -5674,6 +6501,12 @@ class CraftedConcretePath(type(Path())):
     except subprocess.TimeoutExpired:
         h033_odom = True
         check("K_H033_FRESH_UPSTREAM_PROVENANCE", False, "timeout/cleanup authority unavailable")
+
+    authoritative_control_after = exact_tree_snapshot(authoritative_control_root)
+    check("J_AUTHORITATIVE_LIVE_GIT_UNCHANGED",
+          authoritative_control_after == authoritative_control_before,
+          f"root={authoritative_control_root} before_entries="
+          f"{len(authoritative_control_before)} after_entries={len(authoritative_control_after)}")
 
     passed = sum(ok for _, ok, _ in checks)
     failed = {key for key, ok, _detail in checks if not ok}

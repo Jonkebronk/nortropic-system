@@ -1591,3 +1591,197 @@ class fallback. Positives retain every R62-R65 case and add direct class-local
 `asyncio`/`pty`, an enclosing-function ordinary `subprocess` closure and an explicit
 class `nonlocal`. H032, production, provider authority, G20, H017 and live execution
 remain untouched.
+
+### 2026-08-20 — H032/H031 R67 exact-owner live HEAD correction
+
+The first legitimate result-kernel builder made the complete deterministic H032
+matrix green and thereby reached the guarded exact-provider phase. The owner gate then
+raised `NameError` because three late-only identity sites called a nonexistent
+`sha()` helper. Prebuilder RED had kept that branch unexecuted, so earlier owner runs
+could not expose the gate defect.
+
+R67 uses the gate's existing closed system-Git helper to resolve exact candidate
+`rev-parse HEAD` once before deterministic gating. That early value is exercised on
+every run and is reused for the isolated clone checkout, post-provider clone equality,
+detail and bound evidence. The already-frozen `HEAD^{tree}` equality remains a second,
+independent identity condition and cannot substitute for commit equality. There is no
+new authority helper, no path claim and no production change.
+
+H031 is rebound to the finalized H032 gate bytes. Result schema, same-opened kernel,
+publication/cleanup, process containment, provider/host authority, G20 and the rule
+that the real provider phase runs only after deterministic green remain unchanged.
+
+### 2026-08-20 — H032/H031 R68 environment-closed live HEAD identity
+
+R67 removed the undefined helper but its Git subprocess still inherited the caller's
+complete environment and merged stderr into stdout. An inherited `GIT_DIR` can select
+another repository's HEAD even when cwd names the candidate worktree; `GIT_TRACE=1`
+adds diagnostics to the same captured stream. An absolute Git pathname alone therefore
+did not bind the candidate identity.
+
+R68 gives every gate-owned Git subprocess a newly constructed allowlist environment.
+Caller Git directory, worktree, index, object, alternate-object, configuration, trace
+and other `GIT_*` controls are absent; the gate supplies only its exact locale, temp,
+PATH, HOME and disabled system/global configuration values. HEAD observation first
+requires `--show-toplevel` to resolve to the exact requested worktree, then accepts
+`--verify HEAD` only as one newline-terminated lowercase 40-hex line with empty stderr.
+The same primitive binds candidate prestate, the isolated live clone and evidence.
+
+An unconditional decoy-repository control demonstrates that the inherited R67 shape
+selects the decoy SHA and that inherited tracing emits stderr. Connected hostile
+GIT_DIR/GIT_WORK_TREE, common-dir/index/object/alternate-object, config and trace inputs
+must all still return the candidate SHA through the closed primitive; malformed,
+multiline, uppercase/nonhex or stderr-bearing output rejects, while unrelated caller
+environment remains harmless. H031 binds the finalized H032 digest. No production,
+provider, result, G20 or live-call gating behavior changes.
+
+### 2026-08-21 — H032/H031 R69 composed Git-environment boundary
+
+Independent R68 review proved that a closed identity helper was insufficient at the
+composed boundary. With an outer `GIT_DIR` selecting an older builder worktree, the
+helper still returned R68's exact commit, but imported production and the nested H033
+gate inherited the hostile selector. Product AGENT_START records bound the old commit,
+H033 passed self-consistently against it, and 36 run directories plus malformed test
+history escaped into authoritative `.git/nortropic-codex-autopilot` before H032 became
+ODÖMBART. Those unversioned effects are preserved as incident evidence; TEST_AUTHOR
+has no authority to decide which pre-existing history is safe to delete.
+
+R69 separates judge containment from product acceptance. At Python entry, before any
+candidate observation or product import, the gate rebuilds its actual process
+environment without any caller `GIT_*` key. H033 receives only that closed environment;
+judge Git continues to use its smaller R68 allowlist. A synthetic hostile map proves
+Git controls are removed without dropping unrelated environment. The exact existing
+authoritative autopilot subtree is snapshotted without following links and must be
+byte/type/mode identical after the complete run. This is read-only incident containment,
+not recovery or rollback.
+
+The product requirement remains independently connected and RED. A full production
+run gets hostile `GIT_DIR`/`GIT_WORK_TREE` pointing to a committed disposable decoy,
+while its intended controller repository and linked worker have a different disposable
+common Git. Controller Git subprocesses must construct a caller-Git-free environment;
+the provider/launcher environment must also exclude caller `GIT_*` state while keeping
+unrelated credential/runtime values. Only one AGENT_START and canonical result in the
+intended common Git, the intended exact HEAD/worktree, an untouched decoy and no private
+sink satisfy the control. All attack targets live under gate-owned WORK, so the owner
+gate never repeats the authoritative mutation. H031 keeps its one-run/one-Popen route
+and merely admits this bounded environment construction after rebinding H032's hash.
+
+### 2026-08-21 — H032/H031 R70 complete decoy and current provider binding
+
+R69 correctly separated gate sanitation from the product verdict, but its decoy
+immutability observation covered only `.git/nortropic-codex-autopilot`. A product could
+mutate decoy config, index, refs, objects, hooks or worktree while that absent subtree
+remained unchanged. R69 also observed only an empty provider `GIT_*` list: an
+implementation that discarded credentials, proxy and all unrelated runtime environment
+could pass. Finally, the shared provider capture was not cleared or bound to a current
+start, so a no-Popen hostile branch could reuse a prior empty-Git capture.
+
+R70 snapshots the entire committed decoy repository root without following links. This
+includes the worktree and its embedded common Git. Before the product attempt, causal
+worktree, config, index, ref and object mutations each must alter the snapshot; exact
+restoration must reproduce the baseline. The actual accepted attempt then requires the
+whole tree unchanged, not merely one control subtree.
+
+The same attempt carries a fresh opaque `NORTROPIC_OPAQUE_RUNTIME_SENTINEL`. It does not
+select provider behavior and grants no authority, but the actual provider child must
+capture its exact value while capturing zero caller `GIT_*` names. The known prior
+capture is deleted first. Credit requires exactly one new provider-process start,
+`mode=valid`, a newly created absolute output path distinct from the stale attempt,
+owner-private current sink identity/size/digest, exactly one intended AGENT_START/run
+and a canonical envelope bound to that sink digest. Zero-start, stale capture, wrong
+sentinel, wrong mode and repeated-output controls all reject. These J controls prove
+the observation rig only; the full connected product predicate remains in the sole
+structured-result RED. H031 adds no process or route and only rebinds H032's final hash.
+
+### 2026-08-21 — H032/H031 R71 unpredictable unrelated environment observation
+
+R70 proved that one unrelated value reached the provider, but published the observation
+key in the frozen gate and provider fixture. A defective controller could retain that
+single known name plus launcher mechanics while discarding arbitrary credentials,
+proxies and other runtime state.
+
+R71 locks the exact candidate source digest before choosing two per-attempt environment
+names of different lengths and two independent values. Complete generated literals are
+absent from candidate and gate source. Only the disposable provider fixture is rewritten
+with the generated names; their values remain unavailable there. The connected hostile
+attempt must preserve the exact pair map into the current provider capture while removing
+all Git controls and satisfying R70's exact one-start, valid-mode, new-output, private-sink
+identity/digest and canonical binding.
+
+Wrong-value, missing-key, former-fixed-key-only, zero-start, stale, wrong-mode and repeated
+output observations reject. In addition, a disposable candidate variant that copies only
+fixture mechanics and the former fixed sentinel must actually start one provider with zero
+Git controls; its capture contains the unpredictable keys with absent values and is
+causally rejected. The exact unfiltered current attempt is the legitimate positive. The
+mutant is rig evidence only and grants no product credit. Complete-decoy comparison and
+the read-only authoritative 179-record observation remain intact; H031 adds no route and
+only binds the final R71 H032 digest.
+
+### 2026-08-21 — H032/H031 R72 complete provider environment relation
+
+R71 still gave finite key-shape authority: a defective controller could retain all names
+of the two published lengths and discard unrelated caller state. R72 supersedes sentinel,
+name, length and prefix predicates with equality over the complete current-attempt mapping.
+The expected provider mapping starts from the exact incoming environment, removes every
+`GIT_*`, `DYLD_*`, exact loader redirect and the already-frozen launcher-sensitive GitHub/
+Slack prefixes, then accounts for exact controller trust-root/envelope and judge-private
+capture additions. Every other key and value must remain byte-for-byte equal.
+
+Only count, keyset SHA-256 and mapping SHA-256 enter diagnostics; raw values never do.
+Three varied unrelated entries chosen after source lock are causal strengthening only.
+Complete connected candidates prove exact preservation and reject drop-one, length-only,
+prefix-only, fixed-key and unexpected-extra filters after exactly one current provider
+start with zero Git controls and the R70 sink binding. Apple's system Python prepends a
+developer MANPATH before fixture code runs; the judge-private launch boundary preserves
+the exact pre-interpreter value, and the synthetic provider restores it and deletes the
+two fixture fields before capture. Imported product cannot observe that normalization.
+The exact product attempt remains the sole structured-result RED; complete decoy/current
+capture and the authoritative 179-entry read-only observation are unchanged. H031 gains
+no process or route and binds only the final R72 H032 digest.
+
+### 2026-08-21 — H032/H031 R73 launcher-envelope environment binding
+
+R72 compared complete provider environments, but calculated `NORTROPIC_KUVERT`
+as a sibling of the provider `-o` path. That happens to describe the current insecure
+product while contradicting the frozen result boundary: the accepted sink must be the
+only leaf in a private staging root outside live Git, while the controller envelope
+remains journal state.
+
+R73 derives the expected value from the actual current outer launcher argv. The gate
+binds its private Python snapshot, `-I -S`, exact launcher, `run`, current worktree,
+regular journal envelope, timeout, separator and the provider family's `-C`/`-o` shape.
+A connected candidate keeps the envelope under the intended common-Git run journal but
+substitutes a gate-owned private 0700 one-leaf result sink. Exact complete environment
+equality passes after one current provider start. A sink-sibling assumption, a stale
+launch observation, a wrong envelope and wrong launcher timeout each reject.
+
+The output substitution and observation are judge-private and unavailable to imported
+production. They prove that the frozen environment criterion admits the required split
+topology, never grant product credit and are cleaned with the disposable staging root.
+R70-R72 capture, decoy and environment controls remain intact; H031 gains no process or
+route and binds only the final R73 H032 digest.
+
+### 2026-08-21 — H032/H031 R74 current-run intended environment binding
+
+R73 validated an envelope under an intended-looking `runs` directory but did not prove
+that it belonged to the one run created by the current invocation. Its environment
+controls also still built exact rewritten copies of obsolete product source, and their
+positive topology inherited assumptions from the hostile decoy attempt. That allowed a
+current output to be paired with stale controller state and made harmless environment
+construction refactors an owner-gate failure.
+
+R74 snapshots the disposable candidate repository's intended common-Git run set and
+strict journal bytes immediately before each attempt. At the real provider boundary it
+requires exactly one new run, exactly one appended current `AGENT_START` for the bound
+worktree and HEAD, and the argv envelope inside that exact run. The result sink remains
+a separate private 0700 root with one leaf. Current-output plus a prior-run envelope or
+an envelope under the hostile decoy rejects causally.
+
+The complete environment matrix now runs unchanged product bytes. Its judge-private
+Popen transform starts from the actual current child mapping, introduces hostile Git
+selectors only there, and tests exact preservation plus drop/length/prefix/fixed/extra
+mutants. The controller itself therefore journals in the intended candidate common Git;
+the separate exact hostile product attempt remains the sole product RED. All obsolete
+source replacements and anchor counts are removed. R70-R73 full decoy/current-capture
+controls and the authoritative 179-entry read-only observation remain intact. H031 gains
+no process or route and binds only the final R74 H032 digest.
