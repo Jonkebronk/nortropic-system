@@ -3934,9 +3934,10 @@ def run_codex(sink, canonical, invocation, run, role):
         "envelope_name","envelope_journal","current_run","current_journal",
         "timeout","provider","provider_worktree","output","python",
     })
-    def r94_observed_run_id(observation: object, runs_root: Path,
-                            expected_worktree: Path):
-        if (not isinstance(observation,dict)
+    def r94_observed_run_id(observation_key: object, observation: object,
+                            runs_root: Path, expected_worktree: Path):
+        if (type(observation_key) is not str
+                or not isinstance(observation,dict)
                 or frozenset(observation)!=r95_observation_keys
                 or observation.get("valid") is not True):
             return None
@@ -3947,13 +3948,17 @@ def run_codex(sink, canonical, invocation, run, role):
         if (not isinstance(checks,dict)
                 or frozenset(checks)!=r95_check_keys
                 or any(value is not True for value in checks.values())
+                or type(observation.get("provider_output_count")) is not int
                 or observation.get("provider_output_count")!=1
+                or type(observation.get("provider_worktree_count")) is not int
                 or observation.get("provider_worktree_count")!=1
                 or observation.get("timeout")!="86400"
+                or type(observation.get("separator")) is not int
                 or observation.get("separator")!=8
                 or not isinstance(envelope,str)
                 or not isinstance(current_run,str)
                 or not isinstance(output,str)
+                or output!=observation_key
                 or observation.get("worktree")!=str(expected_worktree)):
             return None
         run_path=Path(current_run)
@@ -3966,8 +3971,8 @@ def run_codex(sink, canonical, invocation, run, role):
         return r89_run_identity(run_path,runs_root)
     def r94_new_launch_observation(before: frozenset[str]):
         current=sorted(set(launch_observations)-set(before))
-        return (launch_observations[current[0]] if len(current)==1
-                else {"valid":False})
+        return ((current[0],launch_observations[current[0]]) if len(current)==1
+                else (None,{"valid":False}))
     physical_events=physical_runs_root.parent/"events.jsonl"
     physical_before_runs=set(physical_runs_root.iterdir()) if physical_runs_root.is_dir() else set()
     physical_events_before=(physical_events.read_bytes()
@@ -3990,10 +3995,11 @@ def run_codex(sink, canonical, invocation, run, role):
             launch_expected_context[0]=None
         physical_capture = safe_capture()
         physical_start_delta=provider_process_starts[0]-physical_starts_before
-        physical_launch_observation=r94_new_launch_observation(
+        physical_launch_key,physical_launch_observation=r94_new_launch_observation(
             physical_launch_keys_before)
         physical_run_id=r94_observed_run_id(
-            physical_launch_observation,physical_runs_root,physical_wt)
+            physical_launch_key,physical_launch_observation,
+            physical_runs_root,physical_wt)
         def r95_observation_variant(observation: dict[str,object],
                                     field: str, value: object):
             variant=dict(observation)
@@ -4019,10 +4025,33 @@ def run_codex(sink, canonical, invocation, run, role):
                 physical_launch_observation,"envelope",
                 str(physical_runs_root/"20990101-000000-test_author"
                     /"provider-envelope.json")),
+            "output_key_mismatch":r95_observation_variant(
+                physical_launch_observation,"output",
+                str(work/"r96-other-private-sink")),
+            "output_count_bool":r95_observation_variant(
+                physical_launch_observation,"provider_output_count",True),
+            "output_count_zero":r95_observation_variant(
+                physical_launch_observation,"provider_output_count",0),
+            "output_count_two":r95_observation_variant(
+                physical_launch_observation,"provider_output_count",2),
+            "worktree_count_bool":r95_observation_variant(
+                physical_launch_observation,"provider_worktree_count",True),
+            "worktree_count_zero":r95_observation_variant(
+                physical_launch_observation,"provider_worktree_count",0),
+            "worktree_count_two":r95_observation_variant(
+                physical_launch_observation,"provider_worktree_count",2),
+            "separator_float":r95_observation_variant(
+                physical_launch_observation,"separator",8.0),
+            "separator_wrong":r95_observation_variant(
+                physical_launch_observation,"separator",7),
+            "timeout_mismatch":r95_observation_variant(
+                physical_launch_observation,"timeout","3600"),
+            "worktree_mismatch":r95_observation_variant(
+                physical_launch_observation,"worktree",str(physical_repo)),
         }
         r95_observation_mutants_reject=all(
             r94_observed_run_id(
-                mutant,physical_runs_root,physical_wt)
+                physical_launch_key,mutant,physical_runs_root,physical_wt)
             is None for mutant in r95_observation_mutants.values())
         physical_after_runs=set(physical_runs_root.iterdir()) if physical_runs_root.is_dir() else set()
         physical_new_runs=sorted(physical_after_runs-physical_before_runs)
@@ -4054,10 +4083,13 @@ def run_codex(sink, canonical, invocation, run, role):
         physical_hostile_capture=safe_capture()
         physical_hostile_start_delta=(provider_process_starts[0]
                                       -physical_hostile_starts_before)
-        physical_hostile_launch_observation=r94_new_launch_observation(
+        physical_hostile_launch_key,physical_hostile_launch_observation=(
+            r94_new_launch_observation(
             physical_hostile_launch_keys_before)
+        )
         physical_hostile_run_id=r94_observed_run_id(
-            physical_hostile_launch_observation,physical_runs_root,physical_wt)
+            physical_hostile_launch_key,physical_hostile_launch_observation,
+            physical_runs_root,physical_wt)
 
         # A caller-selected Git repository is exercised through the complete
         # product run, not merely through the judge helper.  Both repositories
@@ -4143,8 +4175,10 @@ def run_codex(sink, canonical, invocation, run, role):
                 else: os.environ[key]=value
             launch_extra.pop("H032_CAPTURE_COMPLETE_ENV",None)
         physical_git_start_delta=provider_process_starts[0]-physical_git_starts_before
-        physical_git_launch_observation=r94_new_launch_observation(
+        physical_git_launch_key,physical_git_launch_observation=(
+            r94_new_launch_observation(
             physical_git_launch_keys_before)
+        )
         product_git_decoy_after=exact_tree_snapshot(product_git_decoy)
         physical_git_runs_after=(set(physical_runs_root.iterdir())
                                  if physical_runs_root.is_dir() else set())
@@ -4181,7 +4215,8 @@ def run_codex(sink, canonical, invocation, run, role):
     r74_prior_envelope=r74_prior_run/"provider-envelope.json"
     r74_prior_envelope.write_text('{"prior":true}\n',encoding="utf-8")
     physical_git_run_id=r94_observed_run_id(
-        physical_git_launch_observation,physical_runs_root,physical_wt)
+        physical_git_launch_key,physical_git_launch_observation,
+        physical_runs_root,physical_wt)
     r94_physical_clock_chain=(physical_run_id,physical_hostile_run_id,
                               physical_git_run_id)
     r94_product_git_observation_complete=(physical_git_run_id is not None)

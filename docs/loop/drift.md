@@ -1977,3 +1977,16 @@ product-Git attempt therefore cannot seed the chain; its rig-only successors use
 bounded clock release while the product remains the sole structured-result RED. A green
 candidate must supply the full product-Git observation. Boundary-cross, multi-second and
 exact collision schedules remain admissible or rejecting as previously frozen.
+
+## 2026-08-21 — R96 exact launch-output identity and scalar types
+
+Review showed that R95 did not relate `observation.output` to the actual parsed provider
+`-o` entry that keyed `launch_observations`, and Python equality admitted booleans/floats
+for selector counts and the separator. R96 passes the unique newly added map key into the
+same strict extractor and accepts only exact output equality. Both selector counts must be
+exact built-in integers equal to one and the separator an exact built-in integer equal to
+eight. One-field controls mutate the actual complete observation and reject a different
+absolute output, boolean/zero/two counts, float/wrong separator, timeout and worktree,
+alongside every earlier current journal/run/envelope/check control. An incomplete public
+product-Git observation still supplies neither scheduling identity nor product credit;
+the implemented disposable composition must retain its complete three-effect chain.
