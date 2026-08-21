@@ -1785,3 +1785,63 @@ the separate exact hostile product attempt remains the sole product RED. All obs
 source replacements and anchor counts are removed. R70-R73 full decoy/current-capture
 controls and the authoritative 179-entry read-only observation remain intact. H031 gains
 no process or route and binds only the final R74 H032 digest.
+
+### 2026-08-21 — H032/H031 R75 owner-live binding totality
+
+The first authorized run against the implemented R74 result kernel passed the complete
+deterministic product matrix and entered the exact owner provider phase. After the
+provider phase, the frozen gate evaluated its live identity expression and raised
+`NameError` because `h032_gate` had never been assigned. The failure therefore belongs
+to the owner gate. It was not an authentication, network or product failure, and the
+TEST_AUTHOR remediation does not perform a second live call.
+
+R75 creates one candidate identity record before the conditional owner-live branch. It
+binds the exact disposable/candidate repository, closed-observed HEAD and tree, source,
+spec and current `verify/bin/h-032-exit` paths and digests, plus the frozen provider and
+host paths and digests. The live clone check consumes only that record; it never reaches
+for a name introduced later by the G20 evidence block.
+
+An unconditional no-live control validates the exact record and rejects deletion of
+each required field, a stale gate digest, the wrong H031 gate path and the wrong HEAD.
+This is a bounded data-record validator, not a whole-Python control-flow interpreter or
+source-spelling contract. A gate-only `--skip-owner-live` ceremony permits TEST_AUTHOR
+to execute the complete deterministic matrix without another model call. It exits
+ODÖMBART with `OWNER_LIVE_PHASE_NOT_RUN` when live is the only remaining phase and can
+never grant PASS. H031 may forward that exact mode for its deterministic regression but
+also exits ODÖMBART; normal invocation still requires H032 exit zero. R74 and production
+semantics are unchanged, and H031 binds only the finalized R75 H032 digest.
+
+### 2026-08-21 — H031 R76 exclusive owner-live skip propagation
+
+Independent review found that R75's H031 forwarding predicate recognized two owner-live
+substrings but did not prove they were the only owner-level unavailability. H032 can
+legitimately print the owner-live marker together with G20 or fresh-H033 ODÖMBART, so
+the old predicate could continue into product checks and later turn the mixed owner
+state into exit 1.
+
+R76 classifies the complete upstream effect. The only admitted skip transcript has
+exit 2, the exact 140 PASS / 1 FAIL summary, only the structured-result failure, green
+G20 and H033 controls with exact H033 55/0 PASS markers, one exact no-live reason and
+one exact owner-live ODÖMBART line in that order. Mixed G20, mixed H033, unknown,
+duplicate, reordered and missing owner markers all exit ODÖMBART before H031 product
+execution. The exact legitimate skip is recorded as a J control, not a green H032
+dependency, and carries a pending ODÖMBART state through the deterministic H031 run.
+Normal invocation still requires H032 exit zero. H032, R75 live binding, production,
+process and route semantics remain unchanged; TEST_AUTHOR performs no live call.
+
+### 2026-08-21 — H031 R77 actual H032-embedded H033 evidence
+
+R76 modelled H033's 55/0 summary and PASS result as standalone H032 output lines.
+Independent review established that unchanged H032 instead captures H033 stdout and
+prints those records only inside the pipe-delimited `tail=` detail of its single
+`PASS K_H033_FRESH_UPSTREAM_PROVENANCE` line. The old positive was therefore
+disconnected and would reject the legitimate future owner-live ceremony.
+
+R77 builds the positive from the actual current H032 no-live transcript after its real
+nested H033 execution. It changes only the current prebuilder structured-result reason
+to the future owner-live reason and inserts the exact owner marker. The classifier then
+requires one exact rc=0 H032 H033-PASS line whose captured tail contains one 55/0
+summary followed by one PASS result as distinct pipe records. Missing, wrong,
+duplicate, reordered and standalone-only forms reject. R76's owner-marker ordering,
+mixed ODÖMBART, sole structured-result failure and pending exit-2 controls remain.
+H032, production, normal H031 and provider/live behavior are unchanged.
