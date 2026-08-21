@@ -1828,3 +1828,20 @@ execution. The exact legitimate skip is recorded as a J control, not a green H03
 dependency, and carries a pending ODÖMBART state through the deterministic H031 run.
 Normal invocation still requires H032 exit zero. H032, R75 live binding, production,
 process and route semantics remain unchanged; TEST_AUTHOR performs no live call.
+
+### 2026-08-21 — H031 R77 actual H032-embedded H033 evidence
+
+R76 modelled H033's 55/0 summary and PASS result as standalone H032 output lines.
+Independent review established that unchanged H032 instead captures H033 stdout and
+prints those records only inside the pipe-delimited `tail=` detail of its single
+`PASS K_H033_FRESH_UPSTREAM_PROVENANCE` line. The old positive was therefore
+disconnected and would reject the legitimate future owner-live ceremony.
+
+R77 builds the positive from the actual current H032 no-live transcript after its real
+nested H033 execution. It changes only the current prebuilder structured-result reason
+to the future owner-live reason and inserts the exact owner marker. The classifier then
+requires one exact rc=0 H032 H033-PASS line whose captured tail contains one 55/0
+summary followed by one PASS result as distinct pipe records. Missing, wrong,
+duplicate, reordered and standalone-only forms reject. R76's owner-marker ordering,
+mixed ODÖMBART, sole structured-result failure and pending exit-2 controls remain.
+H032, production, normal H031 and provider/live behavior are unchanged.

@@ -285,14 +285,51 @@ def odombart(key: str, detail: str) -> None:
 
 H032_OWNER_LIVE_SKIP_SUMMARY = "SAMMANFATTNING 140 PASS / 1 FAIL"
 H032_OWNER_LIVE_SKIP_REASON = "CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN"
+H032_STRUCTURED_RESULT_REASON = "CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT"
 H032_OWNER_LIVE_SKIP_MARKER = (
     "ODÖMBART K_OWNER_LIVE_PHASE_NOT_RUN — explicit owner TEST_AUTHOR no-live mode; "
     "deterministic product controls passed"
 )
+H033_PASS_PREFIX = "PASS K_H033_FRESH_UPSTREAM_PROVENANCE — rc=0 tail="
+H033_PASS_SUMMARY = "H033_GATE_SUMMARY=55 PASS 0 FAIL"
+H033_PASS_RESULT = "H033_GATE_RESULT=PASS"
+
+
+def h033_embedded_pass(lines):
+    hits = [line for line in lines if line.startswith("PASS K_H033_FRESH_UPSTREAM_PROVENANCE —")]
+    facts = {
+        "single_line": len(hits) == 1,
+        "exact_prefix": len(hits) == 1 and hits[0].startswith(H033_PASS_PREFIX),
+        "summary": False,
+        "result": False,
+        "ordered": False,
+    }
+    if not facts["exact_prefix"]:
+        return False, facts
+    tail_records = hits[0][len(H033_PASS_PREFIX):].split("|")
+    facts["summary"] = tail_records.count(H033_PASS_SUMMARY) == 1
+    facts["result"] = tail_records.count(H033_PASS_RESULT) == 1
+    if facts["summary"] and facts["result"]:
+        facts["ordered"] = tail_records.index(H033_PASS_SUMMARY) < tail_records.index(H033_PASS_RESULT)
+    return all(facts.values()), facts
+
+
+def owner_skip_fixture_from_observed_h032(stdout: str) -> str:
+    lines = stdout.splitlines()
+    if (lines.count(H032_OWNER_LIVE_SKIP_REASON) == 1
+            and lines.count(H032_OWNER_LIVE_SKIP_MARKER) == 1):
+        return stdout
+    if (lines.count(H032_STRUCTURED_RESULT_REASON) != 1
+            or H032_OWNER_LIVE_SKIP_MARKER in lines):
+        return ""
+    index = lines.index(H032_STRUCTURED_RESULT_REASON)
+    lines[index:index + 1] = [H032_OWNER_LIVE_SKIP_REASON, H032_OWNER_LIVE_SKIP_MARKER]
+    return "\n".join(lines) + "\n"
 
 
 def exclusive_h032_owner_live_skip(returncode: int, stdout: str):
     lines = stdout.splitlines()
+    h033_ok, h033_facts = h033_embedded_pass(lines)
     fail_labels = [
         line[5:].split(" — ", 1)[0]
         for line in lines
@@ -304,12 +341,8 @@ def exclusive_h032_owner_live_skip(returncode: int, stdout: str):
         "reason": lines.count(H032_OWNER_LIVE_SKIP_REASON) == 1,
         "marker": lines.count(H032_OWNER_LIVE_SKIP_MARKER) == 1,
         "fail": fail_labels == ["K_STRUCTURED_RESULT_DELIVERY_BOUNDARY"],
-        "h033_summary": lines.count("H033_GATE_SUMMARY=55 PASS 0 FAIL") == 1,
-        "h033_result": lines.count("H033_GATE_RESULT=PASS") == 1,
         "g20_pass": sum(line.startswith("PASS K_G20_NAMESPACE —") for line in lines) == 1,
-        "h033_pass": sum(
-            line.startswith("PASS K_H033_FRESH_UPSTREAM_PROVENANCE —") for line in lines
-        ) == 1,
+        "h033_embedded": h033_ok,
         "exclusive_odombart": odombart_lines == [H032_OWNER_LIVE_SKIP_MARKER],
     }
     ordered = False
@@ -320,7 +353,9 @@ def exclusive_h032_owner_live_skip(returncode: int, stdout: str):
             < lines.index(H032_OWNER_LIVE_SKIP_MARKER)
         )
     required["ordered"] = ordered
-    return returncode == 2 and all(required.values()), required
+    required["h033_facts"] = h033_facts
+    verdict_fields = [value for key, value in required.items() if key != "h033_facts"]
+    return returncode == 2 and all(verdict_fields), required
 
 
 def h031_terminal_exit(owner_skip_pending: bool, failed_labels) -> int:
@@ -1922,18 +1957,14 @@ subprocess = object()
     harmless = process_shape(source_text + "\ndef h031_harmless(repo, wt, role, prompt):\n    return run_codex(repo, wt, role, prompt)\n")
     check("J_HARMLESS_ROLE_CONSOLIDATION", bool(harmless["boundary_ok"]), str(harmless["detail"]))
 
-    owner_skip_fixture = "\n".join((
-        "PASS K_G20_NAMESPACE — exact protected host evidence",
-        "H033_GATE_SUMMARY=55 PASS 0 FAIL",
-        "H033_GATE_RESULT=PASS",
-        "PASS K_H033_FRESH_UPSTREAM_PROVENANCE — exact protected owner runner",
-        "FAIL K_STRUCTURED_RESULT_DELIVERY_BOUNDARY — owner live phase not run",
-        H032_OWNER_LIVE_SKIP_SUMMARY,
-        H032_OWNER_LIVE_SKIP_REASON,
-        H032_OWNER_LIVE_SKIP_MARKER,
-    )) + "\n"
+    upstream_argv=[str(h032_gate)]
+    if owner_live_mode == "skip": upstream_argv.append("--skip-owner-live")
+    upstream = subprocess.run(upstream_argv, cwd=root, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    owner_skip_fixture = owner_skip_fixture_from_observed_h032(upstream.stdout)
     owner_skip_positive = exclusive_h032_owner_live_skip(2, owner_skip_fixture)
-    check("J_H032_EXCLUSIVE_OWNER_LIVE_SKIP_POSITIVE", owner_skip_positive[0],
+    check("J_H032_EXCLUSIVE_OWNER_LIVE_SKIP_POSITIVE",
+          bool(owner_skip_fixture) and owner_skip_positive[0],
           str(owner_skip_positive[1]))
     owner_skip_mutants = {
         "MIXED_G20": owner_skip_fixture
@@ -1950,6 +1981,22 @@ subprocess = object()
             H032_OWNER_LIVE_SKIP_MARKER + "\n" + H032_OWNER_LIVE_SKIP_REASON,
         ),
         "MISSING_MARKER": owner_skip_fixture.replace(H032_OWNER_LIVE_SKIP_MARKER + "\n", ""),
+        "H033_MISSING_SUMMARY": owner_skip_fixture.replace(H033_PASS_SUMMARY + "|", "", 1),
+        "H033_MISSING_RESULT": owner_skip_fixture.replace(H033_PASS_RESULT + "|", "", 1),
+        "H033_WRONG_SUMMARY": owner_skip_fixture.replace(H033_PASS_SUMMARY, "H033_GATE_SUMMARY=54 PASS 1 FAIL", 1),
+        "H033_WRONG_RESULT": owner_skip_fixture.replace(H033_PASS_RESULT, "H033_GATE_RESULT=FAIL", 1),
+        "H033_DUPLICATE_SUMMARY": owner_skip_fixture.replace(
+            H033_PASS_SUMMARY + "|", H033_PASS_SUMMARY + "|" + H033_PASS_SUMMARY + "|", 1),
+        "H033_DUPLICATE_RESULT": owner_skip_fixture.replace(
+            H033_PASS_RESULT + "|", H033_PASS_RESULT + "|" + H033_PASS_RESULT + "|", 1),
+        "H033_REORDERED": owner_skip_fixture.replace(
+            H033_PASS_SUMMARY + "|" + H033_PASS_RESULT,
+            H033_PASS_RESULT + "|" + H033_PASS_SUMMARY,
+            1,
+        ),
+        "H033_STANDALONE_ONLY": owner_skip_fixture.replace(H033_PASS_SUMMARY + "|", "", 1)
+            .replace(H033_PASS_RESULT + "|", "", 1)
+            + H033_PASS_SUMMARY + "\n" + H033_PASS_RESULT + "\n",
     }
     for label, mutant in owner_skip_mutants.items():
         verdict = exclusive_h032_owner_live_skip(2, mutant)
@@ -1958,10 +2005,6 @@ subprocess = object()
           h031_terminal_exit(True, {"K_PRODUCT_EXECUTION"}) == 2,
           "pending owner ODÖMBART remains exit 2 after deterministic product findings")
 
-    upstream_argv=[str(h032_gate)]
-    if owner_live_mode == "skip": upstream_argv.append("--skip-owner-live")
-    upstream = subprocess.run(upstream_argv, cwd=root, text=True,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
     upstream_skip_verdict = exclusive_h032_owner_live_skip(upstream.returncode, upstream.stdout)
     upstream_skip_ok = owner_live_mode == "skip" and upstream_skip_verdict[0]
     if upstream.returncode == 2 and not upstream_skip_ok:
