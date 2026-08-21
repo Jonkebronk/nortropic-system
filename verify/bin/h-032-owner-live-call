@@ -1,0 +1,264 @@
+#!/bin/bash -p
+# Frozen owner-gate process bridge. Product/builders never write this path.
+
+set -u
+umask 077
+unset CDPATH ENV BASH_ENV GLOBIGNORE PYTHONHOME PYTHONPATH
+export PATH="/usr/bin:/bin"
+
+SOURCE_PATH="${BASH_SOURCE[0]}"
+case "$SOURCE_PATH" in
+  /*) ;;
+  *) SOURCE_PATH="$(/bin/pwd -P)/$SOURCE_PATH" ;;
+esac
+if [[ -L "$SOURCE_PATH" ]]; then exit 2; fi
+SCRIPT_DIR="$(cd -P -- "$(/usr/bin/dirname -- "$SOURCE_PATH")" 2>/dev/null && /bin/pwd -P)" || exit 2
+if [[ ! "$SOURCE_PATH" -ef "$SCRIPT_DIR/h-032-owner-live-call" ]]; then exit 2; fi
+
+exec /usr/bin/python3 -I -S - "$SOURCE_PATH" "$@" <<'PY'
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+from subprocess import PIPE, Popen
+import sys
+
+MAX_PLAN_BYTES = 65536
+MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+HEX = frozenset("0123456789abcdef")
+
+
+class DuplicateKey(ValueError):
+    pass
+
+
+def strict_json(raw: bytes):
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise DuplicateKey(key)
+            value[key] = item
+        return value
+    return json.loads(raw.decode("utf-8", errors="strict"), object_pairs_hook=pairs)
+
+
+def regular_nofollow_read(path: Path, maximum: int, *, single_link: bool = True):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode)
+                or (single_link and before.st_nlink != 1)):
+            raise RuntimeError("nonregular input")
+        chunks = []
+        total = 0
+        while total <= maximum:
+            chunk = os.read(fd, min(65536, maximum + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(fd)
+        identity = lambda value: (value.st_dev, value.st_ino, value.st_mode,
+                                  value.st_nlink, value.st_size,
+                                  value.st_mtime_ns, value.st_ctime_ns)
+        if len(raw) > maximum or identity(before) != identity(after) or len(raw) != before.st_size:
+            raise RuntimeError("unstable or oversized input")
+        return raw, before
+    finally:
+        os.close(fd)
+
+
+def sha256_path(path: Path, *, single_link: bool = True) -> str:
+    raw, _identity = regular_nofollow_read(
+        path, MAX_OUTPUT_BYTES, single_link=single_link)
+    return hashlib.sha256(raw).hexdigest()
+
+
+def absolute_regular_executable(path: Path, expected_sha: str):
+    if not path.is_absolute() or path.is_symlink():
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    if (not stat.S_ISREG(st.st_mode) or st.st_nlink < 1
+            or not os.access(path, os.X_OK)
+            or sha256_path(path, single_link=False) != expected_sha):
+        return None
+    return st
+
+
+def valid_hex(value, length: int) -> bool:
+    return isinstance(value, str) and len(value) == length and all(char in HEX for char in value)
+
+
+def environment_valid(value) -> bool:
+    if not isinstance(value,dict) or len(value)>512:
+        return False
+    encoded=0
+    for key,item in value.items():
+        if (not isinstance(key,str) or not key or "\x00" in key or "=" in key
+                or not isinstance(item,str) or "\x00" in item):
+            return False
+        encoded+=len(key.encode("utf-8"))+len(item.encode("utf-8"))+2
+        if encoded>262144:
+            return False
+        if (key.startswith(("GIT_","DYLD_","H032_","GH_","GITHUB_","SLACK_"))
+                or key in {"LD_PRELOAD","LD_LIBRARY_PATH","__PYVENV_LAUNCHER__"}):
+            return False
+    return True
+
+
+def plan_valid(plan, result_path: Path, helper_path: Path) -> bool:
+    keys = {"schema_version", "nonce", "purpose", "mode", "argv", "cwd",
+            "result_path", "executable_sha256", "executable_dev",
+            "executable_ino", "environment"}
+    if not isinstance(plan, dict) or set(plan) != keys:
+        return False
+    if (plan.get("schema_version") != 1 or not valid_hex(plan.get("nonce"), 64)
+            or plan.get("purpose") not in {"H032_OWNER_LIVE", "H031_H032_DEPENDENCY"}
+            or plan.get("mode") not in {"provider-full", "trusted"}
+            or plan.get("result_path") != str(result_path)
+            or not valid_hex(plan.get("executable_sha256"), 64)
+            or type(plan.get("executable_dev")) is not int
+            or type(plan.get("executable_ino")) is not int
+            or not environment_valid(plan.get("environment"))):
+        return False
+    argv = plan.get("argv")
+    if (not isinstance(argv, list) or not 1 <= len(argv) <= 16
+            or any(not isinstance(item, str) or not item or "\x00" in item for item in argv)):
+        return False
+    executable = Path(argv[0])
+    cwd = Path(plan.get("cwd", ""))
+    observed = absolute_regular_executable(executable, plan["executable_sha256"])
+    common = (observed is not None
+        and (observed.st_dev, observed.st_ino)
+            == (plan["executable_dev"], plan["executable_ino"])
+        and cwd.is_absolute() and cwd.is_dir() and not cwd.is_symlink()
+        and result_path.is_absolute() and not result_path.exists()
+        and result_path.parent.is_dir() and not result_path.parent.is_symlink())
+    if not common:
+        return False
+    if plan["mode"] == "trusted":
+        canonical = helper_path.parent / "h-032-exit"
+        return (plan["purpose"] == "H031_H032_DEPENDENCY"
+            and cwd == helper_path.parents[2]
+            and executable == canonical and executable.resolve(strict=True) == canonical
+            and argv in ([str(canonical)],
+                         [str(canonical), "--skip-owner-live"]))
+    return (plan["purpose"] == "H032_OWNER_LIVE"
+        and executable == Path("/usr/bin/python3")
+        and len(argv) == 8 and argv[1:4] == ["-I", "-S", "-u"]
+        and all(Path(item).is_absolute() for item in argv[4:])
+        and Path(argv[4]).is_file() and not Path(argv[4]).is_symlink()
+        and Path(argv[5]).is_file() and not Path(argv[5]).is_symlink()
+        and Path(argv[6]).is_dir() and not Path(argv[6]).is_symlink()
+        and Path(argv[7]).is_dir() and not Path(argv[7]).is_symlink())
+
+
+def atomic_write_new(path: Path, raw: bytes) -> None:
+    temporary = path.with_name(path.name + ".tmp-" + os.urandom(16).hex())
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temporary, flags, 0o600)
+    try:
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(fd, raw[offset:])
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.link(temporary,path,follow_symlinks=False)
+    finally:
+        os.unlink(temporary)
+    parent_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def main() -> int:
+    if len(sys.argv) != 4:
+        return 2
+    helper_path, plan_path, result_path = map(Path, sys.argv[1:4])
+    if (not plan_path.is_absolute() or not result_path.is_absolute()
+            or plan_path.parent != result_path.parent):
+        return 2
+    plan_raw, plan_stat = regular_nofollow_read(plan_path, MAX_PLAN_BYTES)
+    plan = strict_json(plan_raw)
+    helper_path = helper_path.resolve(strict=True)
+    if not plan_valid(plan, result_path, helper_path):
+        return 2
+    helper_sha = sha256_path(helper_path)
+    argv = plan["argv"]
+    executable_before = absolute_regular_executable(
+        Path(argv[0]), plan["executable_sha256"])
+    if (executable_before is None or (executable_before.st_dev, executable_before.st_ino)
+            != (plan["executable_dev"], plan["executable_ino"])):
+        return 2
+    proc=Popen(argv,cwd=plan["cwd"],stdout=PIPE,stderr=PIPE,
+               env=plan["environment"])
+    stdout,stderr=proc.communicate()
+    executable_after = absolute_regular_executable(
+        Path(argv[0]), plan["executable_sha256"])
+    if (executable_after is None
+            or (executable_after.st_dev, executable_after.st_ino)
+                != (plan["executable_dev"], plan["executable_ino"])):
+        return 2
+    if (plan["mode"] == "trusted" and len(argv)==2
+            and argv[1]=="--skip-owner-live"):
+        transcript = stdout.decode("utf-8", errors="strict")
+        reasons=(transcript.count("CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN")
+                 +transcript.count("CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT"))
+        if (proc.returncode not in {1,2}
+                or transcript.count("OWNER_LIVE_EXECUTION=SKIPPED") != 1
+                or transcript.count("OWNER_LIVE_START_DELTA=0") != 1
+                or reasons != 1):
+            return 2
+    if len(stdout) > MAX_OUTPUT_BYTES or len(stderr) > MAX_OUTPUT_BYTES:
+        return 2
+    result = {
+        "schema_version": 1,
+        "nonce": plan["nonce"],
+        "purpose": plan["purpose"],
+        "mode": plan["mode"],
+        "plan_sha256": hashlib.sha256(plan_raw).hexdigest(),
+        "plan_dev": plan_stat.st_dev,
+        "plan_ino": plan_stat.st_ino,
+        "helper_sha256": helper_sha,
+        "executable_dev": plan["executable_dev"],
+        "executable_ino": plan["executable_ino"],
+        "argv": argv,
+        "cwd": plan["cwd"],
+        "returncode": proc.returncode,
+        "timed_out": False,
+        "stdout_b64": base64.b64encode(stdout).decode("ascii"),
+        "stderr_b64": base64.b64encode(stderr).decode("ascii"),
+        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
+        "environment_sha256": hashlib.sha256(json.dumps(
+            plan["environment"],sort_keys=True,separators=(",", ":")).encode()).hexdigest(),
+        "tracked_processes": None,
+        "tracker_backend": "product-owned",
+        "family_quiescent": None,
+    }
+    raw = json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    atomic_write_new(result_path, raw)
+    return 0
+
+
+try:
+    raise SystemExit(main())
+except SystemExit:
+    raise
+except Exception:
+    raise SystemExit(2)
+PY
