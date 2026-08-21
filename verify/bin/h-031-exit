@@ -198,6 +198,7 @@ SENSITIVE_FRAME_ATTRS = {
     "f_globals", "f_builtins", "f_locals", "gi_frame", "cr_frame", "ag_frame", "tb_frame",
 }
 checks: list[tuple[str, bool, str]] = []
+owner_live_skip_pending = False
 
 
 class DuplicateKey(ValueError):
@@ -280,6 +281,52 @@ def check(key: str, ok: bool, detail: str) -> None:
 def odombart(key: str, detail: str) -> None:
     print(f"ODÖMBART {key} — {detail}")
     raise SystemExit(2)
+
+
+H032_OWNER_LIVE_SKIP_SUMMARY = "SAMMANFATTNING 140 PASS / 1 FAIL"
+H032_OWNER_LIVE_SKIP_REASON = "CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN"
+H032_OWNER_LIVE_SKIP_MARKER = (
+    "ODÖMBART K_OWNER_LIVE_PHASE_NOT_RUN — explicit owner TEST_AUTHOR no-live mode; "
+    "deterministic product controls passed"
+)
+
+
+def exclusive_h032_owner_live_skip(returncode: int, stdout: str):
+    lines = stdout.splitlines()
+    fail_labels = [
+        line[5:].split(" — ", 1)[0]
+        for line in lines
+        if line.startswith("FAIL ")
+    ]
+    odombart_lines = [line for line in lines if line.startswith("ODÖMBART ")]
+    required = {
+        "summary": lines.count(H032_OWNER_LIVE_SKIP_SUMMARY) == 1,
+        "reason": lines.count(H032_OWNER_LIVE_SKIP_REASON) == 1,
+        "marker": lines.count(H032_OWNER_LIVE_SKIP_MARKER) == 1,
+        "fail": fail_labels == ["K_STRUCTURED_RESULT_DELIVERY_BOUNDARY"],
+        "h033_summary": lines.count("H033_GATE_SUMMARY=55 PASS 0 FAIL") == 1,
+        "h033_result": lines.count("H033_GATE_RESULT=PASS") == 1,
+        "g20_pass": sum(line.startswith("PASS K_G20_NAMESPACE —") for line in lines) == 1,
+        "h033_pass": sum(
+            line.startswith("PASS K_H033_FRESH_UPSTREAM_PROVENANCE —") for line in lines
+        ) == 1,
+        "exclusive_odombart": odombart_lines == [H032_OWNER_LIVE_SKIP_MARKER],
+    }
+    ordered = False
+    if required["summary"] and required["reason"] and required["marker"]:
+        ordered = (
+            lines.index(H032_OWNER_LIVE_SKIP_SUMMARY)
+            < lines.index(H032_OWNER_LIVE_SKIP_REASON)
+            < lines.index(H032_OWNER_LIVE_SKIP_MARKER)
+        )
+    required["ordered"] = ordered
+    return returncode == 2 and all(required.values()), required
+
+
+def h031_terminal_exit(owner_skip_pending: bool, failed_labels) -> int:
+    if owner_skip_pending:
+        return 2
+    return 0 if not failed_labels else 1
 
 
 def sh(*argv: str, cwd: Path | None = None) -> str:
@@ -1875,18 +1922,60 @@ subprocess = object()
     harmless = process_shape(source_text + "\ndef h031_harmless(repo, wt, role, prompt):\n    return run_codex(repo, wt, role, prompt)\n")
     check("J_HARMLESS_ROLE_CONSOLIDATION", bool(harmless["boundary_ok"]), str(harmless["detail"]))
 
+    owner_skip_fixture = "\n".join((
+        "PASS K_G20_NAMESPACE — exact protected host evidence",
+        "H033_GATE_SUMMARY=55 PASS 0 FAIL",
+        "H033_GATE_RESULT=PASS",
+        "PASS K_H033_FRESH_UPSTREAM_PROVENANCE — exact protected owner runner",
+        "FAIL K_STRUCTURED_RESULT_DELIVERY_BOUNDARY — owner live phase not run",
+        H032_OWNER_LIVE_SKIP_SUMMARY,
+        H032_OWNER_LIVE_SKIP_REASON,
+        H032_OWNER_LIVE_SKIP_MARKER,
+    )) + "\n"
+    owner_skip_positive = exclusive_h032_owner_live_skip(2, owner_skip_fixture)
+    check("J_H032_EXCLUSIVE_OWNER_LIVE_SKIP_POSITIVE", owner_skip_positive[0],
+          str(owner_skip_positive[1]))
+    owner_skip_mutants = {
+        "MIXED_G20": owner_skip_fixture
+            + "ODÖMBART K_G20_NAMESPACE — nested sandbox unavailable\n",
+        "MIXED_H033": owner_skip_fixture
+            + "ODÖMBART K_H033_FRESH_UPSTREAM_PROVENANCE — owner runner unavailable\n",
+        "UNKNOWN_ODOMBART": owner_skip_fixture
+            + "ODÖMBART K_UNKNOWN — unknown upstream state\n",
+        "RIG_FAILURE": owner_skip_fixture
+            + "FAIL K-RIGG — malformed owner harness\n",
+        "DUPLICATE_MARKER": owner_skip_fixture + H032_OWNER_LIVE_SKIP_MARKER + "\n",
+        "REORDERED_MARKER": owner_skip_fixture.replace(
+            H032_OWNER_LIVE_SKIP_REASON + "\n" + H032_OWNER_LIVE_SKIP_MARKER,
+            H032_OWNER_LIVE_SKIP_MARKER + "\n" + H032_OWNER_LIVE_SKIP_REASON,
+        ),
+        "MISSING_MARKER": owner_skip_fixture.replace(H032_OWNER_LIVE_SKIP_MARKER + "\n", ""),
+    }
+    for label, mutant in owner_skip_mutants.items():
+        verdict = exclusive_h032_owner_live_skip(2, mutant)
+        check("J_H032_OWNER_LIVE_SKIP_" + label + "_REJECT", not verdict[0], str(verdict[1]))
+    check("J_H032_OWNER_LIVE_SKIP_PENDING_DOMINATES_PRODUCT",
+          h031_terminal_exit(True, {"K_PRODUCT_EXECUTION"}) == 2,
+          "pending owner ODÖMBART remains exit 2 after deterministic product findings")
+
     upstream_argv=[str(h032_gate)]
     if owner_live_mode == "skip": upstream_argv.append("--skip-owner-live")
     upstream = subprocess.run(upstream_argv, cwd=root, text=True,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-    upstream_skip_ok=(owner_live_mode == "skip" and upstream.returncode == 2
-        and "CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN" in upstream.stdout
-        and "ODÖMBART K_OWNER_LIVE_PHASE_NOT_RUN" in upstream.stdout)
+    upstream_skip_verdict = exclusive_h032_owner_live_skip(upstream.returncode, upstream.stdout)
+    upstream_skip_ok = owner_live_mode == "skip" and upstream_skip_verdict[0]
     if upstream.returncode == 2 and not upstream_skip_ok:
-        odombart("K_H032_FRESH_UPSTREAM", "nested G20/H033 owner effects unavailable")
-    upstream_ok=(upstream.returncode == 0 or upstream_skip_ok)
-    check("K_H032_FRESH_UPSTREAM", upstream_ok,
-          f"rc={upstream.returncode} tail={upstream.stdout[-700:].replace(chr(10), '|')}")
+        odombart("K_H032_FRESH_UPSTREAM",
+                 "non-exclusive owner ODÖMBART: " + str(upstream_skip_verdict[1]))
+    if owner_live_mode == "skip" and upstream.returncode == 0:
+        odombart("K_H032_FRESH_UPSTREAM", "skip ceremony unexpectedly returned PASS")
+    owner_live_skip_pending = upstream_skip_ok
+    upstream_ok = (owner_live_mode == "run" and upstream.returncode == 0) or upstream_skip_ok
+    if upstream_skip_ok:
+        check("J_H032_EXCLUSIVE_OWNER_LIVE_SKIP", True, str(upstream_skip_verdict[1]))
+    else:
+        check("K_H032_FRESH_UPSTREAM", upstream_ok,
+              f"rc={upstream.returncode} tail={upstream.stdout[-700:].replace(chr(10), '|')}")
     if not upstream_ok:
         raise ProductFailure("published H032 dependency is not green")
 
@@ -2165,14 +2254,14 @@ failed = {key for key, ok, _detail in checks if not ok}
 for key, ok, detail in checks:
     print(("PASS " if ok else "FAIL ") + key + " — " + detail)
 print(f"H031_GATE_SUMMARY={sum(1 for _k, ok, _d in checks if ok)} PASS {len(failed)} FAIL")
+if owner_live_skip_pending:
+    print("CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN")
+    print("ODÖMBART K_H032_OWNER_LIVE_PHASE_NOT_RUN — exclusive owner TEST_AUTHOR no-live mode remains pending after deterministic H031 controls")
+    raise SystemExit(h031_terminal_exit(True, failed))
 if not failed:
-    if owner_live_mode == "skip":
-        print("CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN")
-        print("ODÖMBART K_H032_OWNER_LIVE_PHASE_NOT_RUN — explicit owner TEST_AUTHOR no-live mode; H031 deterministic controls passed")
-        raise SystemExit(2)
     print("MATERIAL_PROPERTIES_JUDGE_ONLY=NONE")
     print("H031_GATE_RESULT=PASS")
-    raise SystemExit(0)
+    raise SystemExit(h031_terminal_exit(False, failed))
 if (failed == {"K_H032_FRESH_UPSTREAM", "K_PRODUCT_EXECUTION"}
         and "CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT"
             in getattr(locals().get("upstream"), "stdout", "")):

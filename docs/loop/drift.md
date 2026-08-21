@@ -1810,3 +1810,21 @@ ODÖMBART with `OWNER_LIVE_PHASE_NOT_RUN` when live is the only remaining phase 
 never grant PASS. H031 may forward that exact mode for its deterministic regression but
 also exits ODÖMBART; normal invocation still requires H032 exit zero. R74 and production
 semantics are unchanged, and H031 binds only the finalized R75 H032 digest.
+
+### 2026-08-21 — H031 R76 exclusive owner-live skip propagation
+
+Independent review found that R75's H031 forwarding predicate recognized two owner-live
+substrings but did not prove they were the only owner-level unavailability. H032 can
+legitimately print the owner-live marker together with G20 or fresh-H033 ODÖMBART, so
+the old predicate could continue into product checks and later turn the mixed owner
+state into exit 1.
+
+R76 classifies the complete upstream effect. The only admitted skip transcript has
+exit 2, the exact 140 PASS / 1 FAIL summary, only the structured-result failure, green
+G20 and H033 controls with exact H033 55/0 PASS markers, one exact no-live reason and
+one exact owner-live ODÖMBART line in that order. Mixed G20, mixed H033, unknown,
+duplicate, reordered and missing owner markers all exit ODÖMBART before H031 product
+execution. The exact legitimate skip is recorded as a J control, not a green H032
+dependency, and carries a pending ODÖMBART state through the deterministic H031 run.
+Normal invocation still requires H032 exit zero. H032, R75 live binding, production,
+process and route semantics remain unchanged; TEST_AUTHOR performs no live call.
