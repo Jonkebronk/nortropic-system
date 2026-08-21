@@ -19,21 +19,16 @@ exec /usr/bin/python3 -I -S - "$SOURCE_PATH" "$@" <<'PY'
 from __future__ import annotations
 
 import base64
-import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
-import signal
 import stat
-from subprocess import PIPE, Popen, TimeoutExpired
+from subprocess import PIPE, Popen
 import sys
-import threading
-import time
 
 MAX_PLAN_BYTES = 65536
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
-GRACE_SECONDS = 5
 HEX = frozenset("0123456789abcdef")
 
 
@@ -190,106 +185,6 @@ def atomic_write_new(path: Path, raw: bytes) -> None:
         os.close(parent_fd)
 
 
-class ProcBSDInfo(ctypes.Structure):
-    _fields_ = [
-        ("flags", ctypes.c_uint32), ("status", ctypes.c_uint32),
-        ("xstatus", ctypes.c_uint32), ("pid", ctypes.c_uint32),
-        ("ppid", ctypes.c_uint32), ("uid", ctypes.c_uint32),
-        ("gid", ctypes.c_uint32), ("ruid", ctypes.c_uint32),
-        ("rgid", ctypes.c_uint32), ("svuid", ctypes.c_uint32),
-        ("svgid", ctypes.c_uint32), ("reserved", ctypes.c_uint32),
-        ("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32),
-        ("nfiles", ctypes.c_uint32), ("pgid", ctypes.c_uint32),
-        ("pjobc", ctypes.c_uint32), ("tdev", ctypes.c_uint32),
-        ("tpgid", ctypes.c_uint32), ("nice", ctypes.c_int32),
-        ("start_sec", ctypes.c_uint64), ("start_usec", ctypes.c_uint64),
-    ]
-
-
-def libproc_api():
-    if sys.platform != "darwin" or ctypes.sizeof(ProcBSDInfo) != 136:
-        raise RuntimeError("native process identity observer unavailable")
-    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int,
-                                     ctypes.c_uint64, ctypes.c_void_p,
-                                     ctypes.c_int]
-    library.proc_pidinfo.restype = ctypes.c_int
-    library.proc_listchildpids.argtypes = [ctypes.c_int, ctypes.c_void_p,
-                                           ctypes.c_int]
-    library.proc_listchildpids.restype = ctypes.c_int
-    return library
-
-
-def native_identity(library, pid: int):
-    info = ProcBSDInfo()
-    size = library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
-    if size != ctypes.sizeof(info) or info.pid != pid:
-        return None
-    return (int(info.start_sec), int(info.start_usec))
-
-
-def native_children(library, pid: int):
-    buffer = (ctypes.c_int * 4096)()
-    count = library.proc_listchildpids(pid, buffer, ctypes.sizeof(buffer))
-    if count < 0 or count > len(buffer):
-        raise RuntimeError("native child inventory failed")
-    return tuple(int(buffer[index]) for index in range(count) if buffer[index] > 0)
-
-
-def native_family_tracker(root_pid: int, stop: threading.Event, identities: dict,
-                          interval: float):
-    library = libproc_api()
-    family = {root_pid}
-    while not stop.is_set():
-        for parent in tuple(family):
-            for child in native_children(library, parent):
-                family.add(child)
-        for pid in tuple(family):
-            identity = native_identity(library, pid)
-            if identity is not None:
-                identities[pid] = identity
-        stop.wait(interval)
-
-
-def native_alive(library, identities: dict):
-    return [pid for pid, identity in identities.items()
-            if native_identity(library, pid) == identity]
-
-
-def terminate_family(root_pid: int, identities: dict, backend: str) -> bool:
-    library = libproc_api() if backend.startswith("libproc") else None
-    def alive():
-        if library is not None:
-            return native_alive(library, identities)
-        raise RuntimeError("unknown process observer backend")
-    initial=alive()
-    if root_pid in initial:
-        try: os.killpg(root_pid,signal.SIGTERM)
-        except ProcessLookupError: pass
-    deadline=time.monotonic()+GRACE_SECONDS
-    while time.monotonic()<deadline:
-        remaining=alive()
-        if not remaining:return True
-        for pid in remaining:
-            try:os.kill(pid,signal.SIGTERM)
-            except ProcessLookupError:pass
-        time.sleep(.02)
-    for pid in alive():
-        try:os.kill(pid,signal.SIGKILL)
-        except ProcessLookupError:pass
-    deadline=time.monotonic()+GRACE_SECONDS
-    while time.monotonic()<deadline:
-        if not alive():return True
-        time.sleep(.02)
-    return not alive()
-
-
-def clear_child_signal_mask() -> None:
-    # The parent blocks termination signals only across assignment of the
-    # child capability.  The exec child must not inherit that critical window.
-    signal.pthread_sigmask(signal.SIG_SETMASK,set())
-
-
 def main() -> int:
     if len(sys.argv) != 4:
         return 2
@@ -309,62 +204,12 @@ def main() -> int:
     if (executable_before is None or (executable_before.st_dev, executable_before.st_ino)
             != (plan["executable_dev"], plan["executable_ino"])):
         return 2
-    proc=None;timed_out=False;family={}
-    if plan["mode"] == "trusted":
-        tracker_backend="trusted-none";family_quiescent=None
-        proc=Popen(argv,cwd=plan["cwd"],stdout=PIPE,stderr=PIPE,
-                   env=plan["environment"],start_new_session=True)
-        stdout,stderr=proc.communicate()
-    else:
-        interrupted=[]
-        blocked_signals={signal.SIGHUP,signal.SIGINT,signal.SIGTERM}
-        previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,blocked_signals)
-        def interrupted_handler(signum,_frame):
-            interrupted.append(signum)
-            raise KeyboardInterrupt
-        old_handlers={item:signal.signal(item,interrupted_handler)
-                      for item in (signal.SIGHUP,signal.SIGINT,signal.SIGTERM)}
-        tracker_backend="libproc-full";family_quiescent=False
-        tracker_stop=threading.Event();native_library=libproc_api()
-        try:
-            proc=Popen(argv,cwd=plan["cwd"],stdout=PIPE,stderr=PIPE,
-                       env=plan["environment"],start_new_session=True,
-                       preexec_fn=clear_child_signal_mask)
-            root_identity=native_identity(native_library,proc.pid)
-            if root_identity is None:
-                raise RuntimeError("native root identity unavailable")
-            family[proc.pid]=root_identity
-            tracker=threading.Thread(target=native_family_tracker,
-                args=(proc.pid,tracker_stop,family,.005),daemon=True)
-            tracker.start()
-            signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
-            if interrupted:raise KeyboardInterrupt
-            stdout,stderr=proc.communicate()
-        except KeyboardInterrupt as exc:
-            timed_out=True
-            family_quiescent=terminate_family(proc.pid,family,tracker_backend)
-            try:stdout,stderr=proc.communicate(timeout=GRACE_SECONDS)
-            except TimeoutExpired:
-                try:os.killpg(proc.pid,signal.SIGKILL)
-                except ProcessLookupError:pass
-                stdout,stderr=proc.communicate()
-            stdout=(getattr(exc,"stdout",None) or b"")+(stdout or b"")
-            stderr=(getattr(exc,"stderr",None) or b"")+(stderr or b"")
-        finally:
-            tracker_stop.set()
-            if 'tracker' in locals():tracker.join(timeout=1)
-            if proc is not None and proc.poll() is None:
-                family_quiescent=terminate_family(proc.pid,family,tracker_backend)
-                proc.wait(timeout=GRACE_SECONDS)
-            signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
-            for item,handler in old_handlers.items():signal.signal(item,handler)
-        if proc is None:return 2
-        if not timed_out:
-            family_quiescent=terminate_family(proc.pid,family,tracker_backend)
+    proc=Popen(argv,cwd=plan["cwd"],stdout=PIPE,stderr=PIPE,
+               env=plan["environment"])
+    stdout,stderr=proc.communicate()
     executable_after = absolute_regular_executable(
         Path(argv[0]), plan["executable_sha256"])
-    if ((plan["mode"]=="provider-full" and not family_quiescent)
-            or executable_after is None
+    if (executable_after is None
             or (executable_after.st_dev, executable_after.st_ino)
                 != (plan["executable_dev"], plan["executable_ino"])):
         return 2
@@ -394,16 +239,16 @@ def main() -> int:
         "argv": argv,
         "cwd": plan["cwd"],
         "returncode": proc.returncode,
-        "timed_out": timed_out,
+        "timed_out": False,
         "stdout_b64": base64.b64encode(stdout).decode("ascii"),
         "stderr_b64": base64.b64encode(stderr).decode("ascii"),
         "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
         "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
         "environment_sha256": hashlib.sha256(json.dumps(
             plan["environment"],sort_keys=True,separators=(",", ":")).encode()).hexdigest(),
-        "tracked_processes": len(family),
-        "tracker_backend": tracker_backend,
-        "family_quiescent": family_quiescent,
+        "tracked_processes": None,
+        "tracker_backend": "product-owned",
+        "family_quiescent": None,
     }
     raw = json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")
     atomic_write_new(result_path, raw)

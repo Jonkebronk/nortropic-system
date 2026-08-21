@@ -1936,3 +1936,15 @@ identity ledger and synchronous cleanup. Purpose, mode, exact argv and result ba
 mutually bound; normal dependency starts H032 once, explicit no-live starts no provider, and
 cross-mode/provider/backend mutants reject. External interruption is an operator-recovery
 ODÖMBART state. A 300-second watchdog used by owner regressions is not part of gate semantics.
+
+## 2026-08-21 — R93 product-owned provider lifetime
+
+Independent review falsified R92's remaining provider-full tracker with an immediate
+double-fork/setsid survivor between libproc samples. R93 removes the entire helper-side
+containment claim rather than polling faster. Both modes execute one exact synchronous
+Popen+communicate path with no timeout, signal handling, process/session setup, tracker,
+kill or cleanup. Results say only `product-owned` and null process/quiescence facts. The
+actual controller remains sole owner of its frozen 86400 timeout and family/result cleanup,
+which the connected product matrix already measures. Purpose/mode/argv and transport
+identity remain strict. External interruption is an operator incident and yields no gate
+verdict; no owner selftest intentionally interrupts the helper.

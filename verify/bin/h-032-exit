@@ -31,7 +31,7 @@ RESULT_KERNEL="$ROOT/controller/result/consumer.py"
 AUTHORITY="$ROOT/config/codex-provider-identity.json"
 SCHEMA="$ROOT/docs/loop/codex-autopilot-report.schema.json"
 OWNER_LIVE_HELPER="$ROOT/verify/bin/h-032-owner-live-call"
-OWNER_LIVE_HELPER_SHA256="da7f6aa4569544b0607c59887347219f54a032b56c112b80336768a105bab6ea"
+OWNER_LIVE_HELPER_SHA256="6dda8330d1a7bb8020ca76a8ab7d26ea3d57e507db6f7f211b448b3770614e1f"
 if [[ -L "$OWNER_LIVE_HELPER" || ! -f "$OWNER_LIVE_HELPER" || ! -x "$OWNER_LIVE_HELPER" ]]; then
   echo "ODÖMBART K0 — owner-live helper identity invalid"
   exit 2
@@ -43,7 +43,7 @@ if [[ "$OBSERVED_OWNER_LIVE_HELPER_SHA256" != "$OWNER_LIVE_HELPER_SHA256" ]]; th
 fi
 WORK="$(/usr/bin/mktemp -d /private/tmp/nortropic-h032.XXXXXX)" || exit 2
 case "$WORK" in /private/tmp/nortropic-h032.*) ;; *) echo "ODÖMBART K0 — osäker tempidentitet"; exit 2;; esac
-GATE_PID="";HELPER_PID=""
+GATE_PID="";HELPER_PID="";PROTOCOL_INTERRUPTED=0
 quiesce_protocol() {
   for owned_pid in "${HELPER_PID:-}" "${GATE_PID:-}"; do
     [[ -n "$owned_pid" ]] || continue
@@ -57,6 +57,9 @@ quiesce_protocol() {
 cleanup() {
   cleanup_rc=$?
   trap - EXIT HUP INT TERM
+  if [[ "$PROTOCOL_INTERRUPTED" == 1 && ( -n "${HELPER_PID:-}" || -n "${GATE_PID:-}" ) ]]; then
+    exit "$cleanup_rc"
+  fi
   quiesce_protocol
   case "${WORK:-}" in
     /private/tmp/nortropic-h032.*) /bin/rm -rf -- "$WORK" || cleanup_rc=2 ;;
@@ -65,9 +68,9 @@ cleanup() {
   exit "$cleanup_rc"
 }
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'PROTOCOL_INTERRUPTED=1; exit 129' HUP
+trap 'PROTOCOL_INTERRUPTED=1; exit 130' INT
+trap 'PROTOCOL_INTERRUPTED=1; exit 143' TERM
 
 G20_EMIT=""
 OWNER_LIVE_MODE="run"
@@ -260,17 +263,10 @@ def owner_call_result_valid(value, plan, plan_raw: bytes, plan_stat) -> bool:
         and value.get("stderr_sha256")==hashlib.sha256(stderr).hexdigest()
         and value.get("environment_sha256")==hashlib.sha256(json.dumps(
             plan.get("environment"),sort_keys=True,separators=(",", ":")).encode()).hexdigest()
-        and type(value.get("tracked_processes")) is int
-        and value["tracked_processes"]>=0
-        and ((plan.get("mode")=="provider-full"
-              and value.get("tracker_backend")=="libproc-full"
-              and value.get("family_quiescent") is True
-              and value["tracked_processes"]>=1)
-             or (plan.get("mode")=="trusted"
-              and value.get("tracker_backend")=="trusted-none"
-              and value.get("family_quiescent") is None
-              and value["tracked_processes"]==0
-              and value.get("timed_out") is False)))
+        and value.get("tracked_processes") is None
+        and value.get("tracker_backend")=="product-owned"
+        and value.get("family_quiescent") is None
+        and value.get("timed_out") is False)
 
 def canonical_result_valid(value, schema, accepted_digest=None, role="TEST_AUTHOR"):
     if not isinstance(value, dict) or set(value) != {
@@ -542,9 +538,10 @@ try:
     provider_fixture_repo.mkdir();provider_fixture_wt.mkdir()
     provider_fixture_source=owner_helper_rig/"candidate.py"
     provider_fixture_source.write_text("# owner-only provider fixture\n",encoding="utf-8")
+    provider_fixture_starts=owner_helper_rig/"provider-full-starts"
     env_runner=owner_helper_rig/"r12-env-runner.py"
     env_runner.write_text(
-        "import os,sys,time\ntime.sleep(.2)\n"
+        "import os,pathlib,sys,time\npathlib.Path("+repr(str(provider_fixture_starts))+ ").open('a').write('start\\n')\ntime.sleep(.2)\n"
         "sys.stdout.buffer.write(b'\\0'.join((k+'='+v).encode() for k,v in os.environ.items())+b'\\0')\n",
         encoding="utf-8")
     # Observe the exact pristine interpreter additions once, then freeze that
@@ -556,6 +553,7 @@ try:
         stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5,check=True)
     owner_helper_environment=dict(item.split("=",1) for item in
         environment_probe.stdout.decode("utf-8",errors="strict").split("\0") if item)
+    provider_fixture_starts.unlink()
     owner_helper_environment_fingerprint=hashlib.sha256(json.dumps(
         owner_helper_environment,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
     owner_helper_argv=["/usr/bin/python3","-I","-S","-u",str(env_runner),
@@ -595,46 +593,12 @@ try:
     owner_helper_positive=(owner_helper_run.returncode==0
         and owner_call_result_valid(owner_helper_result,owner_helper_plan,
                                     owner_helper_plan_raw,owner_helper_plan_stat)
-        and owner_helper_environment_effect_ok)
-    escaped_marker=owner_helper_rig/"escaped-family-marker"
-    escaped_plan_path=owner_helper_rig/"escaped-plan.json"
-    escaped_result_path=owner_helper_rig/"escaped-result.json"
-    escaped_runner=owner_helper_rig/"r12-escaped-runner.py"
-    escaped_code=("import os,time,sys;pid=os.fork();"
-        "(time.sleep(3),os._exit(0)) if pid else time.sleep(2);"
-        "os.setsid();p=sys.argv[1];open(p,'w').write('started');"
-        "\nwhile True:\n open(p,'a').write('x');time.sleep(.02)")
-    escaped_runner.write_text(escaped_code.replace("sys.argv[1]",repr(str(escaped_marker))),encoding="utf-8")
-    escaped_argv=["/usr/bin/python3","-I","-S","-u",str(escaped_runner),
-                  str(provider_fixture_source),str(provider_fixture_repo),str(provider_fixture_wt)]
-    escaped_plan={"schema_version":1,"nonce":os.urandom(32).hex(),
-        "purpose":"H032_OWNER_LIVE","mode":"provider-full","argv":escaped_argv,
-        "cwd":str(owner_helper_rig),"result_path":str(escaped_result_path),
-        "executable_sha256":sha256(Path("/usr/bin/python3")),
-        **owner_executable_binding(Path("/usr/bin/python3")),
-        "environment":owner_helper_environment}
-    atomic_owner_json(escaped_plan_path,escaped_plan)
-    escaped_helper=subprocess.Popen(
-        [str(owner_live_helper),str(escaped_plan_path),str(escaped_result_path)],
-        stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    escaped_deadline=time.monotonic()+5
-    while not escaped_marker.exists() and time.monotonic()<escaped_deadline:time.sleep(.01)
-    escaped_started=escaped_marker.exists()
-    if escaped_started: escaped_helper.terminate()
-    try: escaped_helper.communicate(timeout=10)
-    except subprocess.TimeoutExpired:
-        escaped_helper.kill();escaped_helper.communicate();escaped_helper_bounded=False
-    else: escaped_helper_bounded=True
-    escaped_size=escaped_marker.stat().st_size if escaped_marker.exists() else 0
-    time.sleep(.15)
-    escaped_quiet=(escaped_marker.exists() and escaped_marker.stat().st_size==escaped_size)
-    escaped_result_ok=False
-    if escaped_result_path.is_file():
-        _a,_b,escaped_result=stable_owner_json(escaped_result_path)
-        escaped_result_ok=(escaped_result.get("timed_out") is True
-                           and escaped_result.get("tracked_processes",0)>=2)
-    owner_helper_containment_ok=(escaped_started and escaped_helper_bounded
-                                 and escaped_quiet and escaped_result_ok)
+        and owner_helper_environment_effect_ok
+        and provider_fixture_starts.read_text().splitlines()==["start"]
+        and owner_helper_result.get("tracker_backend")=="product-owned"
+        and owner_helper_result.get("tracked_processes") is None
+        and owner_helper_result.get("family_quiescent") is None
+        and owner_helper_result.get("timed_out") is False)
     plan_preseed=owner_helper_rig/"plan-preseed.json"
     plan_preseed.write_bytes(b"R90-PLAN-PRESEED")
     try: atomic_owner_json(plan_preseed,{"replacement":True});plan_preseed_reject=False
@@ -700,22 +664,23 @@ try:
         and skip_run.returncode==0 and skip_result.get("returncode")==1
         and owner_call_result_valid(normal_result,normal_plan,normal_raw,normal_stat)
         and owner_call_result_valid(skip_result,skip_plan,skip_raw,skip_stat)
-        and all(item.get("tracker_backend")=="trusted-none"
+        and all(item.get("tracker_backend")=="product-owned"
                 and item.get("family_quiescent") is None
-                and item.get("tracked_processes")==0 and item.get("timed_out") is False
+                and item.get("tracked_processes") is None and item.get("timed_out") is False
                 for item in (normal_result,skip_result))
         and trusted_start.read_text().splitlines()==["0:","1:--skip-owner-live"]
         and not trusted_provider.exists())
     helper_text=owner_live_helper.read_text(encoding="utf-8")
-    trusted_wait_source='''    if plan["mode"] == "trusted":
-        tracker_backend="trusted-none";family_quiescent=None
-        proc=Popen(argv,cwd=plan["cwd"],stdout=PIPE,stderr=PIPE,
-                   env=plan["environment"],start_new_session=True)
-        stdout,stderr=proc.communicate()
-    else:
+    exact_wait_source='''    proc=Popen(argv,cwd=plan["cwd"],stdout=PIPE,stderr=PIPE,
+               env=plan["environment"])
+    stdout,stderr=proc.communicate()
 '''
-    trusted_source_ok=(helper_text.count(trusted_wait_source)==1
-        and "SKIP_SECONDS" not in helper_text)
+    forbidden_helper_tokens=("timeout=","TimeoutExpired","start_new_session",
+        "preexec_fn","signal","pthread_sigmask","ctypes","threading","libproc",
+        "killpg","os.kill","terminate(",".kill(","wait(timeout=","/bin/ps")
+    trusted_source_ok=(helper_text.count(exact_wait_source)==1
+        and helper_text.count("Popen(")==1 and helper_text.count("communicate()")==1
+        and all(token not in helper_text for token in forbidden_helper_tokens))
     trusted_rejects={}
     for label,argv,purpose,mode in (
         ("wrong-argv",[str(trusted_gate),"--bad"],"H031_H032_DEPENDENCY","trusted"),
@@ -725,9 +690,9 @@ try:
         completed,_p,_r,_s,result=run_trusted(label,argv,purpose,mode)
         trusted_rejects[label]=(completed.returncode==2 and not result)
     trusted_backend_mutant=dict(normal_result);trusted_backend_mutant.update(
-        tracker_backend="libproc-full",family_quiescent=True,tracked_processes=1)
+        tracker_backend="tracker",family_quiescent=True,tracked_processes=1)
     provider_backend_mutant=dict(owner_helper_result);provider_backend_mutant.update(
-        tracker_backend="trusted-none",family_quiescent=None,tracked_processes=0)
+        tracker_backend="tracker",family_quiescent=True,tracked_processes=1)
     trusted_result_rejects=(not owner_call_result_valid(
         trusted_backend_mutant,normal_plan,normal_raw,normal_stat)
         and not owner_call_result_valid(provider_backend_mutant,owner_helper_plan,
@@ -748,15 +713,14 @@ try:
     owner_helper_mutants["replay"]=not owner_call_result_valid(
         owner_helper_result,replay_plan,owner_helper_plan_raw,owner_helper_plan_stat)
     check("J_R89_SPLIT_OWNER_CALL_RIG",
-          owner_helper_structure_ok and owner_helper_positive and owner_helper_containment_ok
-          and owner_helper_no_replace_ok
+          owner_helper_structure_ok and owner_helper_positive and owner_helper_no_replace_ok
           and all(owner_helper_mutants.values()),
           f"structure={owner_helper_structure_ok} positive={owner_helper_positive} "
           f"env_diff={(sorted(set(owner_helper_environment)-set(owner_helper_actual_environment)),sorted(set(owner_helper_actual_environment)-set(owner_helper_environment)),sorted(key for key in owner_helper_environment if key in owner_helper_actual_environment and owner_helper_environment[key]!=owner_helper_actual_environment[key]))} "
-          f"containment={owner_helper_containment_ok,escaped_started,escaped_helper_bounded,escaped_quiet,escaped_result_ok} "
+          f"provider_full_once={provider_fixture_starts.read_text().splitlines()} "
           f"no_replace={owner_helper_no_replace_ok} "
           f"mutants={owner_helper_mutants}")
-    check("J_R92_MODE_PURPOSE_SEPARATION",
+    check("J_R93_PRODUCT_OWNED_LIFETIME",
           trusted_positive and trusted_source_ok and all(trusted_rejects.values())
           and trusted_result_rejects,
           f"positive={trusted_positive} source={trusted_source_ok} "

@@ -27,7 +27,7 @@ SCHEMA="$ROOT/docs/loop/codex-autopilot-report.schema.json"
 SPEC="$ROOT/specs/tasks.spec.json"
 H032_GATE="$ROOT/verify/bin/h-032-exit"
 OWNER_LIVE_HELPER="$ROOT/verify/bin/h-032-owner-live-call"
-OWNER_LIVE_HELPER_SHA256="da7f6aa4569544b0607c59887347219f54a032b56c112b80336768a105bab6ea"
+OWNER_LIVE_HELPER_SHA256="6dda8330d1a7bb8020ca76a8ab7d26ea3d57e507db6f7f211b448b3770614e1f"
 if [[ -L "$OWNER_LIVE_HELPER" || ! -f "$OWNER_LIVE_HELPER" || ! -x "$OWNER_LIVE_HELPER" ]]; then
   echo "ODÖMBART K0 — owner-live helper identity invalid"
   exit 2
@@ -47,9 +47,8 @@ quiesce_protocol() {
 cleanup() {
   cleanup_rc=$?
   trap - EXIT HUP INT TERM
-  if [[ "$PROTOCOL_INTERRUPTED" == 1 && -n "${HELPER_PID:-}" ]]; then
-    echo "ODÖMBART K_H032_PROTOCOL — external interruption during trusted dependency; operator recovery required" >&2
-    exit 2
+  if [[ "$PROTOCOL_INTERRUPTED" == 1 && ( -n "${HELPER_PID:-}" || -n "${GATE_PID:-}" ) ]]; then
+    exit "$cleanup_rc"
   fi
   quiesce_protocol
   case "${WORK:-}" in
@@ -386,17 +385,10 @@ def owner_call_result_valid(value, plan, plan_raw: bytes, plan_stat) -> bool:
         and value.get("stderr_sha256")==hashlib.sha256(stderr).hexdigest()
         and value.get("environment_sha256")==hashlib.sha256(json.dumps(
             plan.get("environment"),sort_keys=True,separators=(",", ":")).encode()).hexdigest()
-        and type(value.get("tracked_processes")) is int
-        and value["tracked_processes"]>=0
-        and ((plan.get("mode")=="provider-full"
-              and value.get("tracker_backend")=="libproc-full"
-              and value.get("family_quiescent") is True
-              and value["tracked_processes"]>=1)
-             or (plan.get("mode")=="trusted"
-              and value.get("tracker_backend")=="trusted-none"
-              and value.get("family_quiescent") is None
-              and value["tracked_processes"]==0
-              and value.get("timed_out") is False)))
+        and value.get("tracked_processes") is None
+        and value.get("tracker_backend")=="product-owned"
+        and value.get("family_quiescent") is None
+        and value.get("timed_out") is False)
 
 
 def check(key: str, ok: bool, detail: str) -> None:
@@ -1396,7 +1388,7 @@ try:
                    and h032[0].get("exit_test") == "verify/bin/h-032-exit"
                    and h032_gate.is_file()
                    and sha256_bytes(h032_gate.read_bytes())
-                       == "a82ecbc7b3b32774a1a3d6ad460462196b912d5deac73de03dfb405ab8ed5ee4")
+                       == "ef113e00a4d0cfd41fba74bff9abc5275cd824e512a9b664734b0b3b223e2e09")
     check("F_H032_EXACT_PUBLISHED_DEPENDENCY", h032_static, f"rows={len(h032)}")
 
     source_text = source.read_text(encoding="utf-8")
