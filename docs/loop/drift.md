@@ -1845,3 +1845,20 @@ summary followed by one PASS result as distinct pipe records. Missing, wrong,
 duplicate, reordered and standalone-only forms reject. R76's owner-marker ordering,
 mixed ODÖMBART, sole structured-result failure and pending exit-2 controls remain.
 H032, production, normal H031 and provider/live behavior are unchanged.
+
+### 2026-08-21 — H031 R78 result-kernel runtime fixtures
+
+The completed H032 implementation made two older dependent-gate assumptions observable.
+H031's source contract had already frozen one repository-root insertion for both controller
+imports, but the runtime import oracle still compared against `controller/authority`. Its
+synthetic provider also emitted only four report fields, so the new result consumer correctly
+rejected all six routes before H031 could judge their model and effort.
+
+R78 uses one exact transition predicate for the actual import and unconditional rig controls:
+the resolved repository root prepended once with bytecode disabled passes; the old authority-only
+path fails. The provider fixture now writes a complete frozen-schema report for each of the six
+roles. Each actual `run_codex` call must return the controller binding envelope containing that
+exact report, while argv and AGENT_START retain their existing independent route checks. A
+connected seventh provider start writes the old partial object; it must be schema-rejected and
+leave no canonical result. These are dependent-gate repairs, not product credits. R77's exclusive
+no-live/H033 parser, H032 bytes, production, process topology and live-call guard are unchanged.
