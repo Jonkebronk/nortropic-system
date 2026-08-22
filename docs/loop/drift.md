@@ -2368,3 +2368,65 @@ identity-verified tree cleanup on the bound path or, under substitution, by the
 single dirfd-relative sink removal, then fails closed; the tree-removal helper
 unlinks a root symlink instead of following it. No live/provider execution is
 performed.
+
+## 2026-08-23 — R116 provider staging confinement + finalizer/kernel/quiescence controls
+
+The published dirfd product candidate (e167fc0) closed R115's substitution
+defects but a follow-on adversarial review found five residual blockers
+(E167-REV-01..05). R116 is a TEST_AUTHOR round (gates, task-spec and docs only,
+no product code) that authors the controls; a later builder round writes the
+product. Each control makes e167fc0 and its vulnerable predecessor (3088dc9a)
+RED, and each was validated against the real product overlays on the host,
+un-nested, with the standing owner authorization and no provider/model call.
+
+The primary closure is provider staging confinement at the sandbox boundary. An
+owner measurability probe confirmed macOS Seatbelt can express the exact
+capability — deny all writes under the staging root except file-write-data on the
+pre-created result.json — only on canonical /private paths (/var resolves to
+/private/var). The launcher will receive the staging root and sink through
+NORTROPIC_STAGING_ROOT and NORTROPIC_RESULT_SINK and bind them as that exact
+deny+allow, never a blanket /private/tmp restriction. Two real-launcher effect
+tests enforce it: K_PROVIDER_STAGING_CONFINEMENT (sink write allowed;
+create-sibling, rename, unlink, mkdir, hardlink and root-move denied; sink
+intact) and K_PROVIDER_RENAME_BEFORE_MOVE_CONFINEMENT (a rename of the sink
+within staging followed by a cross-parent move out is denied at the rename and
+leaves nothing escaped). Both mirror K_G20: they run only in the un-nested
+owner-runner and degrade to ODÖMBART — never false-pass — when nested
+sandbox-exec is refused. Against the current unconfined launcher both are RED.
+
+Three finalizer/kernel controls fold into deterministic_result_ok and are
+independent of the sandbox (defense-in-depth per the owner's binding precisions).
+Real-directory replacement: a provider that relocates the staging root and plants
+a real foreign directory at the original path must have that foreign object
+PRESERVED — confinement alone must not legitimize blind finalizer deletion, so
+e167fc0's identity-free `_cleanup_result_staging`, which appends the root path and
+deletes whatever sits there, is RED. Empty moved parent: the relocated staging
+directory itself, left empty after the bound-descriptor sink unlink, counts as
+residue, not only its regular files. Concurrent canonical: a foreign canonical
+published in the exact window before the kernel's own publish must be REJECTED
+with its inode and digest UNCHANGED; e167fc0's os.replace overwrites and accepts
+(RED), while an os.link no-overwrite kernel rejects and preserves (validated
+satisfiable by overlay).
+
+Success-path quiescence: a same-process-group, closed-stdio descendant that
+survives the provider's NORMAL exit must be dead before staging cleanup. The
+verdict is identity-bound — the exact pid and lstart are recorded while the
+family is still linked, then re-checked — never a bare process-table sample or an
+unbound/reused-PGID credit. The current launcher killpg's only on timeout, so the
+descendant survives a normal success (RED); a launcher that killpg's the group on
+success leaves it dead (validated satisfiable by a hardened-launcher overlay).
+
+The synthetic fixture sink-write positive grants no Condition B (owner-live)
+credit. If the real Codex `-o` writer publishes atomically (temp-file plus
+rename) rather than writing the sink data directly, the Seatbelt allow is NOT
+broadened; owner-live becomes ODÖMBART at Condition B and is resolved there.
+
+H032 baseline against the unconfined launcher and absent product is 144 PASS / 3
+FAIL exit 1; the hardened confined owner-skip state is 146 PASS / 1 FAIL and the
+fully green state 147 PASS / 0 FAIL. H031 rebinds the exact final H032 gate digest
+and the h-032-owner-live-call bridge digest, updates its pinned owner-skip and
+green summaries and its 147-label green set, and accepts the confinement
+current-RED reason as a legitimate pre-builder no-live state (helper bridge
+updated to match); H031 baseline remains 143 PASS / 2 FAIL for the sole upstream
+product gap. The subsequent builder round extends allowed_write exactly with
+controller/launch/cli. No live/provider execution is performed.

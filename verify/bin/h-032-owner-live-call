@@ -216,8 +216,18 @@ def main() -> int:
     if (plan["mode"] == "trusted" and len(argv)==2
             and argv[1]=="--skip-owner-live"):
         transcript = stdout.decode("utf-8", errors="strict")
+        # R116: an unconfined launcher makes the provider-confinement effect-tests
+        # legitimately RED alongside the absent result boundary — a valid current
+        # no-live state (the confined launcher of the builder round flips them to
+        # PASS).  Accept exactly that reason in addition to the boundary-absent and
+        # owner-live-skip reasons.
+        confinement_red_reason = (
+            "CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:"
+            "K_PROVIDER_RENAME_BEFORE_MOVE_CONFINEMENT,"
+            "K_PROVIDER_STAGING_CONFINEMENT,K_STRUCTURED_RESULT_DELIVERY_BOUNDARY")
         reasons=(transcript.count("CURRENT_RED_REASON=OWNER_LIVE_PHASE_NOT_RUN")
-                 +transcript.count("CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT"))
+                 +transcript.count("CURRENT_RED_REASON=STRUCTURED_RESULT_DELIVERY_BOUNDARY_ABSENT")
+                 +transcript.count(confinement_red_reason))
         if (proc.returncode not in {1,2}
                 or transcript.count("OWNER_LIVE_EXECUTION=SKIPPED") != 1
                 or transcript.count("OWNER_LIVE_START_DELTA=0") != 1

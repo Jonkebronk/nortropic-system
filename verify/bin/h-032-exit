@@ -31,7 +31,7 @@ RESULT_KERNEL="$ROOT/controller/result/consumer.py"
 AUTHORITY="$ROOT/config/codex-provider-identity.json"
 SCHEMA="$ROOT/docs/loop/codex-autopilot-report.schema.json"
 OWNER_LIVE_HELPER="$ROOT/verify/bin/h-032-owner-live-call"
-OWNER_LIVE_HELPER_SHA256="6dda8330d1a7bb8020ca76a8ab7d26ea3d57e507db6f7f211b448b3770614e1f"
+OWNER_LIVE_HELPER_SHA256="9fdc5faae5a47ad79ab9057623060d1ebd909f48c46bebdf987ac5b5ab90528f"
 if [[ -L "$OWNER_LIVE_HELPER" || ! -f "$OWNER_LIVE_HELPER" || ! -x "$OWNER_LIVE_HELPER" ]]; then
   echo "ODÖMBART K0 — owner-live helper identity invalid"
   exit 2
@@ -1092,6 +1092,25 @@ def gate_pause(sequence):
 if mode == 'fork_descendant':
     marker=out.parent/'late-descendant-residue'
     subprocess.Popen([sys.executable,'-c','import pathlib,sys,time; time.sleep(.5); p=pathlib.Path(sys.argv[1]); p.parent.mkdir(parents=True,exist_ok=True); p.write_text("late")',str(marker)])
+if mode == 'same_group_closed_stdio':
+    # R116 success-path quiescence (E167-REV-03): a descendant in the SAME
+    # process group (no setsid), with CLOSED stdio so no inherited pipe keeps the
+    # launcher blocked, that outlives the provider's NORMAL exit.  Only a launcher
+    # that killpg's the group on SUCCESS (not just on timeout) leaves it dead.
+    marker=out.parent/'late-descendant-residue'
+    child=os.fork()
+    if child == 0:
+        devnull=os.open(os.devnull,os.O_RDWR)
+        for _std in (0,1,2):
+            try: os.dup2(devnull,_std)
+            except OSError: pass
+        if devnull>2: os.close(devnull)
+        time.sleep(8.0)
+        try:
+            marker.parent.mkdir(parents=True,exist_ok=True); marker.write_text('late')
+        except OSError: pass
+        os._exit(0)
+    time.sleep(0.5)
 if mode == 'timeout':
     import time; time.sleep(3)
 if mode == 'interruption':
@@ -3248,6 +3267,67 @@ def run_codex(sink, canonical, invocation, run, role):
             try: os.kill(pid, signal.SIGKILL)
             except ProcessLookupError: pass
 
+    # R116 CONTROL 03 — success-path same-group closed-stdio quiescence
+    # (E167-REV-03, owner precision #4).  A descendant in the provider's OWN
+    # process group, with closed stdio (so no inherited pipe keeps the launcher
+    # blocked), that outlives the provider's NORMAL exit must be DEAD before
+    # staging cleanup.  The verdict is identity-bound — the exact pid+lstart is
+    # recorded while the family is still linked, then re-checked — never a bare or
+    # reused PGID sample.  The current launcher killpg's only on timeout, so on a
+    # normal success the descendant survives (RED); a launcher that killpg's the
+    # group on SUCCESS leaves it dead (GREEN).
+    sg_stop = threading.Event(); sg_threads: list[threading.Thread] = []
+    sg_identities: set[tuple[int, int, str]] = set()
+    sg_original_popen = module.subprocess.Popen
+    def sg_monitor(root_pid: int):
+        while not sg_stop.is_set():
+            rows = process_table(); family = {root_pid}; changed = True
+            while changed:
+                changed = False
+                for pid, (ppid, started) in rows.items():
+                    if ppid in family and pid not in family:
+                        family.add(pid); changed = True
+            for pid in family:
+                if pid in rows: sg_identities.add((pid, rows[pid][0], rows[pid][1]))
+            time.sleep(0.01)
+    def sg_popen(argv, *args, **kwargs):
+        process = sg_original_popen(argv, *args, **kwargs)
+        if "-o" in list(argv):
+            rows = process_table()
+            if process.pid in rows:
+                sg_identities.add((process.pid, rows[process.pid][0], rows[process.pid][1]))
+            thread = threading.Thread(target=sg_monitor, args=(process.pid,), daemon=True)
+            sg_threads.append(thread); thread.start()
+        return process
+    module.subprocess.Popen = sg_popen
+    try:
+        sg_case = result_case("same_group_closed_stdio")
+    finally:
+        module.subprocess.Popen = sg_original_popen
+        sg_stop.set()
+        for thread in sg_threads: thread.join(timeout=1)
+        launch_mode[0] = "valid"
+    time.sleep(3.0)
+    sg_rows_after = process_table()
+    sg_remaining = [ident for ident in sg_identities
+                    if ident[0] in sg_rows_after and sg_rows_after[ident[0]][1] == ident[2]]
+    sg_paths = sg_case[1].get("_gate_output_paths", [])
+    sg_root = Path(sg_paths[-1]).parent if sg_paths else work
+    # The provider run must have SUCCEEDED (the killpg-on-success path); the full
+    # launched family (launcher, provider, and the same-group descendant) must
+    # have been observed while linked (no unbound/empty credit); and no recorded
+    # identity may remain alive, with no staging residue surviving.
+    success_quiescent_ok = (
+        sg_case[0][0]
+        and len(sg_identities) >= 2
+        and not sg_remaining
+        and not sg_root.exists())
+    for pid, _ppid, started in sg_remaining:
+        current = process_table().get(pid)
+        if current and current[1] == started:
+            try: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+
     def object_attack(kind: str):
         attack_repo = make_repo(str(provider))
         seeded: list[Path] = []
@@ -3893,6 +3973,15 @@ def run_codex(sink, canonical, invocation, run, role):
                 elif substitution == "root_symlink":
                     original_rmtree(str(root))
                     os.symlink(str(substitution_guard), str(root))
+                elif substitution == "real_dir_replacement":
+                    # Relocate the real staging root, then plant a REAL foreign
+                    # directory (different inode) at the original root path.  A
+                    # finalizer that deletes the root path without re-binding its
+                    # inode destroys this foreign object (E167-REV-01).
+                    os.rename(str(root), str(substitution_dest))
+                    os.mkdir(str(root), 0o700)
+                    (root / "foreign-marker").write_bytes(
+                        b"R116 real-dir replacement foreign marker")
             except OSError as exc:
                 substitution_state["error"] = f"{type(exc).__name__}:{exc}"
 
@@ -4348,6 +4437,28 @@ def run_codex(sink, canonical, invocation, run, role):
                 and substitution_guard not in path.parents
                 and path != substitution_guard_marker
             ) if substitution is not None else [],
+            # R116 real-directory replacement (E167-REV-01, owner precision #2):
+            # the REAL foreign directory planted at the original root path (and
+            # its marker) must survive the finalizer.  A blind path-based cleanup
+            # deletes it; an inode-bound finalizer leaves it PRESERVED.  For every
+            # other mode this arm is vacuously satisfied.
+            "substitution_foreign_intact": (
+                substitution != "real_dir_replacement"
+                or bool(targets
+                    and targets[-1].parent.is_dir()
+                    and not targets[-1].parent.is_symlink()
+                    and (targets[-1].parent / "foreign-marker").is_file()
+                    and (targets[-1].parent / "foreign-marker").read_bytes()
+                        == b"R116 real-dir replacement foreign marker")),
+            # R116 empty moved parent (E167-REV-02, owner precision #3): the
+            # relocated staging directory itself must be absent — an EMPTY moved
+            # parent counts as residue, not only its regular files.  A finalizer
+            # that unlinks the sink by the bound descriptor but never retires the
+            # relocated directory leaves this empty directory behind.
+            "substitution_moved_parent_residue": sorted(
+                str(path) for path in (substitution_dest,)
+                if substitution in {"cross_parent_move", "real_dir_replacement"}
+                and path.is_dir() and not path.is_symlink()),
         }
         result = (outcome, failures[0], list(outcome[4]),
                   sorted({str(path) for path in transport_residue}),
@@ -4439,6 +4550,8 @@ def run_codex(sink, canonical, invocation, run, role):
         True, substitution="cross_parent_move")
     staging_root_symlink = cleanup_failure_case(
         True, substitution="root_symlink")
+    staging_real_dir_replacement = cleanup_failure_case(
+        True, substitution="real_dir_replacement")
     _r109_probe_tree, r109_connected_probe = r109_transform_tree(
         source_text, "cleanup_before")
     r109_consumer_seam_present = (
@@ -4616,6 +4729,35 @@ def run_codex(sink, canonical, invocation, run, role):
     staging_substitution_ok = (
         staging_substitution_safe(staging_cross_parent_move)
         and staging_substitution_safe(staging_root_symlink))
+
+    # R116 CONTROL 01 — real-directory replacement (E167-REV-01, owner precision
+    # #2).  Beyond the shared substitution-safety arms, the REAL foreign
+    # directory planted at the original root path must be PRESERVED.  Confinement
+    # alone must not legitimize blind finalizer deletion: this is a finalizer
+    # robustness control that fails independently of the sandbox boundary.
+    def real_dir_replacement_intact(case) -> bool:
+        residue = case[15] if len(case) > 15 and isinstance(case[15], dict) else {}
+        # Owner precisions #2 and #3 for the real-directory case: the planted
+        # foreign object must be PRESERVED AND the relocated staging directory
+        # itself (the empty moved parent) must be absent — a mode-aware finalizer
+        # cannot escape by preserving the foreign object while leaking the moved
+        # parent only in this mode.
+        return (residue.get("substitution_foreign_intact") is True
+                and residue.get("substitution_moved_parent_residue") == [])
+    real_dir_replacement_ok = (
+        staging_substitution_safe(staging_real_dir_replacement)
+        and real_dir_replacement_intact(staging_real_dir_replacement))
+
+    # R116 CONTROL 02 — empty moved parent as residue (E167-REV-02, owner
+    # precision #3).  After a cross-parent move, a finalizer that only unlinks
+    # the relocated sink leaves the moved staging directory itself (now empty)
+    # behind.  The owner precision counts that empty directory as residue.  A
+    # safe finalizer retires the relocated directory (by the bound descriptor's
+    # resolved identity) or, under confinement, the move never occurs.
+    def moved_parent_absent(case) -> bool:
+        residue = case[15] if len(case) > 15 and isinstance(case[15], dict) else {}
+        return residue.get("substitution_moved_parent_residue") == []
+    moved_parent_residue_ok = moved_parent_absent(staging_cross_parent_move)
 
     def r108_cleanup_before_safe(case) -> bool:
         if case is None:
@@ -7178,6 +7320,7 @@ accepted_digest=hashlib.sha256(raw).hexdigest()
 events=[];transitions=[];held=[];fsynced={};mutation_versions={};call_active=[False];transition_done=[False]
 pending_link=[None]
 canonical_epochs=[];canonical_direct_writes=[]
+concurrent_injected=[False];concurrent_state={}
 primitive_counts={name:0 for name in ("open","fsync","fstat","stat","lstat","access","readlink","listdir","scandir","walk","chmod","fchmod","mkdir","makedirs","symlink","link","unlink","remove","rmdir","environ","environb","getenv","getenvb","putenv","unsetenv","path_open","path_iterdir","path_glob","path_rglob","path_read_text","path_read_bytes","path_stat","path_lstat","path_readlink","path_resolve","path_chmod","path_mkdir","path_symlink_to","path_hardlink_to","path_link_to","path_unlink","path_rmdir","path_rename","path_replace","path_touch")}
 env_events=[];security_events=[];original_environ=os.environ;original_environb=getattr(os,"environb",None)
 env_before=dict(original_environ);envb_before=dict(original_environb or {});module_error="NONE"
@@ -7544,6 +7687,27 @@ def observed_getenvb(key,*args):
 os.getenv=observed_getenv
 if original_getenvb is not None: os.getenvb=observed_getenvb
 os.putenv=observed_putenv;os.unsetenv=observed_unsetenv
+def inject_concurrent_canonical():
+ # R116 concurrent-canonical (E167-REV-05): an audit-hook adversary publishes a
+ # FOREIGN canonical using the un-audited genuine primitives, in the exact
+ # pre-syscall window before the subject's own publish syscall runs.  A kernel
+ # that publishes with os.replace overwrites this foreign object; a kernel that
+ # publishes with os.link (no-overwrite) hits FileExistsError, rejects, and
+ # leaves the foreign object intact.
+ if mode!="concurrent_canonical" or concurrent_injected[0]: return
+ concurrent_injected[0]=True
+ data=b'{"foreign":"concurrent-canonical-preserve"}'
+ flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)
+ fd=original_os_open(canonical,flags,0o600)
+ try:
+  view=memoryview(data)
+  while view:
+   written=original_write(fd,view)
+   if written<=0: raise OSError("short concurrent canonical write")
+   view=view[written:]
+  original_fsync(fd);st=original_fstat(fd)
+  concurrent_state.update({"dev":st.st_dev,"ino":st.st_ino,"digest":hashlib.sha256(data).hexdigest()})
+ finally: os.close(fd)
 def audit(event,args):
  if not call_active[0]: return
  if consume_ticket(event,args): return
@@ -7566,6 +7730,7 @@ def audit(event,args):
   if not allowed: raise PermissionError("audit rename outside scoped result authority")
   canonical_path=lexical_path(canonical)
   if dst_path==canonical_path:
+   inject_concurrent_canonical()
    observe_existing_canonical("before_replace")
    source_flags=os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0)
    source_ticket=make_ticket("canonical_source_open","original_os_open","open",(src_path,),source_flags,None,None,None)
@@ -7603,6 +7768,7 @@ def audit(event,args):
   if not allowed: raise PermissionError("link authority denied")
   canonical_path=lexical_path(canonical)
   if dst_path!=canonical_path: raise PermissionError("link destination is not canonical")
+  inject_concurrent_canonical()
   observe_existing_canonical("before_link")
   source_flags=os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_CLOEXEC",0)
   source_ticket=make_ticket("canonical_link_source_open","original_os_open","open",(src_path,),source_flags,None,None,None)
@@ -7757,7 +7923,7 @@ env_changed=(dict(original_environ)!=env_before or dict(original_environb or {})
 transition_ok=(len(transitions)==1 and canonical_info is not None and transitions[0]["absent"] and transitions[0]["stable"] and transitions[0]["fsynced"] and not transitions[0]["writers"] and (transitions[0]["dev"],transitions[0]["ino"],transitions[0]["digest"])==(canonical_info.get("dev"),canonical_info.get("ino"),canonical_info.get("digest")))
 publication_ok=(len(canonical_epochs)==1 and not canonical_direct_writes and canonical_info is not None and canonical_epochs[0].get("dev")==canonical_info.get("dev") and canonical_epochs[0].get("ino")==canonical_info.get("ino") and canonical_epochs[0].get("digest")==canonical_info.get("digest"))
 visibility_ok=(publication_ok and (not visible or all(item==canonical_info.get("digest") for item in visible)))
-print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"attempt_fd_aliases":attempt_fd_aliases,"attempt_object_delta":attempt_object_delta,"transitions":transitions,"transition_ok":transition_ok,"publication_ok":publication_ok,"canonical_epochs":canonical_epochs,"canonical_direct_writes":canonical_direct_writes,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events,"ticket_selftest":ticket_selftest},separators=(",",":"),sort_keys=True))
+print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"attempt_fd_aliases":attempt_fd_aliases,"attempt_object_delta":attempt_object_delta,"transitions":transitions,"transition_ok":transition_ok,"publication_ok":publication_ok,"canonical_epochs":canonical_epochs,"canonical_direct_writes":canonical_direct_writes,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events,"ticket_selftest":ticket_selftest,"concurrent_injected":concurrent_injected[0],"concurrent_canonical":(concurrent_state or None)},separators=(",",":"),sort_keys=True))
 for fd in held:
  try: os.close(fd)
  except OSError: pass
@@ -8365,6 +8531,38 @@ class CraftedConcretePath(type(Path())):
                 "directory","fifo","socket","symlink","mutation","wrong_role",
                 "equal_binding","bad_invocation","cleanup_transient")))
 
+    # R116 CONTROL 05 — concurrent-canonical no-overwrite (E167-REV-05, owner
+    # precision #5).  A foreign canonical is published by an audit-hook adversary
+    # in the exact pre-syscall window before the kernel's own publish.  A safe
+    # kernel publishes with a no-overwrite primitive: it REJECTS (accepted False)
+    # and PRESERVES the foreign object's inode+digest.  An os.replace kernel
+    # overwrites the foreign object and accepts.  Rejection alone is insufficient
+    # per the owner precision — the foreign object must survive unchanged.
+    def concurrent_canonical_preserved(case):
+        foreign=case.get("concurrent_canonical");canonical=case.get("canonical")
+        return (case.get("rc")==0 and case.get("concurrent_injected") is True
+            and case.get("accepted") is False
+            and foreign is not None and canonical is not None
+            and canonical.get("dev")==foreign.get("dev")
+            and canonical.get("ino")==foreign.get("ino")
+            and canonical.get("digest")==foreign.get("digest"))
+    concurrent_reference_case=fresh_kernel_effect(
+        reference_kernel,rig_valid_raw,"concurrent_canonical")
+    concurrent_link_case=fresh_kernel_effect(
+        link_publication,rig_valid_raw,"concurrent_canonical")
+    # Judge self-controls: the os.replace reference overwrites-and-accepts (caught),
+    # the os.link publisher rejects-and-preserves (positive).  Opposite outcomes.
+    concurrent_selfcontrols_ok=(
+        concurrent_reference_case.get("concurrent_injected") is True
+        and concurrent_reference_case.get("accepted") is True
+        and not concurrent_canonical_preserved(concurrent_reference_case)
+        and concurrent_canonical_preserved(concurrent_link_case))
+    concurrent_product_case={"skipped":True};concurrent_canonical_ok=False
+    if kernel_structure_ok:
+        concurrent_product_case=fresh_kernel_effect(
+            result_kernel,rig_valid_raw,"concurrent_canonical")
+        concurrent_canonical_ok=(concurrent_selfcontrols_ok
+            and concurrent_canonical_preserved(concurrent_product_case))
     kernel_direct_detail={"fresh_child_authoritative":True};kernel_direct_ok=product_fresh_ok
     kernel_case_counter=[0]
     def direct_kernel_case(raw, *, invocation_id="1"*32, run_id="2"*32,
@@ -8544,6 +8742,7 @@ class CraftedConcretePath(type(Path())):
     deterministic_result_ok = (
         kernel_structure_ok and kernel_integration_structure_ok and integration_dynamic_ok
         and kernel_direct_ok and product_fresh_ok
+        and concurrent_canonical_ok
         and valid[0] and valid_schema and valid_publication_lifecycle_ok
         and physical_topology_ok and physical_hostile_ok
         and physical_git_environment_ok and staging_ok
@@ -8554,9 +8753,11 @@ class CraftedConcretePath(type(Path())):
         and effect_sink_attacks_caught
         and oversized_positive[0][0]
         and atomic_ok and timeout_ok and object_attacks_ok
-        and cleanup_error_ok and staging_substitution_ok and setup_spawn_faults_ok
+        and cleanup_error_ok and staging_substitution_ok and real_dir_replacement_ok
+        and moved_parent_residue_ok
+        and setup_spawn_faults_ok
         and journal_faults_ok and preexisting_journal_positive
-        and interruption_quiescent and tracked_quiescent
+        and interruption_quiescent and tracked_quiescent and success_quiescent_ok
         and valid_output.is_absolute()
         and valid_output != valid_canonical
         and repo not in valid_output.parents and valid_repo not in valid_output.parents
@@ -8830,7 +9031,7 @@ class CraftedConcretePath(type(Path())):
     def cleanup_detail(case):
         return (case[:4], case[4], len(case[5]), case[6], len(case[7]))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,
-          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={cleanup_detail(transient_cleanup), cleanup_detail(persistent_cleanup), cleanup_detail(repeated_publication_cleanup), cleanup_detail(hardlink_publication_cleanup), cleanup_detail(stale_canonical_cleanup), cleanup_rig_ok, cleanup_error_ok} substitution={cleanup_detail(staging_cross_parent_move), staging_cross_parent_move[15], cleanup_detail(staging_root_symlink), staging_root_symlink[15], staging_substitution_ok} r105_cleanup={(rollback_fault_controls_ok,rollback_identity_controls_ok,[(len(case[8]),len(case[9]),len(case[10]),case[11]) for case in (rollback_path_persistent,rollback_os_unlink_persistent,rollback_os_remove_persistent,rollback_first_failure,rollback_final_retry)],[(case[12],case[13],case[10]) for case in (rollback_symlink_replacement,rollback_hardlink_replacement)])} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_start_delta,physical_git_capture.get('mode'),physical_git_capture.get('git_control_env'),environment_fingerprint(physical_git_capture.get('complete_environment')),environment_fingerprint(physical_git_expected_environment),physical_git_environment_relation,r72_dynamic_literals_absent,r72_variant_observations,physical_git_capture_bound,physical_git_canonical_valid,physical_git_records,physical_git_new_runs,product_git_snapshot_mutants,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
+          f"kernel_structure={kernel_structure_ok,kernel_structure_detail} integration={kernel_integration_structure_ok,kernel_integration_structure_detail,integration_dynamic_ok,integration_calls} direct={kernel_direct_ok,kernel_direct_detail} fresh={product_fresh_ok,product_fresh_cases} concurrent={concurrent_canonical_ok,concurrent_selfcontrols_ok,concurrent_product_case.get('accepted') if isinstance(concurrent_product_case,dict) else None,concurrent_product_case.get('concurrent_canonical') if isinstance(concurrent_product_case,dict) else None} r12_real={r12_once,r12_two,r12_promote,r12_real_boundary_ok} valid_output={valid_output} canonical={valid_canonical} schema={valid_schema} staging={staging, staging_ok} causal_effects={effect_once, effect_once_ok, effect_two_values, effect_two_values_observed, effect_two_promotions, effect_two_promotions_caught, effect_sink_mutation, effect_sink_swap, effect_sink_attacks_caught} reader_variants={reader_variants, reader_variants_ok} stale={stale_case, stale_rejects} replay={replay_case, replay_rejects} external_replay={external_replay_case, external_replay_ok} atomic={atomic_box, len(partial_visible), atomic_ok} timeout={timeout_case, timeout_ok} cleanup={cleanup_detail(transient_cleanup), cleanup_detail(persistent_cleanup), cleanup_detail(repeated_publication_cleanup), cleanup_detail(hardlink_publication_cleanup), cleanup_detail(stale_canonical_cleanup), cleanup_rig_ok, cleanup_error_ok} substitution={cleanup_detail(staging_cross_parent_move), staging_cross_parent_move[15], cleanup_detail(staging_root_symlink), staging_root_symlink[15], staging_substitution_ok} r105_cleanup={(rollback_fault_controls_ok,rollback_identity_controls_ok,[(len(case[8]),len(case[9]),len(case[10]),case[11]) for case in (rollback_path_persistent,rollback_os_unlink_persistent,rollback_os_remove_persistent,rollback_first_failure,rollback_final_retry)],[(case[12],case[13],case[10]) for case in (rollback_symlink_replacement,rollback_hardlink_replacement)])} setup_spawn={r57_setup_effect_summary,r59_post_retained_effect_summary,setup_spawn_faults_ok,r59_variant_detail} journal_attempt={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} objects={object_attacks, object_attacks_ok} oversized_positive={oversized_positive[0]} physical={physical_case, physical_output, physical_canonical,physical_topology_ok} git_environment={physical_git_case,physical_git_start_delta,physical_git_capture.get('mode'),physical_git_capture.get('git_control_env'),environment_fingerprint(physical_git_capture.get('complete_environment')),environment_fingerprint(physical_git_expected_environment),physical_git_environment_relation,r72_dynamic_literals_absent,r72_variant_observations,physical_git_capture_bound,physical_git_canonical_valid,physical_git_records,physical_git_new_runs,product_git_snapshot_mutants,product_git_decoy_before==product_git_decoy_after,physical_git_environment_ok} negatives={negative_cases}")
     check("K1", family_absent or (valid[0] and valid[2] == 1), f"valid={valid}")
     check("K2", not shadow_marker.exists(), f"path_shadow_ran={shadow_marker.exists()}")
     check("K3", family_absent or (argv0.is_absolute() and argv0 != provider and cap.get("sha256") == good_hash),
@@ -9649,6 +9850,114 @@ class CraftedConcretePath(type(Path())):
                 g20_emit_path.write_text(json.dumps(evidence, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     trust.chmod(0o700)
 
+    # R116 PROVIDER STAGING CONFINEMENT — the launcher must confine the provider
+    # to file-write-data on EXACTLY the pre-created result.json under the staging
+    # root, denying every create/rename/unlink/hardlink/mkdir/sibling and any
+    # move of the staging root itself.  The launcher receives the exact staging
+    # root and sink through NORTROPIC_STAGING_ROOT / NORTROPIC_RESULT_SINK and
+    # binds them into its seatbelt as a capability-exact deny+allow (never a
+    # blanket /private/tmp or general-parent restriction).  Effect-tested through
+    # the real launcher seatbelt against the exact candidate; ODÖMBART (not
+    # false-pass) when nested sandbox-exec is refused, exactly like K_G20.
+    conf = work / "confinement"; conf_ws = conf / "ws"; conf_staging = conf / "staging"
+    conf_ws.mkdir(parents=True); conf_staging.mkdir(parents=True)
+    conf_sink = conf_staging / "result.json"
+    conf_sink.write_text("", encoding="utf-8"); conf_sink.chmod(0o600)
+    conf_env_file = conf / "envelope.json"
+    conf_env_file.write_text('{"task_id":"h-032"}\n', encoding="utf-8")
+    conf_attack = ('set +e; printf data >| "$1"; echo SINK_WRITE=$?; '
+                   'printf x > "$2/sibling"; echo CREATE_SIB=$?; '
+                   'mv "$1" "$2/renamed"; echo RENAME=$?; '
+                   'unlink "$1"; echo UNLINK=$?; '
+                   'mkdir "$2/sub"; echo MKDIR=$?; '
+                   'ln "$1" "$2/hard"; echo LINK=$?; '
+                   'mv "$2" "$2-moved"; echo MOVE_ROOT=$?')
+    conf_launch_env = dict(os.environ, NORTROPIC_TRUST_ROOT=str(trust),
+                           NORTROPIC_STAGING_ROOT=str(conf_staging),
+                           NORTROPIC_RESULT_SINK=str(conf_sink))
+    confinement_odom = False
+    conf_run = subprocess.run(
+        [str(launcher), "run", str(conf_ws), str(conf_env_file), "30", "--",
+         "/bin/sh", "-c", conf_attack, "sh", str(conf_sink), str(conf_staging)],
+        cwd=source.parents[1], env=conf_launch_env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    conf_out = conf_run.stdout
+    conf_moved = Path(str(conf_staging) + "-moved")
+    if conf_run.returncode == 3 and "sandbox_apply: Operation not permitted" in conf_out:
+        confinement_odom = True; confinement_ok = False
+        check("K_PROVIDER_STAGING_CONFINEMENT", False,
+              "ODÖMBART nested sandbox-exec förbjuden; owner-runner krävs")
+    else:
+        conf_lines = set(conf_out.splitlines())
+        conf_denied = {f"{name}=1" for name in
+                       ("CREATE_SIB", "RENAME", "UNLINK", "MKDIR", "LINK", "MOVE_ROOT")}
+        confinement_ok = (
+            conf_run.returncode == 0
+            and "SINK_WRITE=0" in conf_lines
+            and conf_denied.issubset(conf_lines)
+            and conf_sink.exists() and conf_sink.read_bytes() == b"data"
+            and not (conf_staging / "sibling").exists()
+            and not (conf_staging / "renamed").exists()
+            and not (conf_staging / "sub").exists()
+            and not (conf_staging / "hard").exists()
+            and not conf_moved.exists())
+        check("K_PROVIDER_STAGING_CONFINEMENT", confinement_ok,
+              f"rc={conf_run.returncode} lines={conf_out.strip().replace(chr(10), '|')} "
+              f"sink_intact={conf_sink.exists()}")
+    for _residue in (conf_moved,):
+        if _residue.exists():
+            _residue.chmod(0o700); shutil.rmtree(_residue, ignore_errors=True)
+
+    # R116 CONTROL 04 — rename-before-cross-parent-move confinement (E167-REV-04).
+    # A provider that first renames the sink within the staging root and then
+    # moves the renamed object cross-parent (out of the staging tree) must be
+    # DENIED at the rename, leaving no renamed private residue in staging and
+    # nothing escaped outside it.  Primary closure is the launcher seatbelt (the
+    # rename is a file-write under the staging root); this is a distinct sequenced
+    # attack, effect-tested through the real launcher.  ODÖMBART (not false-pass)
+    # when nested sandbox-exec is refused, exactly like the keystone.
+    conf04 = work / "confinement-rename-move"
+    conf04_ws = conf04 / "ws"; conf04_staging = conf04 / "staging"
+    conf04_escape = conf04 / "escape"
+    conf04_ws.mkdir(parents=True); conf04_staging.mkdir(parents=True)
+    conf04_escape.mkdir(parents=True)
+    conf04_sink = conf04_staging / "result.json"
+    conf04_sink.write_text("", encoding="utf-8"); conf04_sink.chmod(0o600)
+    conf04_env_file = conf04 / "envelope.json"
+    conf04_env_file.write_text('{"task_id":"h-032"}\n', encoding="utf-8")
+    conf04_attack = ('set +e; printf data >| "$1"; echo SINK_WRITE=$?; '
+                     'mv "$1" "$2/renamed-sink"; echo RENAME=$?; '
+                     'mv "$2/renamed-sink" "$3/escaped-sink"; echo MOVE_OUT=$?')
+    conf04_launch_env = dict(os.environ, NORTROPIC_TRUST_ROOT=str(trust),
+                             NORTROPIC_STAGING_ROOT=str(conf04_staging),
+                             NORTROPIC_RESULT_SINK=str(conf04_sink))
+    confinement04_odom = False
+    conf04_run = subprocess.run(
+        [str(launcher), "run", str(conf04_ws), str(conf04_env_file), "30", "--",
+         "/bin/sh", "-c", conf04_attack, "sh", str(conf04_sink), str(conf04_staging),
+         str(conf04_escape)],
+        cwd=source.parents[1], env=conf04_launch_env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    conf04_out = conf04_run.stdout
+    if conf04_run.returncode == 3 and "sandbox_apply: Operation not permitted" in conf04_out:
+        confinement04_odom = True; confinement04_ok = False
+        check("K_PROVIDER_RENAME_BEFORE_MOVE_CONFINEMENT", False,
+              "ODÖMBART nested sandbox-exec förbjuden; owner-runner krävs")
+    else:
+        conf04_lines = set(conf04_out.splitlines())
+        confinement04_ok = (
+            conf04_run.returncode == 0
+            and "SINK_WRITE=0" in conf04_lines
+            and "RENAME=1" in conf04_lines
+            and conf04_sink.exists() and conf04_sink.read_bytes() == b"data"
+            and not (conf04_staging / "renamed-sink").exists()
+            and not (conf04_escape / "escaped-sink").exists()
+            and sorted(p.name for p in conf04_staging.iterdir()) == ["result.json"])
+        check("K_PROVIDER_RENAME_BEFORE_MOVE_CONFINEMENT", confinement04_ok,
+              f"rc={conf04_run.returncode} lines={conf04_out.strip().replace(chr(10), '|')} "
+              f"sink_intact={conf04_sink.exists()} "
+              f"escaped={(conf04_escape / 'escaped-sink').exists()}")
+
     # Judge self-controls: one defect per disposable effect mutant. These do
     # not replace the real subject checks above; they prove the oracles have
     # opposite outcomes for the shallow unsafe construction.
@@ -9859,7 +10168,9 @@ class CraftedConcretePath(type(Path())):
         print(("PASS " if ok else "FAIL ") + key + " — " + detail)
     print(f"SAMMANFATTNING {passed} PASS / {len(checks)-passed} FAIL")
     material_failed = failed - ({"K_G20_NAMESPACE"} if g20_odom else set()) \
-                             - ({"K_H033_FRESH_UPSTREAM_PROVENANCE"} if h033_odom else set())
+                             - ({"K_H033_FRESH_UPSTREAM_PROVENANCE"} if h033_odom else set()) \
+                             - ({"K_PROVIDER_STAGING_CONFINEMENT"} if confinement_odom else set()) \
+                             - ({"K_PROVIDER_RENAME_BEFORE_MOVE_CONFINEMENT"} if confinement04_odom else set())
     owner_live_skip_expected = (owner_live_mode == "skip"
         and deterministic_result_ok
         and material_failed == {"K_STRUCTURED_RESULT_DELIVERY_BOUNDARY"})
@@ -9874,11 +10185,15 @@ class CraftedConcretePath(type(Path())):
         print("CURRENT_RED_REASON=CODE_MODE_HOST_IDENTITY_BOUNDARY_ABSENT")
     elif material_failed:
         print("CURRENT_RED_REASON=UNEXPECTED_CONTRACT_FAILURES:" + ",".join(sorted(material_failed)))
-    if g20_odom or h033_odom or owner_live_skip_expected:
+    if g20_odom or h033_odom or confinement_odom or confinement04_odom or owner_live_skip_expected:
         if g20_odom:
             print("ODÖMBART K_G20_NAMESPACE — nested sandbox-exec förbjuden; candidate-bound owner-runner evidence required")
         if h033_odom:
             print("ODÖMBART K_H033_FRESH_UPSTREAM_PROVENANCE — protected owner runner unavailable")
+        if confinement_odom:
+            print("ODÖMBART K_PROVIDER_STAGING_CONFINEMENT — nested sandbox-exec förbjuden; owner-runner krävs")
+        if confinement04_odom:
+            print("ODÖMBART K_PROVIDER_RENAME_BEFORE_MOVE_CONFINEMENT — nested sandbox-exec förbjuden; owner-runner krävs")
         if owner_live_skip_expected:
             print("ODÖMBART K_OWNER_LIVE_PHASE_NOT_RUN — explicit owner TEST_AUTHOR no-live mode; deterministic product controls passed")
         raise SystemExit(2)
