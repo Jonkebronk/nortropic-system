@@ -5355,6 +5355,24 @@ else:
 if sink_fd>=0 and mode=="no_cloexec": fcntl.fcntl(sink_fd,fcntl.F_SETFD,fcntl.fcntl(sink_fd,fcntl.F_GETFD)&~fcntl.FD_CLOEXEC)
 if mode=="preseed":
  canonical.write_bytes(b"preseed");st=canonical.stat();preseed_identity=(st.st_dev,st.st_ino,canonical.read_bytes().hex())
+def object_inventory(root):
+ records={}
+ def visit(path):
+  current=os.lstat(path);relative=os.path.relpath(os.fspath(path),os.fspath(root))
+  kind=("dir" if stat.S_ISDIR(current.st_mode) else "file" if stat.S_ISREG(current.st_mode)
+        else "symlink" if stat.S_ISLNK(current.st_mode) else "other")
+  record={"kind":kind,"mode":stat.S_IMODE(current.st_mode),"dev":current.st_dev,
+          "ino":current.st_ino}
+  if kind=="file":
+   record.update({"nlink":current.st_nlink,"size":current.st_size})
+   with open(path,"rb") as handle: record["digest"]=hashlib.sha256(handle.read()).hexdigest()
+  elif kind=="symlink": record.update({"nlink":current.st_nlink,"size":current.st_size,"target":os.readlink(path)})
+  elif kind!="dir": record.update({"nlink":current.st_nlink,"size":current.st_size})
+  records[relative]=record
+  if kind=="dir":
+   for child in sorted(os.scandir(path),key=lambda item:item.name): visit(pathlib.Path(child.path))
+ visit(root);return records
+attempt_pre_inventory=object_inventory(arena)
 module_source=module_path.read_bytes()
 mod=types.ModuleType("r49_subject_kernel");mod.__file__=str(module_path);mod.__package__=""
 sink_identity=None
@@ -5924,11 +5942,26 @@ if canonical_info is not None:
 temps=[str(path) for path in canonical_parent.iterdir() if path.name!="result.json"]
 outside=[event for event in events if event[-1] is False and event[0] not in {"post_write","post_remove","post_rename"}]
 post_events=[event for event in events if event[0] in {"post_write","post_remove","post_rename"}]
+attempt_post_inventory=object_inventory(arena)
+attempt_object_delta={
+ "added":sorted(set(attempt_post_inventory)-set(attempt_pre_inventory)),
+ "removed":sorted(set(attempt_pre_inventory)-set(attempt_post_inventory)),
+ "changed":sorted(key for key in set(attempt_pre_inventory)&set(attempt_post_inventory)
+                  if attempt_pre_inventory[key]!=attempt_post_inventory[key]),
+}
+attempt_fd_aliases=[]
+for number in sorted(int(name) for name in original_listdir("/dev/fd") if name.isdigit()):
+ try:
+  path=fd_path(number)
+  if path is None or not (path==lexical_path(arena) or path.startswith(lexical_path(arena)+os.sep)): continue
+  current=original_fstat(number);access=fcntl.fcntl(number,fcntl.F_GETFL)&os.O_ACCMODE
+  attempt_fd_aliases.append([number,access,path,current.st_dev,current.st_ino])
+ except OSError: pass
 env_changed=(dict(original_environ)!=env_before or dict(original_environb or {})!=envb_before)
 transition_ok=(len(transitions)==1 and canonical_info is not None and transitions[0]["absent"] and transitions[0]["stable"] and transitions[0]["fsynced"] and not transitions[0]["writers"] and (transitions[0]["dev"],transitions[0]["ino"],transitions[0]["digest"])==(canonical_info.get("dev"),canonical_info.get("ino"),canonical_info.get("digest")))
 publication_ok=(len(canonical_epochs)==1 and not canonical_direct_writes and canonical_info is not None and canonical_epochs[0].get("dev")==canonical_info.get("dev") and canonical_epochs[0].get("ino")==canonical_info.get("ino") and canonical_epochs[0].get("digest")==canonical_info.get("digest"))
 visibility_ok=(publication_ok and (not visible or all(item==canonical_info.get("digest") for item in visible)))
-print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"transitions":transitions,"transition_ok":transition_ok,"publication_ok":publication_ok,"canonical_epochs":canonical_epochs,"canonical_direct_writes":canonical_direct_writes,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events,"ticket_selftest":ticket_selftest},separators=(",",":"),sort_keys=True))
+print(json.dumps({"accepted":accepted,"error":error,"module_error":module_error,"returned_type":type(returned).__name__,"accepted_digest":accepted_digest,"fd_aliases":fd_aliases,"attempt_fd_aliases":attempt_fd_aliases,"attempt_object_delta":attempt_object_delta,"transitions":transitions,"transition_ok":transition_ok,"publication_ok":publication_ok,"canonical_epochs":canonical_epochs,"canonical_direct_writes":canonical_direct_writes,"visibility_ok":visibility_ok,"visible_count":len(visible),"canonical":canonical_info,"temps":temps,"outside":outside,"post_events":post_events,"preseed":preseed_identity,"cleanup_failures":cleanup_failures[0],"trap_unchanged":random_trap.read_bytes()==trap_before,"second_rejected":second_rejected,"primitive_counts":primitive_counts,"env_events":env_events,"env_changed":env_changed,"security_events":security_events,"ticket_selftest":ticket_selftest},separators=(",",":"),sort_keys=True))
 for fd in held:
  try: os.close(fd)
  except OSError: pass
@@ -6121,6 +6154,35 @@ for fd in held:
         dirfd_path=work/f"r103-dirfd-{dirfd_name}-mutant.py"
         dirfd_path.write_text(dirfd_source,encoding="utf-8")
         dirfd_negative_cases[dirfd_name]=fresh_kernel_effect(dirfd_path,rig_valid_raw)
+    def dirfd_reject_clean(case):
+        delta=case.get("attempt_object_delta") or {}
+        return (outside_blocked(case,True)
+            and case.get("temps")==[] and case.get("fd_aliases")==[]
+            and case.get("attempt_fd_aliases")==[]
+            and delta.get("added")==[] and delta.get("removed")==[]
+            and delta.get("changed")==[]
+            and case.get("post_events")==[] and case.get("transitions")==[]
+            and case.get("canonical_epochs")==[]
+            and case.get("canonical_direct_writes")==[]
+            and case.get("cleanup_failures")==0)
+    cleanup_leak_source=dirfd_negative_sources["traversal"].replace(
+        "def _unlink_retry(path):\n    last=None",
+        "def _unlink_retry(path):\n    return\n    last=None",1)
+    cleanup_leak_path=work/"r104-dirfd-cleanup-disabled-mutant.py"
+    cleanup_leak_path.write_text(cleanup_leak_source,encoding="utf-8")
+    cleanup_leak_case=fresh_kernel_effect(cleanup_leak_path,rig_valid_raw)
+    fd_alias_leak_source=dirfd_negative_sources["traversal"].replace(
+        "finally: os.close(parent_fd)","finally: pass",1)
+    fd_alias_leak_path=work/"r104-dirfd-fd-alias-leak-mutant.py"
+    fd_alias_leak_path.write_text(fd_alias_leak_source,encoding="utf-8")
+    fd_alias_leak_case=fresh_kernel_effect(fd_alias_leak_path,rig_valid_raw)
+    r104_residue_mutants_caught=(outside_blocked(cleanup_leak_case,True)
+        and bool(cleanup_leak_case.get("temps"))
+        and bool((cleanup_leak_case.get("attempt_object_delta") or {}).get("added"))
+        and not dirfd_reject_clean(cleanup_leak_case)
+        and outside_blocked(fd_alias_leak_case,True)
+        and bool(fd_alias_leak_case.get("attempt_fd_aliases"))
+        and not dirfd_reject_clean(fd_alias_leak_case))
     r103_fsync_dirfd_rig_ok=(dirfd_publication_positive
         and all(case.get("accepted") is True and case.get("transitions")
                 and case["transitions"][0].get("fsynced") is False
@@ -6130,7 +6192,8 @@ for fd in held:
                 and case["transitions"][0].get("fsynced") is False
                 and not fresh_success(case,rig_valid_raw)
                 for case in failed_fsync_cases.values())
-        and all(outside_blocked(case,True) for case in dirfd_negative_cases.values()))
+        and all(dirfd_reject_clean(case) for case in dirfd_negative_cases.values())
+        and r104_residue_mutants_caught)
 
     link_alias_source=link_publication_source.replace(
         "os.link(temp_name,canonical_destination)",
@@ -6812,7 +6875,7 @@ class CraftedConcretePath(type(Path())):
     check("J_RESULT_KERNEL_RIG", kernel_inventory_rig_ok and integration_rig_ok
           and kernel_oracle_rig_ok and reference_effect_rig_ok
           and r55_complete_residue_oracle_ok and r56_setup_oracle_ok,
-          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} captured_predicates={(fresh_success(reference_cases['valid'],rig_valid_raw),reference_cases['valid'].get('primitive_counts'),fresh_success(captured_reference_case,rig_valid_raw),outside_blocked(import_probe_case,True),outside_blocked(captured_stat_case,True),fresh_success(path_positive_case,rig_valid_raw),environb_case.get('accepted'),getenvb_case.get('accepted'))} r51_inroot={(r51_inroot_case.get('accepted'),r51_inroot_case.get('error'),r51_inroot_case.get('transition_ok'),r51_inroot_case.get('publication_ok'),r51_inroot_case.get('temps'),r51_inroot_case.get('outside'),r51_inroot_case.get('primitive_counts'))} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r59_post_retained_dynamic_positive,r59_empty_interval_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary,r59_post_retained_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught} r102_link={r102_link_publication_rig_ok,link_publication_positive,path_link_publication_positive,link_alias_inventory[0],link_helper_inventory[0],link_same_name_helper_inventory[0],link_wrong_source_case.get('transition_ok'),bool(link_wrong_destination_case.get('outside')),link_preseed_case.get('accepted'),len(link_multiple_case.get('transitions',[]))} r103={dirfd_publication_positive,dirfd_publication_inventory[0],dirfd_publication_case.get('accepted'),dirfd_publication_case.get('error'),dirfd_publication_case.get('transitions'),{name:(case.get('accepted'),case.get('error'),case.get('transitions'),case.get('outside')) for name,case in stale_fsync_cases.items()},{name:(case.get('accepted'),case.get('error'),case.get('transitions'),case.get('outside')) for name,case in failed_fsync_cases.items()},{name:(case.get('accepted'),case.get('error'),case.get('outside'),case.get('temps'),case.get('canonical')) for name,case in dirfd_negative_cases.items()}}")
+          f"inventory={rig_inventory_base[0],rig_inventory_mutants,inventory_adversary_results,fcntl_inventory_ok,reviewer_inventory_results,module_proxy_results,r51_capture_results,r51_shadow_results,r51_alias_escape_results,r51_path_deferred_results,r52_namedexpr_results} integration={integration_positive,integration_dead,integration_constants,integration_discard,integration_rebind,integration_direct,integration_runtime_positive,integration_runtime_discarded} oracle={kernel_oracle_rig_ok} reference={reference_kernel_inventory_ok,reference_basic_ok,(reference_cases['valid'].get('outside'),reference_cases['valid'].get('security_events'),reference_cases['valid'].get('env_events'),reference_cases['valid'].get('env_changed'),reference_cases['valid'].get('transition_ok'),reference_cases['valid'].get('fd_aliases'),reference_cases['valid'].get('ticket_selftest'))} effects={captured_primitive_rig_ok,bool(import_probe_case.get('outside')),bool(captured_stat_case.get('outside')),bool(iterdir_case.get('outside')),bool(environb_case.get('env_events')),bool(getenvb_case.get('env_events')),r51_outside_mutations_caught,tuple(name for name,case in r51_mutation_cases.items() if bool(case.get('outside'))),r51_inroot_positive,r51_object_rules_caught,r52_path_observer_ok,(r52_fspath_case.get('outside'),r52_subclass_case.get('outside'),r52_nested_case.get('outside')),r53_ticket_window_ok,(r53_ticket_window_case.get('accepted'),r53_ticket_window_case.get('transition_ok'),r53_ticket_window_case.get('outside'),r53_ticket_window_case.get('ticket_selftest')),bool(env_case.get('env_events')),unsynced_case.get('transition_ok'),fresh_success(path_positive_case,rig_valid_raw)} captured_predicates={(fresh_success(reference_cases['valid'],rig_valid_raw),reference_cases['valid'].get('primitive_counts'),fresh_success(captured_reference_case,rig_valid_raw),outside_blocked(import_probe_case,True),outside_blocked(captured_stat_case,True),fresh_success(path_positive_case,rig_valid_raw),environb_case.get('accepted'),getenvb_case.get('accepted'))} r51_inroot={(r51_inroot_case.get('accepted'),r51_inroot_case.get('error'),r51_inroot_case.get('transition_ok'),r51_inroot_case.get('publication_ok'),r51_inroot_case.get('temps'),r51_inroot_case.get('outside'),r51_inroot_case.get('primitive_counts'))} leak_aliases={ {name:case.get('fd_aliases') for name,case in leak_mutants.items()} } atomic_mutant={atomic_mutant_caught,atomic_mutant_case.get('transitions')} double_publication={double_publication_caught,double_publication_case.get('canonical_epochs'),double_publication_case.get('canonical_direct_writes')} residue_oracle={r55_clean_oracle_positive,r55_parent_residue_caught,r55_helper_residue_caught} setup_oracle={r56_zero_start_oracle_positive,r56_zero_start_mutants,r57_root_order_positive,r57_wrong_root_mutant_caught,r57_journal_order_positive,journal_parser_rig_ok,r59_post_retained_dynamic_positive,r59_empty_interval_positive,r58_distinct_popen_trace_positive} setup_effects={r57_setup_effect_summary,r59_post_retained_effect_summary} journal_faults={r58_journal_fault_summary,journal_faults_ok,preexisting_journal_positive} bool_version={bool_version_caught} r102_link={r102_link_publication_rig_ok,link_publication_positive,path_link_publication_positive,link_alias_inventory[0],link_helper_inventory[0],link_same_name_helper_inventory[0],link_wrong_source_case.get('transition_ok'),bool(link_wrong_destination_case.get('outside')),link_preseed_case.get('accepted'),len(link_multiple_case.get('transitions',[]))} r103={dirfd_publication_positive,dirfd_publication_inventory[0],dirfd_publication_case.get('accepted'),dirfd_publication_case.get('error'),dirfd_publication_case.get('transitions'),{name:(case.get('accepted'),case.get('error'),case.get('transitions'),case.get('outside')) for name,case in stale_fsync_cases.items()},{name:(case.get('accepted'),case.get('error'),case.get('transitions'),case.get('outside')) for name,case in failed_fsync_cases.items()},{name:(case.get('accepted'),case.get('error'),case.get('outside'),case.get('temps'),case.get('canonical')) for name,case in dirfd_negative_cases.items()}} r104={r104_residue_mutants_caught,{name:(dirfd_reject_clean(case),case.get('attempt_object_delta'),case.get('attempt_fd_aliases')) for name,case in dirfd_negative_cases.items()},(cleanup_leak_case.get('temps'),cleanup_leak_case.get('attempt_object_delta'),cleanup_leak_case.get('attempt_fd_aliases')),(fd_alias_leak_case.get('temps'),fd_alias_leak_case.get('attempt_object_delta'),fd_alias_leak_case.get('attempt_fd_aliases'))}")
     def cleanup_detail(case):
         return (case[:4], case[4], len(case[5]), case[6], len(case[7]))
     check("K_STRUCTURED_RESULT_DELIVERY_BOUNDARY", result_delivery_ok,

@@ -2089,3 +2089,27 @@ absent canonical. The wrapper call is paired to its exact audit event and final 
 Wrong, mixed, closed, stale, reused and traversal descriptors reject with no residue, while
 absolute direct, Path and dirfd publications share the same retained-source, one-transition,
 writer-closed and cleanup oracle. Production and live/provider behavior remain untouched.
+
+## 2026-08-22 — R104 complete dirfd-rejection cleanup
+
+Independent review found that R103 checked its six rejected dirfd variants with the older
+`outside_blocked` predicate, which proved the denial and canonical absence but ignored temp and
+descriptor residue. A generated negative could therefore disable `_unlink_retry`, leave its
+private `.result-*`, and still keep J green.
+
+R104 gives these negatives one complete effect predicate. The fresh child records the exact
+attempt object tree immediately before subject execution and again before judge cleanup. The
+comparison binds no-follow type, mode, device/inode and exact regular-file size, nlink and digest;
+it also inventories every live fd resolving inside the attempt arena. A clean rejection requires
+no object delta, temp, sink or arena fd, canonical, transition, canonical epoch, direct write,
+post-publication event or cleanup failure in addition to the existing denial, environment,
+security and ticket facts. The unchanged wrong, mixed, closed, stale, reused and traversal cases
+all satisfy that relation.
+
+Two causal generated controls keep source/API freedom intact. Disabling only `_unlink_retry`
+leaves one added `.result-*`; disabling only the parent-fd close leaves no filesystem object but
+one live canonical-parent capability. Each still executes the expected denial yet fails the
+complete predicate, and substituting either into the ordinary negative family makes J false.
+Judge cleanup occurs only after this observation and cannot grant credit. All R102/R103 positive
+publication forms and retained-value, fsync and transition semantics remain unchanged; no
+production or live/provider behavior is executed.
